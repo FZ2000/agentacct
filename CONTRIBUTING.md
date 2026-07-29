@@ -40,13 +40,20 @@ The repository is currently private and unpublished. Obtain an authorized checko
 cd /absolute/path/to/authorized/agent-chronicle-checkout
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -e . pytest
+python -m pip install -e . pytest pytest-cov
 ```
 
 Run tests:
 
 ```bash
 .venv/bin/python -m pytest tests/ -q --tb=short
+```
+
+Measure coverage (single-process is authoritative; `source`/branch come from
+`pyproject.toml`):
+
+```bash
+.venv/bin/python -m pytest tests/ -q --cov --cov-report=term-missing
 ```
 
 Run a local smoke demo:

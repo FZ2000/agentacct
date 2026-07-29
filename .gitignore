@@ -19,3 +19,12 @@ build/
 .hermes/
 *.local.md
 .gstack/
+
+# Coverage (pytest-cov / coverage.py)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# CodeGraph local index
+.codegraph/

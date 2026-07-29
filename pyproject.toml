@@ -79,3 +79,14 @@ testpaths = ["tests"]
 filterwarnings = [
   "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
 ]
+
+[tool.coverage.run]
+# Measure the shipped package only. Tests live in tests/ and are not part of
+# the artifact. Single-process is the authoritative mode (matches CI's
+# `pytest -q`); under pytest-xdist, residual .coverage.* worker files can skew
+# a re-run, so delete them before measuring when iterating with -n auto.
+source = ["src/agent_chronicle"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
