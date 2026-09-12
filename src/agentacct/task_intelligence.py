@@ -374,10 +374,9 @@ def _timeline(
         return events, total
     selected = events[-limit:]
     important_missing = [event for event in events[:-limit] if event.get("important")]
-    for event in important_missing[-5:]:
-        if event not in selected:
-            selected.insert(0, event)
-    return selected[-(limit + 5) :], total
+    # Keep older important records in source-time order as well. Inserting
+    # each at index zero reversed the retained prefix in text/receipt output.
+    return important_missing[-5:] + selected, total
 
 
 def build_task_intelligence(

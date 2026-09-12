@@ -171,3 +171,11 @@ def test_receipt_and_timeline_share_session_titles_without_cross_client_aliasing
     other = deepcopy(task["work_items"][0]); other.update(client="claude-code", title="Other client's work")
     task["work_items"].append(other)
     assert session_display_titles(task) == {("codex", "root"): "Login", ("claude-code", "root"): "Other client's work"}
+
+
+def test_receipt_retains_older_important_records_in_canonical_order():
+    task = {"work_items": [{"work_id": str(i), "started_at": i, "title": f"Work {i}"} for i in range(20, 80)],
+            "task_evidence_events": [{"event_id": str(i), "created_at": i, "result": "failed"} for i in range(1, 10)]}
+    timeline = build_task_intelligence(task, public_task_id="task", title="Task", timeline_limit=5)["timeline"]
+    assert timeline["total"] == 69 and timeline["shown"] == 10 and timeline["truncated"]
+    assert [row["occurred_at"] for row in timeline["events"]] == [5, 6, 7, 8, 9, 75, 76, 77, 78, 79]
