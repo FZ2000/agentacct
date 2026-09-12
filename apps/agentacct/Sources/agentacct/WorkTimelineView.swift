@@ -289,13 +289,16 @@ struct WorkTimelineView: View {
     }
 
     private func focusSelectionRegion() {
+        // Keyboard focus stays on the triggering card; VoiceOver focus moves
+        // to the region's heading. An inline region is non-modal, so reading
+        // position and Escape/Space handling on the card are preserved.
         let generation = focusGeneration
         Task { @MainActor in
             await Task.yield()
             guard viewIsVisible, selectionActive, generation == focusGeneration else { return }
             await Task.yield()
             guard viewIsVisible, selectionActive, generation == focusGeneration else { return }
-            focusedEvidence = "inspector"; accessibleEvidence = "inspector"
+            accessibleEvidence = "inspector"
         }
     }
 
@@ -677,13 +680,15 @@ struct WorkTimelineView: View {
         navigation.view.anchorID = record.id
         appSelection.workReturnFocus.remember(taskID: receipt.taskId, recordID: record.id)
         if focusInspector {
+            // Keyboard focus stays on the triggering card; VoiceOver moves to
+            // the region heading. The card keeps its Escape/Space contract.
             let generation = focusGeneration
             Task { @MainActor in
                 await Task.yield()
                 guard viewIsVisible, navigation.view.selectedID == record.id, generation == focusGeneration else { return }
                 await Task.yield()
                 guard viewIsVisible, navigation.view.selectedID == record.id, generation == focusGeneration else { return }
-                focusedEvidence = "inspector"; accessibleEvidence = "inspector"
+                accessibleEvidence = "inspector"
             }
         }
     }
