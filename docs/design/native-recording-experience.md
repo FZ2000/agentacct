@@ -238,3 +238,8 @@ load now runs once per window in a background task; opening recovery still reads
 a fresh copy. Immutable timeline snapshots retain their time bounds and newest
 record, and pending-arrival differences update only when snapshots change. Tests
 cover cache invalidation through held, arrivals, history and live transitions.
+
+Navigation preferences save after a 250 ms pause and flush immediately when
+leaving the timeline. Wheel ticks no longer write UserDefaults continuously or
+invalidate the app's unrelated AppStorage consumers. Evidence recording and
+refresh cadence are unchanged.

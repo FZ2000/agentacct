@@ -62,6 +62,7 @@ struct WorkTimelineView: View {
     @State private var viewIsVisible = false
     @State private var focusGeneration = 0
     @State private var viewport = WorkTimelineViewport()
+    @State private var preferenceSaveTask: Task<Void, Never>?
 
     private var projection: WorkTimelineProjection {
         (timeline ?? receipt.timeline)?.projection(taskID: receipt.taskId) ?? .empty
@@ -167,7 +168,15 @@ struct WorkTimelineView: View {
         }
         .onChange(of: navigation) { _, value in
             guard let activeTaskID else { return }
-            WorkTimelinePreferences.save(value, taskID: activeTaskID)
+            // Writing UserDefaults on every wheel tick invalidates AppStorage
+            // elsewhere in the app. Persist after the gesture settles; leaving
+            // the view still flushes immediately through saveMemory().
+            preferenceSaveTask?.cancel()
+            preferenceSaveTask = Task {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                guard !Task.isCancelled, self.activeTaskID == activeTaskID else { return }
+                WorkTimelinePreferences.save(value, taskID: activeTaskID)
+            }
         }
         .onChange(of: focusedEvidence) { _, id in
             guard let id, id != "timeline-heading", id != "records" else { return }
@@ -175,7 +184,12 @@ struct WorkTimelineView: View {
             appSelection.workReturnFocus.remember(taskID: receipt.taskId, recordID: recordID)
         }
         .onAppear { viewIsVisible = true }
-        .onDisappear { viewIsVisible = false; focusGeneration += 1; saveMemory() }
+        .onDisappear {
+            viewIsVisible = false
+            focusGeneration += 1
+            preferenceSaveTask?.cancel()
+            saveMemory()
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("work.timeline")
     }
