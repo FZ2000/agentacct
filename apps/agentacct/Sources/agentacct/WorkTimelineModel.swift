@@ -3,7 +3,7 @@ import Foundation
 /// A read-only projection. Ordering, shared files and session lineage never
 /// create a causal edge or upgrade the result/source supplied by the receipt.
 struct WorkTimelineRecord: Identifiable, Equatable, Codable {
-    enum Kind: String, Codable { case step, check }
+    enum Kind: String, Codable { case step, check, activity }
     var id: String
     var eventID: String? = nil
     var laneID: String
@@ -24,6 +24,7 @@ struct WorkTimelineRecord: Identifiable, Equatable, Codable {
     var superseded: Bool = false
     var supersededBy: String? = nil
     var sectionRecordID: String? = nil
+    var sectionRecordIDs: [String] = []
     var resolution: String? = nil
     var resolutionScope: String? = nil
     var artifact: String? = nil
@@ -88,115 +89,11 @@ struct WorkTimelineProjection: Equatable {
         self.notices = notices
     }
 
-    func displayedOrder(_ filtered: [WorkTimelineRecord], mode: String) -> [WorkTimelineRecord] {
-        guard mode == "timeline" else { return filtered }
-        return lanes.flatMap { lane in filtered.filter { $0.laneID == lane.id && $0.start != nil } }
-            + filtered.filter { $0.start == nil }
-    }
-
     var newestRecord: WorkTimelineRecord? {
         records.filter { $0.latestTime != nil }.max {
             if $0.latestTime == $1.latestTime { return $0.id < $1.id }
             return $0.latestTime! < $1.latestTime!
         }
-    }
-
-    init(receipt: Receipt, sessions: [String: V1SessionDetail], errors: [String: String] = [:]) {
-        var records: [WorkTimelineRecord] = []
-        var lanes: [WorkTimelineLane] = []
-        var notices: [String] = []
-        var seenLanes = Set<String>()
-        for group in receipt.sessions ?? [] {
-            for member in group.members where seenLanes.insert(member.id).inserted {
-                let title = Self.nonempty(member.title) ?? "\(member.client) · \(member.clientSessionId.prefix(8))"
-                var lineage: String
-                if member.id == group.root.sessionKey {
-                    lineage = "\(group.role == "continuation" ? "Continuation" : "Root") session · \(group.lineageState ?? "lineage state unavailable")"
-                } else {
-                    lineage = "\(member.role ?? "Member") of \(group.root.client) · \(group.root.clientSessionId.prefix(8)) · session relationship"
-                }
-                let distinguishingID = member.clientSessionId.split(separator: ":").last.map { String($0.prefix(16)) } ?? member.clientSessionId
-                lineage += " · ID \(distinguishingID)"
-                let detail = sessions[member.id]
-                lanes.append(WorkTimelineLane(
-                    id: member.id, title: title, lineage: lineage,
-                    availability: errors[member.id].map { detail == nil ? "Unavailable: \($0)" : "Refresh failed; retained data: \($0)" }
-                        ?? (detail == nil ? "Session details not loaded" : "\(detail!.steps.count) recorded steps")
-                ))
-                guard let detail else { continue }
-                // A response for another session cannot populate this lane.
-                guard detail.session.client == member.client,
-                      detail.session.clientSessionId == member.clientSessionId else {
-                    notices.append("Session identity did not match \(title); its records were not joined.")
-                    continue
-                }
-                for item in SessionStepItem.make(detail.steps) {
-                    let step = item.step
-                    let stepID = "session:\(member.id)/\(item.id)"
-                    let bounds = Self.stepBounds(start: step.startedAt, update: step.updatedAt)
-                    records.append(WorkTimelineRecord(
-                        id: stepID, laneID: member.id, laneTitle: title, lineage: lineage, kind: .step,
-                        title: Self.nonempty(step.title) ?? "Unnamed work section",
-                        start: bounds.start, end: bounds.end, timeNote: bounds.note, timeWarning: bounds.warning,
-                        result: step.latestStatus ?? "unknown", source: "Agent section report",
-                        scope: step.sectionId ?? step.workId, summary: step.summary,
-                        files: Self.exactFiles(step.files), resolution: step.blocker.map { "Reported blocker: \($0)" },
-                        identityNote: step.workId == nil && step.sectionId == nil ? "No stable section identity; local content identity is used." : nil
-                    ))
-                    for checkItem in StepCheckDigest(checks: step.checks ?? []).all {
-                        let check = checkItem.check
-                        let eventID = Self.nonempty(check.eventId)
-                        let time = Self.validTime(check.createdAt)
-                        records.append(WorkTimelineRecord(
-                            id: eventID.map { "event:\($0)" } ?? "\(stepID)/check:\(checkItem.id)",
-                            eventID: eventID, laneID: member.id, laneTitle: title, lineage: lineage,
-                            kind: .check, title: Self.nonempty(check.evidenceType)?.capitalized ?? "Machine check",
-                            start: time, timeNote: time == nil ? "Source time unavailable" : "Recorded check point; duration unavailable",
-                            result: check.result ?? "unknown", source: Self.sourceLabel(check.sourceType),
-                            scope: check.checkIdentity, summary: check.summary, files: Self.exactFiles(check.files),
-                            exitCode: check.exitCode, superseded: checkItem.isHistory,
-                            supersededBy: Self.nonempty(check.supersededByEventId), sectionRecordID: stepID,
-                            resolution: check.resolutionSummary,
-                            resolutionScope: check.resolutionScope,
-                            artifact: check.artifactRef, artifactPath: check.artifactPath, artifactURL: check.artifactUrl,
-                            artifactPathRedacted: check.artifactPathRedacted, artifactURLRedacted: check.artifactUrlRedacted,
-                            commandRedacted: check.commandRedacted == true,
-                            identityNote: eventID == nil ? "No event ID; this row cannot be deduplicated across receipt and session views." : nil,
-                            sectionTitle: step.title
-                        ))
-                    }
-                }
-            }
-        }
-        let checkRows = ReceiptCheckCollectionPresentation(evidence: receipt.dimensions.evidence)
-        if !checkRows.rows.isEmpty {
-            let laneID = "task:\(receipt.taskId)"
-            lanes.append(WorkTimelineLane(id: laneID, title: "Task check evidence", lineage: "Session attribution unavailable in receipt", availability: "\(checkRows.rows.count) itemized receipt checks"))
-            for row in checkRows.rows {
-                let check = row.check
-                let time = Self.validTime(check.at)
-                let disposition = check.finding?.attentionOpen == false
-                    ? (check.finding?.state ?? "attention closed")
-                    : check.finding?.state.flatMap { $0 == "open" ? nil : $0 }
-                records.append(WorkTimelineRecord(
-                    id: "\(laneID)/receipt:\(row.id)", laneID: laneID, laneTitle: "Task check evidence",
-                    lineage: "Session attribution unavailable in receipt", kind: .check,
-                    title: row.title, start: time,
-                    timeNote: time == nil ? "Source time unavailable" : "Recorded check point; duration unavailable",
-                    result: check.result ?? "unknown", source: Self.sourceLabel(check.source), scope: check.scope,
-                    summary: check.summary, files: Self.exactFiles(check.files), exitCode: check.exitCode,
-                    superseded: check.superseded == true, artifact: check.artifactRef, artifactURL: check.artifactUrl,
-                    commandRedacted: check.commandRedacted == true,
-                    identityNote: "Receipt omits event identity. This entry may also appear in a session; no automatic join is assumed.",
-                    disposition: disposition
-                ))
-            }
-            notices.append("Receipt checks have no event/session IDs and may also appear in session evidence. Counts describe displayed records, not unique check runs.")
-        }
-        if let note = checkRows.aggregateNotice { notices.append(note) }
-        if let note = checkRows.itemizedNotice { notices.append(note) }
-        if lanes.isEmpty { notices.append("No session members or itemized checks are available for this task.") }
-        self.init(records: records, lanes: lanes, notices: notices)
     }
 
     var interval: WorkTimelineInterval? {
@@ -211,49 +108,17 @@ struct WorkTimelineProjection: Equatable {
         return lhs.id < rhs.id
     }
 
-    static func validTime(_ value: Double?) -> Double? {
-        guard let value, value.isFinite, value > 0, value < 253_402_300_800 else { return nil }
-        return value
-    }
-
-    static func stepBounds(start: Double?, update: Double?) -> (start: Double?, end: Double?, note: String, warning: String?) {
-        let first = validTime(start), last = validTime(update)
-        if let first, let last, last > first {
-            return (first, last, "Recorded section start → latest update; not execution duration", nil)
-        }
-        if let first, let last, last < first {
-            return (first, nil, "Update precedes start; clock order is inconsistent. Duration unavailable.", "The recorded update precedes the start. Timing is inconsistent.")
-        }
-        if let point = last ?? first { return (point, nil, "Recorded section point; duration unavailable", nil) }
-        return (nil, nil, "Source time unavailable", nil)
-    }
-
-    static func exactFiles(_ files: [String]?) -> [String] {
-        Array(Set((files ?? []).filter { !$0.isEmpty })).sorted()
-    }
-
     static func nonempty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return value
     }
 
-    static func sourceLabel(_ source: String?) -> String {
-        switch source {
-        case "ci": return "CI source"
-        case "external", "provider": return "External source: \(source!)"
-        case "client_hook", "hook": return "Client hook"
-        case "mcp", "agent_report", "agent": return "Agent-reported check"
-        case nil: return "Source unavailable"
-        default: return source!.replacingOccurrences(of: "_", with: " ")
-        }
+    static func validTime(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value > 0, value < 253_402_300_800 else { return nil }
+        return value
     }
 
-    func relationship(_ first: WorkTimelineRecord, _ second: WorkTimelineRecord) -> String {
-        if first.supersededBy != nil && first.supersededBy == second.eventID { return "Recorded supersession: first record → second record." }
-        if second.supersededBy != nil && second.supersededBy == first.eventID { return "Recorded supersession: second record → first record." }
-        if first.sectionRecordID == second.id || second.sectionRecordID == first.id { return "Recorded section membership." }
-        return "No direct event relationship is supplied. Shared time, files or session lineage do not establish causality."
-    }
+
 }
 
 struct WorkTimelineInterval: Equatable, Codable {

@@ -55,6 +55,6 @@ final class WorkTimelineMemoryTests: XCTestCase {
     private func entry(_ id: String) -> WorkTimelineMemoryCache.Entry {
         var feed = WorkTimelineFeed()
         feed.ingest(.init(records: [record(id)]), following: false)
-        return .init(feed: feed, sessions: [:])
+        return .init(feed: feed)
     }
 }

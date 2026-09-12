@@ -12,24 +12,6 @@ final class WorkTimelineTests: XCTestCase {
         XCTAssertFalse(WorkTimelineInterval(lower: 20, upper: 25).contains(record("a", time: 10)))
     }
 
-    func testDurationRequiresValidBoundsAndNamesClockInconsistency() {
-        let duration = WorkTimelineProjection.stepBounds(start: 10, update: 30)
-        XCTAssertEqual(duration.start, 10)
-        XCTAssertEqual(duration.end, 30)
-        XCTAssertTrue(duration.note.contains("not execution duration"))
-        let inverted = WorkTimelineProjection.stepBounds(start: 30, update: 10)
-        XCTAssertNil(inverted.end)
-        XCTAssertTrue(inverted.note.contains("inconsistent"))
-        XCTAssertNotNil(inverted.warning, "Clock errors must remain visible when explanatory timing details are collapsed")
-        XCTAssertNil(duration.warning)
-        let point = WorkTimelineProjection.stepBounds(start: nil, update: 20)
-        XCTAssertEqual(point.start, 20)
-        XCTAssertNil(point.end)
-        XCTAssertNil(WorkTimelineProjection.validTime(.nan))
-        XCTAssertNil(WorkTimelineProjection.validTime(.infinity))
-        XCTAssertNil(WorkTimelineProjection.validTime(0))
-    }
-
     func testDedupRequiresImmutableEventIdentity() {
         var first = record("first", time: 10)
         first.eventID = "event-1"
@@ -50,14 +32,11 @@ final class WorkTimelineTests: XCTestCase {
         var passed = record("passed", time: 20)
         passed.result = "passed"
         passed.eventID = "pass-event"
-        let projection = WorkTimelineProjection(records: [failure, passed])
         XCTAssertTrue(failure.isCurrentFailure)
-        XCTAssertTrue(projection.relationship(failure, passed).contains("No direct event relationship"))
         failure.superseded = true
         failure.supersededBy = "pass-event"
         XCTAssertFalse(failure.isCurrentFailure)
         XCTAssertEqual(failure.result, "failed")
-        XCTAssertTrue(projection.relationship(failure, passed).contains("Recorded supersession"))
     }
 
     func testHeldFeedPreservesSelectedPayloadAndCountsRevisionsOnce() {
@@ -124,29 +103,6 @@ final class WorkTimelineTests: XCTestCase {
         XCTAssertFalse(json.contains("records"))
     }
 
-    func testReceiptAnonymousChecksRetainIdentityAcrossEnrichmentWithoutInventingSession() throws {
-        let receipt = try decodeReceipt(checks: [["kind": "test", "name": "Suite", "result": "failed", "at": 10],
-                                                   ["kind": "test", "name": "Suite", "result": "failed", "at": 10]])
-        let projected = WorkTimelineProjection(receipt: receipt, sessions: [:])
-        XCTAssertEqual(projected.records.count, 2)
-        XCTAssertEqual(Set(projected.records.map(\.id)).count, 2)
-        XCTAssertTrue(projected.records.allSatisfy { $0.eventID == nil && $0.laneID == "task:task-a" })
-        XCTAssertTrue(projected.notices.contains { $0.contains("no event/session IDs") })
-    }
-
-    func testLoadedSessionMustMatchReceiptMemberBeforeJoining() throws {
-        let receipt = try decodeReceipt(checks: [], sessions: [[
-            "root": ["client": "codex", "client_session_id": "expected"],
-            "members": [["client": "codex", "client_session_id": "expected"]],
-        ]])
-        let json: [String: Any] = ["schema": "test", "session": ["client": "codex", "client_session_id": "other"],
-                                   "steps": [["work_id": "step", "title": "Unrelated", "started_at": 10]], "descendants": []]
-        let detail = try JSONDecoder().decode(V1SessionDetail.self, from: JSONSerialization.data(withJSONObject: json))
-        let projection = WorkTimelineProjection(receipt: receipt, sessions: ["codex::expected": detail])
-        XCTAssertTrue(projection.records.isEmpty)
-        XCTAssertTrue(projection.notices.contains { $0.contains("did not match") })
-    }
-
     func testArrivalReviewAndReturnRestoreHeldEvidenceIncludingRemovedSelection() {
         let original = record("selected", time: 10)
         var feed = WorkTimelineFeed()
@@ -162,18 +118,6 @@ final class WorkTimelineTests: XCTestCase {
         XCTAssertNil(feed.historySnapshot)
     }
 
-    func testKeyboardOrderMatchesGroupedTimelineAndChronologicalList() {
-        var a = record("a", time: 10); a.laneID = "root"
-        var b = record("b", time: 20); b.laneID = "child"
-        var c = record("c", time: 30); c.laneID = "root"
-        var undated = record("unknown"); undated.laneID = "child"
-        let projection = WorkTimelineProjection(records: [a, b, c, undated], lanes: [
-            .init(id: "root", title: "Root", lineage: "", availability: "loaded"),
-            .init(id: "child", title: "Child", lineage: "", availability: "loaded")])
-        XCTAssertEqual(projection.displayedOrder(projection.records, mode: "timeline").map(\.id), ["a", "c", "b", "unknown"])
-        XCTAssertEqual(projection.displayedOrder(projection.records, mode: "list").map(\.id), ["a", "b", "c", "unknown"])
-    }
-
     func testLiveTargetUsesLatestUpdateOfAnEarlierSection() {
         var earlier = record("ongoing", time: 10); earlier.end = 50
         let recentStart = record("recent-check", time: 40)
@@ -185,14 +129,4 @@ final class WorkTimelineTests: XCTestCase {
                            title: "Check", start: time)
     }
 
-    private func decodeReceipt(checks: [[String: Any]], sessions: [[String: Any]] = []) throws -> Receipt {
-        let json: [String: Any] = [
-            "schema_version": "test", "task_id": "task-a",
-            "axes": ["decision_status": ["key": "unknown"], "evidence_strength": ["key": "unchecked"]],
-            "dimensions": ["task": [:], "actors": [:], "actions": [:], "cost": [:], "evidence": ["checks": checks],
-                           "outcome": [:], "gaps": [:], "provenance": [:]],
-            "sessions": sessions,
-        ]
-        return try JSONDecoder().decode(Receipt.self, from: JSONSerialization.data(withJSONObject: json))
-    }
 }

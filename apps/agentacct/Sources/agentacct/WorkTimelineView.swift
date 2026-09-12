@@ -30,12 +30,6 @@ extension EnvironmentValues {
     }
 }
 
-private struct WorkTimelineSessionResponse {
-    var id: String
-    var detail: V1SessionDetail?
-    var error: String?
-}
-
 struct WorkTimelineView: View {
     let receipt: Receipt
     var reviewSelectedRecord = false
@@ -50,8 +44,8 @@ struct WorkTimelineView: View {
     @State private var navigation = WorkTimelineNavigation()
     @State private var feed = WorkTimelineFeed()
     @State private var followWindowSpan: Double = 30 * 60
-    @State private var sessions: [String: V1SessionDetail] = [:]
-    @State private var sessionErrors: [String: String] = [:]
+    @State private var timeline: TaskTimelinePage?
+    @State private var timelineError: String?
     @State private var activeTaskID: String?
     @State private var loadingInitialSnapshot = false
     @State private var restoredPositionFromCurrentEvidence = false
@@ -70,17 +64,17 @@ struct WorkTimelineView: View {
     @State private var viewport = WorkTimelineViewport()
 
     private var projection: WorkTimelineProjection {
-        WorkTimelineProjection(receipt: receipt, sessions: sessions, errors: sessionErrors)
+        (timeline ?? receipt.timeline)?.projection(taskID: receipt.taskId) ?? .empty
     }
     private var displayProjection: WorkTimelineProjection {
         SnapshotMode.enabled && !SnapshotMode.interactiveFixture
-            ? WorkTimelineProjection(receipt: receipt, sessions: dashboard.preloadedSessions)
+            ? receipt.timeline?.projection(taskID: receipt.taskId) ?? .empty
             : feed.visible
     }
     private var latestProjection: WorkTimelineProjection { SnapshotMode.enabled && !SnapshotMode.interactiveFixture ? displayProjection : feed.latest }
-    private var loadedCount: Int {
-        let available = SnapshotMode.enabled ? dashboard.preloadedSessions : sessions
-        return (receipt.sessions ?? []).flatMap(\.members).filter { available[$0.id] != nil }.count
+    private var incomplete: Bool {
+        guard let page = timeline ?? receipt.timeline else { return true }
+        return page.truncated || page.events.contains { $0.id == nil }
     }
     private var matchingRecords: [WorkTimelineRecord] {
         displayProjection.records.filter { record in
@@ -107,10 +101,8 @@ struct WorkTimelineView: View {
         VStack(alignment: .leading, spacing: Space.s) {
             heading
             filters
-            if !loadingInitialSnapshot, loadedCount < memberCount || !sessionErrors.isEmpty {
-                Text(sessionErrors.isEmpty
-                    ? "Activity incomplete · \(loadedCount) of \(memberCount) sessions loaded"
-                    : "Session refresh failed · retained records may be outdated")
+            if !loadingInitialSnapshot, incomplete || timelineError != nil {
+                Text(timelineError == nil ? "Activity history is incomplete" : "Activity refresh failed · showing retained records")
                     .workFont(.caption).foregroundStyle(Theme.amber)
             }
             if restoredPositionFromCurrentEvidence {
@@ -140,9 +132,10 @@ struct WorkTimelineView: View {
             if let exportError { Text(exportError).workFont(.caption).foregroundStyle(Theme.coral) }
             DisclosureGroup("Recording details") {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("\(displayProjection.records.count) records from \(loadedCount) of \(memberCount) loaded sessions. Search covers only loaded activity.")
+                    Text("\(displayProjection.records.count) loaded records. Search covers loaded activity.")
+                    if let timelineError { Text(timelineError) }
                     Text(dashboard.isOfflineSnapshot ? "Saved copies only. No recorder requests or changes are made from this view." : "Snapshots refresh every 3 seconds while this view is open. Intermediate changes between snapshots may not be available.")
-                    Text(lastObserved.map { "Last successful session snapshot: \(Self.dateText($0.timeIntervalSince1970))." } ?? "No live session snapshot received in this view.")
+                    Text(lastObserved.map { "Last successful activity snapshot: \(Self.dateText($0.timeIntervalSince1970))." } ?? "No live activity snapshot received in this view.")
                     ForEach(latestProjection.lanes) { lane in
                         Text("\(lane.title): \(lane.availability)")
                     }
@@ -164,7 +157,7 @@ struct WorkTimelineView: View {
         }
         .onChange(of: dashboard.nativeReviewRevision) { _, _ in
             guard SnapshotMode.enabled, SnapshotMode.interactiveFixture else { return }
-            sessions = dashboard.preloadedSessions
+            timeline = nil
             receive(projection)
         }
         .onChange(of: navigation) { _, value in
@@ -229,11 +222,7 @@ struct WorkTimelineView: View {
         }
     }
 
-    private var memberCount: Int { Set((receipt.sessions ?? []).flatMap(\.members).map(\.id)).count }
-
-    private var loadKey: String {
-        receipt.taskId + "|" + (receipt.sessions ?? []).flatMap(\.members).map(\.id).sorted().joined(separator: "|")
-    }
+    private var loadKey: String { receipt.taskId }
 
     private var heading: some View {
         ViewThatFits(in: .horizontal) {
@@ -258,7 +247,7 @@ struct WorkTimelineView: View {
             }
             HStack(spacing: 5) {
                 if loadingInitialSnapshot && !reduceMotion {
-                    ProgressView().controlSize(.mini).accessibilityLabel("Loading session evidence")
+                    ProgressView().controlSize(.mini).accessibilityLabel("Loading activity history")
                 }
                 if dashboard.isOfflineSnapshot {
                     Text("Saved copy · offline").workFont(.caption).foregroundStyle(Theme.muted)
@@ -474,7 +463,7 @@ struct WorkTimelineView: View {
                     Button("Show this record") { clearFilters(); focusSelectedRange(); returnToRecord(record) }
                         .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
                 }
-                let associatedChecks = displayProjection.records.filter { $0.sectionRecordID == record.id }
+                let associatedChecks = displayProjection.records.filter { $0.sectionRecordIDs.contains(record.id) || $0.sectionRecordID == record.id }
                 if !associatedChecks.isEmpty {
                     DisclosureGroup("Checks · \(associatedChecks.count)") {
                         ForEach(associatedChecks) { check in
@@ -494,10 +483,11 @@ struct WorkTimelineView: View {
                 } else if record.superseded {
                     Text("The source marks this check superseded; a target event is not supplied.").workFont(.caption)
                 }
-                if let sectionID = record.sectionRecordID {
-                    Button("View work section") {
-                        if let section = displayProjection.records.first(where: { $0.id == sectionID }) { inspect(section) }
-                    }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                ForEach(record.sectionRecordIDs, id: \.self) { sectionID in
+                    if let section = displayProjection.records.first(where: { $0.id == sectionID }) {
+                        Button(record.sectionRecordIDs.count == 1 ? "View work section" : section.title) { inspect(section) }
+                            .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                    }
                 }
                 if !record.files.isEmpty {
                     DisclosureGroup("Files · \(record.files.count)") {
@@ -674,7 +664,7 @@ struct WorkTimelineView: View {
     }
     private func saveMemory() {
         guard let activeTaskID, !dashboard.isOfflineSnapshot, !SnapshotMode.enabled else { return }
-        WorkTimelineMemory.cache.save(.init(feed: feed, sessions: sessions), for: activeTaskID)
+        WorkTimelineMemory.cache.save(.init(feed: feed), for: activeTaskID)
         WorkTimelinePreferences.save(navigation, taskID: activeTaskID)
     }
 
@@ -686,18 +676,19 @@ struct WorkTimelineView: View {
         followWindowSpan = max(navigation.view.interval?.span ?? 0, 30 * 60)
         let cached = dashboard.isOfflineSnapshot || SnapshotMode.enabled ? nil : WorkTimelineMemory.cache.load(taskID)
         feed = cached?.feed ?? WorkTimelineFeed()
-        sessions = cached?.sessions ?? [:]
+        timeline = nil
         restoredPositionFromCurrentEvidence = cached == nil && navigation.restorePositionWithoutSnapshot()
         if dashboard.isOfflineSnapshot { navigation.following = false }
         loadingInitialSnapshot = cached == nil && !SnapshotMode.enabled && !dashboard.isOfflineSnapshot
-        sessionErrors = [:]
+        timelineError = nil
         lastObserved = nil
         showingArrivals = navigation.history != nil
         scrollTarget = navigation.view.anchorID
-        for member in (receipt.sessions ?? []).flatMap(\.members) {
-            if let preloaded = dashboard.preloadedSessions[member.id] { sessions[member.id] = preloaded }
+        if dashboard.isOfflineSnapshot {
+            timeline = try? await dashboard.loadTimeline(taskID: taskID, previous: nil)
+            guard !Task.isCancelled, activeTaskID == taskID else { return }
         }
-        receive(projection)
+        if cached == nil { receive(projection) }
         if SnapshotMode.enabled && reviewSelectedRecord {
             navigation.following = false
             navigation.view.selectedID = displayProjection.records.first?.id
@@ -705,38 +696,17 @@ struct WorkTimelineView: View {
         restoreReturnFocusIfReady()
         guard !SnapshotMode.enabled, !dashboard.isOfflineSnapshot else { return }
         while !Task.isCancelled && activeTaskID == taskID {
-            var seen = Set<String>()
-            let members = (receipt.sessions ?? []).flatMap(\.members).filter { seen.insert($0.id).inserted }
-            // Four concurrent requests bound daemon pressure for large tasks.
-            // A cancelled SwiftUI task cancels every child request as well.
-            for offset in stride(from: 0, to: members.count, by: 4) {
-                await withTaskGroup(of: WorkTimelineSessionResponse.self) { group in
-                    for member in members[offset..<min(offset + 4, members.count)] {
-                        group.addTask {
-                            do {
-                                let detail = try await dashboard.loadSession(client: member.client, sessionId: member.clientSessionId)
-                                return WorkTimelineSessionResponse(id: member.id, detail: detail, error: nil)
-                            } catch {
-                                return WorkTimelineSessionResponse(id: member.id, detail: nil, error: error.localizedDescription)
-                            }
-                        }
-                    }
-                    for await response in group {
-                        guard !Task.isCancelled, activeTaskID == taskID else { group.cancelAll(); return }
-                        if let detail = response.detail {
-                            sessions[response.id] = detail
-                            sessionErrors.removeValue(forKey: response.id)
-                            lastObserved = Date()
-                        } else {
-                            sessionErrors[response.id] = response.error
-                        }
-                    }
-                }
+            do {
+                let page = try await dashboard.loadTimeline(taskID: taskID, previous: timeline)
                 guard !Task.isCancelled, activeTaskID == taskID else { return }
+                timeline = page
+                timelineError = nil
+                lastObserved = Date()
+                receive(page.projection(taskID: taskID))
+            } catch {
+                guard !Task.isCancelled, activeTaskID == taskID else { return }
+                timelineError = error.localizedDescription
             }
-            // Ingest the final initial batch before closing baseline hydration;
-            // SwiftUI may coalesce the session state changes until this await.
-            receive(projection)
             loadingInitialSnapshot = false
             // Missing/filtered evidence focuses the heading, never another row.
             restoreReturnFocusIfReady()

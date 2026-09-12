@@ -156,6 +156,14 @@ struct SourcesPane: View {
                 .workFont(.dataSmall).foregroundStyle(Theme.muted)
         }
         if !stacksRows { Spacer() }
+        Button { Task { await dashboard.refreshIngestion() } } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+        .disabled(dashboard.isRefreshingIngestion || dashboard.isOfflineSnapshot || SnapshotMode.enabled)
+        .help("Refresh source health")
+        .accessibilityLabel("Refresh source health")
+        .accessibilityIdentifier("sources.refresh")
         if let onSetup {
             Button("Connections", action: onSetup).buttonStyle(NativeSetupActionStyle())
                 .accessibilityIdentifier("sources.connections")

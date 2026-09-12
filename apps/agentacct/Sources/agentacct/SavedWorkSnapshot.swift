@@ -17,6 +17,7 @@ struct SavedWorkSnapshot: Codable {
     static func accepts(_ path: String) -> Bool {
         path == "/v1/tasks?limit=200" || path.hasPrefix("/v1/receipt?task=")
             || path.hasPrefix("/v1/session?client=")
+            || (path.hasPrefix("/v1/task-timeline?task=") && !path.contains("&"))
     }
     var collectionDate: Date? { entries["/v1/tasks?limit=200"]?.receivedAt }
     var hasWork: Bool {

@@ -110,6 +110,8 @@ final class DashboardStore {
     /// Source/watcher health from /v1/ingestion (the Sources pane).
     private(set) var ingestion: V1IngestionSnapshot?
     private(set) var ingestionError: String?
+    private(set) var ingestionLastUpdated: Date?
+    private(set) var isRefreshingIngestion = false
     private(set) var isRefreshing = false
     private(set) var isLoadingReceipts = false
     private(set) var lastUpdated: Date?
@@ -279,7 +281,7 @@ final class DashboardStore {
         async let attentionRequest: V1AttentionPayload = client.getAuthed("/v1/attention?limit=5")
         async let planRequest: V1PlanPayload = client.getAuthed("/v1/plan?days=\(days)")
         async let usageRequest: UsageSummary = client.getLocal("/usage/summary?days=\(days)")
-        async let ingestionRequest: V1IngestionPayload = client.getAuthed("/v1/ingestion")
+        async let ingestionRefresh: Void = refreshIngestion()
 
         var tasksSucceeded = false
         do {
@@ -327,24 +329,7 @@ final class DashboardStore {
             }
         }
 
-        do {
-            let payload = try await ingestionRequest
-            ingestion = payload.ingestion
-            ingestionError = nil
-        } catch GlanceClientError.http(404) {
-            // An older daemon without the route: a named state, not an error toast.
-            if !Task.isCancelled {
-                ingestionError = "this daemon predates /v1/ingestion"
-            }
-        } catch GlanceClientError.noDiscovery(_) {
-            if !Task.isCancelled {
-                ingestionError = "daemon not running (no discovery file) — start it with `agentacct start`"
-            }
-        } catch {
-            if !requestWasCancelled(error, taskIsCancelled: Task.isCancelled) {
-                ingestionError = "source health fetch failed: \(error.localizedDescription)"
-            }
-        }
+        _ = await ingestionRefresh
 
         do {
             let (plan, summary) = try await (planRequest, usageRequest)
@@ -363,6 +348,34 @@ final class DashboardStore {
             guard rangeGeneration == usageDaysGeneration,
                   !requestWasCancelled(error, taskIsCancelled: Task.isCancelled) else { return }
             errorText = "daemon fetch failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Sources retries only its own endpoint (upstream PR #158). A cancelled
+    /// window refresh leaves retained source health and its timestamp intact.
+    func refreshIngestion() async {
+        guard !isOfflineSnapshot, !SnapshotMode.enabled, !isRefreshingIngestion else { return }
+        isRefreshingIngestion = true
+        defer { isRefreshingIngestion = false }
+        do {
+            let payload: V1IngestionPayload = try await client.getAuthed("/v1/ingestion")
+            try Task.checkCancellation()
+            ingestion = payload.ingestion
+            ingestionError = nil
+            ingestionLastUpdated = Date()
+        } catch GlanceClientError.http(404) {
+            // An older daemon without the route: a named state, not an error toast.
+            if !Task.isCancelled {
+                ingestionError = "this daemon predates /v1/ingestion"
+            }
+        } catch GlanceClientError.noDiscovery(_) {
+            if !Task.isCancelled {
+                ingestionError = "daemon not running (no discovery file) — start it with `agentacct start`"
+            }
+        } catch {
+            if !requestWasCancelled(error, taskIsCancelled: Task.isCancelled) {
+                ingestionError = "source health fetch failed: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -520,6 +533,22 @@ final class DashboardStore {
             receiptErrorTaskId = taskId
             receiptLoadingTaskId = nil
         }
+    }
+
+    /// Fetch the canonical task timeline; only a completely assembled snapshot
+    /// is persisted for offline use. Live cursors are never saved as history.
+    func loadTimeline(taskID: String, previous: TaskTimelinePage?) async throws -> TaskTimelinePage {
+        let path = "/v1/task-timeline?task=\(Self.queryValue(taskID))"
+        if isOfflineSnapshot { return try await client.getAuthed(path) }
+        let started = Date()
+        let page = try await TaskTimelineLoader.load(taskID: taskID, previous: previous) { cursor in
+            try await self.client.getAuthed(path + "&limit=500" + (cursor.map { "&cursor=\(Self.queryValue($0))" } ?? ""))
+        }
+        try Task.checkCancellation()
+        if let store = try? GlanceClient.storeDir(), let data = try? JSONEncoder().encode(page) {
+            await SavedWorkCache.shared.record(path: path, data: data, store: store, requestStartedAt: started)
+        }
+        return page
     }
 
     /// Load one session for a Receipt drill row. Each row owns its result, so

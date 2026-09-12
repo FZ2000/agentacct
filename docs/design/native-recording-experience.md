@@ -199,3 +199,17 @@ while the recorder installer deliberately rejects symlinks. The freeze now
 materializes bounded internal aliases before smoke testing and stamping output;
 the app build also rejects any remaining links. Regression fixtures include
 framework chains, outside targets, cycles, broken links and special files.
+
+## Shared timeline integration
+
+The native Activity canvas now consumes the existing task timeline. Stable record IDs, session/section relationships, recorded time bounds, provenance, artifact redaction, supersession and dispositions are projected once in Python. Receipts and paged native history use the same events. Swift retains layout, gestures, filtering, selection and held/live state.
+
+History loads from authenticated `/v1/task-timeline?task=…&limit=500`. Cursors are task-scoped immutable snapshots with a 120-second lifetime and an eight-snapshot LRU. Incoming evidence cannot shift records between pages. The native loader validates the complete sequence before publishing, retries expired cursors at most twice, and preserves retained history on failure. An unchanged first-page snapshot ID reuses the assembled local history. Only complete snapshots are saved for offline use. Requests are periodic snapshots, not a lossless event stream.
+
+Review in this order:
+1. Shared contract: `task_timeline.py`, the small `task_intelligence.py`/`receipt.py`/`api.py` adapters, and `test_task_timeline.py`.
+2. Native consumption: `TaskTimeline.swift`, `WorkTimelineView.swift`, and the deleted session/check reconstruction in `WorkTimelineModel.swift`. Geometry and pointer interactions remain the central-canvas implementation.
+3. Upstream reuse: PR #192's Markdown renderer/tests and shared cost/category helpers; PR #158's independent Sources refresh. The current failed-refresh presentation already gives errors precedence over retained healthy state, consistent with #158/#172. The timestamp upper-bound fix duplicates #191 and remains a single implementation.
+4. Synthetic fixtures: generated with the production Python projection by `generate-timeline-fixtures.py`; no native fallback rebuilds missing timeline records.
+
+PR #172's broad copy and temporal policy is not merged wholesale: it changes app-wide usage/reset copy and source-health models beyond this data-contract integration. Its useful failed-refresh invariant is already retained and tested. Future integration should reconcile remaining copy changes against this branch rather than reinstall its older Work view. PR #190 remains a draft; no branch was merged to main.

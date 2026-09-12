@@ -5,13 +5,9 @@ import Foundation
 struct WorkTimelineMemoryCache {
     struct Entry {
         var feed: WorkTimelineFeed
-        var sessions: [String: V1SessionDetail]
         var recordCost: Int {
             max(1, feed.visible.records.count + feed.latest.records.count
-                + (feed.historySnapshot?.records.count ?? 0)
-                + sessions.values.reduce(0) { count, detail in
-                    count + detail.steps.reduce(0) { $0 + 1 + ($1.checks?.count ?? 0) }
-                })
+                + (feed.historySnapshot?.records.count ?? 0))
         }
     }
     let taskLimit: Int

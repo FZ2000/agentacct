@@ -297,7 +297,9 @@
           "strongest_tier": "unchecked",
           "checkable_total": 1,
           "checked_total": 0,
-          "by_tier": { "unchecked": 1 },
+          "by_tier": {
+            "unchecked": 1
+          },
           "checks_total": 1,
           "checks_passed": 0,
           "checks_failed": 1
@@ -570,14 +572,21 @@
             "identity_scope": "repository",
             "session_count": 3
           },
-          "provenance": ["agent_report", "client_log"]
+          "provenance": [
+            "agent_report",
+            "client_log"
+          ]
         },
         "actors": {
           "primary_agent": "codex",
-          "models": ["gpt-5.6-sol"],
+          "models": [
+            "gpt-5.6-sol"
+          ],
           "subagent_session_count": 1,
           "child_session_count": 1,
-          "provenance": ["client_log"]
+          "provenance": [
+            "client_log"
+          ]
         },
         "actions": {
           "tool_category_counts": {
@@ -649,9 +658,18 @@
           ],
           "commands_elided": 21,
           "tool_names_preview": [
-            {"name": "exec_command", "count": 24},
-            {"name": "apply_patch", "count": 7},
-            {"name": "view_image", "count": 4}
+            {
+              "name": "exec_command",
+              "count": 24
+            },
+            {
+              "name": "apply_patch",
+              "count": 7
+            },
+            {
+              "name": "view_image",
+              "count": 4
+            }
           ],
           "tool_names_elided": 4,
           "tool_name_counts": {
@@ -663,7 +681,9 @@
             "update_plan": 2,
             "open": 1
           },
-          "provenance": ["client_log"]
+          "provenance": [
+            "client_log"
+          ]
         },
         "cost": {
           "estimated_cost_usd": 4.82,
@@ -683,7 +703,10 @@
             "cache_read": 612800,
             "total": 819400
           },
-          "provenance": ["client_log", "pricing_table"]
+          "provenance": [
+            "client_log",
+            "pricing_table"
+          ]
         },
         "evidence": {
           "checks_total": 6,
@@ -747,35 +770,70 @@
               "scope": "8 images",
               "source": "hook",
               "at": 1787618660,
-              "files": ["Tests/agentacctTests/ReferenceImages"]
+              "files": [
+                "Tests/agentacctTests/ReferenceImages"
+              ]
             }
           ],
-          "provenance": ["client_hook"],
-          "gaps": ["No hosted CI result is attached to this local receipt"]
+          "provenance": [
+            "client_hook"
+          ],
+          "gaps": [
+            "No hosted CI result is attached to this local receipt"
+          ]
         },
         "outcome": {
           "decision_status": "verified",
           "statement": "Deterministic fixture rendering and reviewed references are ready.",
           "asserted_by": "machine",
-          "provenance": ["agent_report", "client_hook"]
+          "provenance": [
+            "agent_report",
+            "client_hook"
+          ]
         },
         "gaps": {
           "count": 2,
           "items": [
-            {"dimension": "evidence", "reason": "No hosted CI evidence is attached to this receipt."},
-            {"dimension": "cost", "reason": "Dollar cost is estimated from the pricing table."}
+            {
+              "dimension": "evidence",
+              "reason": "No hosted CI evidence is attached to this receipt."
+            },
+            {
+              "dimension": "cost",
+              "reason": "Dollar cost is estimated from the pricing table."
+            }
           ]
         },
         "provenance": {
           "by_dimension": {
-            "task": ["agent_report", "client_log"],
-            "actors": ["client_log"],
-            "actions": ["client_log"],
-            "cost": ["client_log", "pricing_table"],
-            "evidence": ["client_hook"],
-            "outcome": ["agent_report", "client_hook"]
+            "task": [
+              "agent_report",
+              "client_log"
+            ],
+            "actors": [
+              "client_log"
+            ],
+            "actions": [
+              "client_log"
+            ],
+            "cost": [
+              "client_log",
+              "pricing_table"
+            ],
+            "evidence": [
+              "client_hook"
+            ],
+            "outcome": [
+              "agent_report",
+              "client_hook"
+            ]
           },
-          "sources_present": ["agent_report", "client_log", "client_hook", "pricing_table"],
+          "sources_present": [
+            "agent_report",
+            "client_log",
+            "client_hook",
+            "pricing_table"
+          ],
           "legend": {
             "agent_report": "Outcome and task objective reported by the agent.",
             "client_log": "Actions and actors observed in the local client transcript.",
@@ -786,7 +844,10 @@
       },
       "sessions": [
         {
-          "root": {"client": "codex", "client_session_id": "fixture-active-02"},
+          "root": {
+            "client": "codex",
+            "client_session_id": "fixture-active-02"
+          },
           "role": "primary",
           "lineage_state": "linked",
           "supporting_count": 1,
@@ -812,7 +873,10 @@
           ]
         },
         {
-          "root": {"client": "codex", "client_session_id": "fixture-continuation-01"},
+          "root": {
+            "client": "codex",
+            "client_session_id": "fixture-continuation-01"
+          },
           "role": "continuation",
           "lineage_state": "linked",
           "supporting_count": 0,
@@ -828,7 +892,548 @@
             }
           ]
         }
-      ]
+      ],
+      "timeline": {
+        "schema_version": "agentacct.task-timeline.v1",
+        "events": [
+          {
+            "id": "work:3d74e03eface6dd99185fbd505aed814f3c5c9198cfba8bbec57d21080d03604",
+            "event_id": null,
+            "kind": "work",
+            "occurred_at": 1787613433.0,
+            "started_at": 1787613433.0,
+            "updated_at": 1787614800.0,
+            "time_note": "Recorded section start → latest update; not execution duration",
+            "time_warning": null,
+            "lane": "primary",
+            "title": "Define the review matrix",
+            "status": "completed",
+            "source": "codex",
+            "source_label": "Agent section report",
+            "confidence": "exact",
+            "important": false,
+            "scope": "snapshot-scope",
+            "summary": "Pinned the two Work states, two viewports, and both appearances.",
+            "files": [],
+            "resolution": null,
+            "identity_note": null,
+            "client": "codex",
+            "client_session_id": "fixture-active-02",
+            "session_key": "codex::fixture-active-02",
+            "session_title": "Build reusable snapshot harness",
+            "lineage": "Root session · fixture-active-02"
+          },
+          {
+            "id": "event:check-scope",
+            "event_id": "check-scope",
+            "kind": "check",
+            "occurred_at": 1787614800.0,
+            "started_at": 1787614800.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "Configuration contract covers the full review matrix.",
+            "status": "passed",
+            "source": "hook",
+            "source_label": "Client hook",
+            "confidence": "observed",
+            "important": true,
+            "scope": "work-matrix",
+            "summary": "Configuration contract covers the full review matrix.",
+            "files": [],
+            "section_record_id": "work:3d74e03eface6dd99185fbd505aed814f3c5c9198cfba8bbec57d21080d03604",
+            "section_record_ids": [
+              "work:3d74e03eface6dd99185fbd505aed814f3c5c9198cfba8bbec57d21080d03604"
+            ],
+            "section_title": "Define the review matrix",
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": null,
+            "disposition": null,
+            "client": "codex",
+            "client_session_id": "fixture-active-02",
+            "session_key": "codex::fixture-active-02",
+            "session_title": "Build reusable snapshot harness",
+            "lineage": "Root session · fixture-active-02",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": false
+          },
+          {
+            "id": "work:b9f0391c3bc0cee3f7bd664fea5ebcadadd1615f3580b889942b1f7ca944f1d7",
+            "event_id": null,
+            "kind": "work",
+            "occurred_at": 1787614800.0,
+            "started_at": 1787614800.0,
+            "updated_at": 1787617600.0,
+            "time_note": "Recorded section start → latest update; not execution duration",
+            "time_warning": null,
+            "lane": "primary",
+            "title": "Render real Work surfaces from the fixture",
+            "status": "completed",
+            "source": "codex",
+            "source_label": "Agent section report",
+            "confidence": "exact",
+            "important": false,
+            "scope": "snapshot-implement",
+            "summary": "The table and selected receipt now use the same MainWindow path as the app.",
+            "files": [
+              "apps/agentacct/Sources/agentacct/WorkSnapshotHarness.swift",
+              "apps/agentacct/Tests/agentacctTests/Fixtures/dashboard.json"
+            ],
+            "resolution": null,
+            "identity_note": null,
+            "client": "codex",
+            "client_session_id": "fixture-active-02",
+            "session_key": "codex::fixture-active-02",
+            "session_title": "Build reusable snapshot harness",
+            "lineage": "Root session · fixture-active-02"
+          },
+          {
+            "id": "event:check-render",
+            "event_id": "check-render",
+            "kind": "check",
+            "occurred_at": 1787617600.0,
+            "started_at": 1787617600.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "Repeated renders stayed deterministic.",
+            "status": "passed",
+            "source": "hook",
+            "source_label": "Client hook",
+            "confidence": "observed",
+            "important": true,
+            "scope": "work-render",
+            "summary": "Repeated renders stayed deterministic.",
+            "files": [],
+            "section_record_id": "work:b9f0391c3bc0cee3f7bd664fea5ebcadadd1615f3580b889942b1f7ca944f1d7",
+            "section_record_ids": [
+              "work:b9f0391c3bc0cee3f7bd664fea5ebcadadd1615f3580b889942b1f7ca944f1d7"
+            ],
+            "section_title": "Render real Work surfaces from the fixture",
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": null,
+            "disposition": null,
+            "client": "codex",
+            "client_session_id": "fixture-active-02",
+            "session_key": "codex::fixture-active-02",
+            "session_title": "Build reusable snapshot harness",
+            "lineage": "Root session · fixture-active-02",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": false
+          },
+          {
+            "id": "work:1098bda6707018605c70dbf78f9643e8040d8b362ea9699043e43211bc813b25",
+            "event_id": null,
+            "kind": "work",
+            "occurred_at": 1787617600.0,
+            "started_at": 1787617600.0,
+            "updated_at": 1787618680.0,
+            "time_note": "Recorded section start → latest update; not execution duration",
+            "time_warning": null,
+            "lane": "primary",
+            "title": "Review the generated PNG matrix",
+            "status": "completed",
+            "source": "codex",
+            "source_label": "Agent section report",
+            "confidence": "exact",
+            "important": false,
+            "scope": "snapshot-review",
+            "summary": "Inspected table density, receipt hierarchy, and light/dark contrast at both sizes.",
+            "files": [],
+            "resolution": null,
+            "identity_note": null,
+            "client": "codex",
+            "client_session_id": "fixture-active-02",
+            "session_key": "codex::fixture-active-02",
+            "session_title": "Build reusable snapshot harness",
+            "lineage": "Root session · fixture-active-02"
+          },
+          {
+            "id": "anonymous-check:63c074ac18637361a6526b5b6ad9ea74bd17bd82b3f5a4baba2b459f68406ac1",
+            "event_id": null,
+            "kind": "check",
+            "occurred_at": 1787618500.0,
+            "started_at": 1787618500.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "Swift semantic suite",
+            "status": "passed",
+            "source": "mcp",
+            "source_label": "Agent-reported check",
+            "confidence": "observed",
+            "important": true,
+            "scope": "app",
+            "summary": "All Swift unit and interaction tests passed.",
+            "files": [],
+            "section_record_id": null,
+            "section_record_ids": [],
+            "section_title": null,
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": "No event ID; identical anonymous records remain separate.",
+            "disposition": null,
+            "client": null,
+            "client_session_id": null,
+            "session_key": null,
+            "session_title": "Task evidence",
+            "lineage": "Session attribution unavailable",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": true
+          },
+          {
+            "id": "anonymous-check:942f1eccdf488e41f9093e57d4ad11953efb46ae23b7ee5baf02c438335bfb70",
+            "event_id": null,
+            "kind": "check",
+            "occurred_at": 1787618540.0,
+            "started_at": 1787618540.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "Deterministic repeat render",
+            "status": "passed",
+            "source": "mcp",
+            "source_label": "Agent-reported check",
+            "confidence": "observed",
+            "important": true,
+            "scope": "visual harness",
+            "summary": "Two fixture renders stayed inside the one-channel antialiasing budget.",
+            "files": [],
+            "section_record_id": null,
+            "section_record_ids": [],
+            "section_title": null,
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": "No event ID; identical anonymous records remain separate.",
+            "disposition": null,
+            "client": null,
+            "client_session_id": null,
+            "session_key": null,
+            "session_title": "Task evidence",
+            "lineage": "Session attribution unavailable",
+            "exit_code": 0,
+            "artifact_ref": "snapshot-matrix",
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": false
+          },
+          {
+            "id": "anonymous-check:f02d0e3198e7854175bda54058a2132f3bbc5adacddf908bab22c26dc09ab892",
+            "event_id": null,
+            "kind": "check",
+            "occurred_at": 1787618580.0,
+            "started_at": 1787618580.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "Light and dark references",
+            "status": "passed",
+            "source": "mcp",
+            "source_label": "Agent-reported check",
+            "confidence": "observed",
+            "important": true,
+            "scope": "visual baselines",
+            "summary": null,
+            "files": [],
+            "section_record_id": null,
+            "section_record_ids": [],
+            "section_title": null,
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": "No event ID; identical anonymous records remain separate.",
+            "disposition": null,
+            "client": null,
+            "client_session_id": null,
+            "session_key": null,
+            "session_title": "Task evidence",
+            "lineage": "Session attribution unavailable",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": false
+          },
+          {
+            "id": "anonymous-check:c90dffaba2499fda9a5b05280e8bc2e58000b7403e948d02de868b5f10ae4f73",
+            "event_id": null,
+            "kind": "check",
+            "occurred_at": 1787618620.0,
+            "started_at": 1787618620.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "Release app build",
+            "status": "passed",
+            "source": "mcp",
+            "source_label": "Agent-reported check",
+            "confidence": "observed",
+            "important": true,
+            "scope": "macOS arm64",
+            "summary": null,
+            "files": [],
+            "section_record_id": null,
+            "section_record_ids": [],
+            "section_title": null,
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": "No event ID; identical anonymous records remain separate.",
+            "disposition": null,
+            "client": null,
+            "client_session_id": null,
+            "session_key": null,
+            "session_title": "Task evidence",
+            "lineage": "Session attribution unavailable",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": false
+          },
+          {
+            "id": "anonymous-check:9db1068b42a754e7d8c5e1f0f68b8de146aa1cc7bb698a58336165c706f04bb7",
+            "event_id": null,
+            "kind": "check",
+            "occurred_at": 1787618640.0,
+            "started_at": 1787618640.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "Snapshot CLI contract",
+            "status": "passed",
+            "source": "mcp",
+            "source_label": "Agent-reported check",
+            "confidence": "observed",
+            "important": true,
+            "scope": "shell harness",
+            "summary": null,
+            "files": [],
+            "section_record_id": null,
+            "section_record_ids": [],
+            "section_title": null,
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": "No event ID; identical anonymous records remain separate.",
+            "disposition": null,
+            "client": null,
+            "client_session_id": null,
+            "session_key": null,
+            "session_title": "Task evidence",
+            "lineage": "Session attribution unavailable",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": false
+          },
+          {
+            "id": "anonymous-check:2367f3ee8097e5aae90ad2527a0a6663d69f372b9353f205b990d8072430c3ee",
+            "event_id": null,
+            "kind": "check",
+            "occurred_at": 1787618660.0,
+            "started_at": 1787618660.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "Review PNG validation",
+            "status": "passed",
+            "source": "mcp",
+            "source_label": "Agent-reported check",
+            "confidence": "observed",
+            "important": true,
+            "scope": "8 images",
+            "summary": null,
+            "files": [
+              "Tests/agentacctTests/ReferenceImages"
+            ],
+            "section_record_id": null,
+            "section_record_ids": [],
+            "section_title": null,
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": "No event ID; identical anonymous records remain separate.",
+            "disposition": null,
+            "client": null,
+            "client_session_id": null,
+            "session_key": null,
+            "session_title": "Task evidence",
+            "lineage": "Session attribution unavailable",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": false
+          },
+          {
+            "id": "work:1f17c76ad9e9720164b6b1a2966a35048e25e19befb710bba92042ca28e1c5a5",
+            "event_id": null,
+            "kind": "work",
+            "occurred_at": 1787618660.0,
+            "started_at": 1787618660.0,
+            "updated_at": null,
+            "time_note": "Recorded section point; duration unavailable",
+            "time_warning": null,
+            "lane": "primary",
+            "title": "Document the canonical renderer workflow",
+            "status": "completed",
+            "source": "codex",
+            "source_label": "Agent section report",
+            "confidence": "exact",
+            "important": false,
+            "scope": "snapshot-docs",
+            "summary": "Documented how to render, verify, and record only the Work suite.",
+            "files": [],
+            "resolution": null,
+            "identity_note": null,
+            "client": "codex",
+            "client_session_id": "fixture-active-02",
+            "session_key": "codex::fixture-active-02",
+            "session_title": "Build reusable snapshot harness",
+            "lineage": "Root session · fixture-active-02"
+          },
+          {
+            "id": "event:check-review",
+            "event_id": "check-review",
+            "kind": "check",
+            "occurred_at": 1787618680.0,
+            "started_at": 1787618680.0,
+            "updated_at": null,
+            "time_note": "Recorded check point; duration unavailable",
+            "lane": "evidence",
+            "title": "All eight PNGs are valid source-tree references.",
+            "status": "passed",
+            "source": "hook",
+            "source_label": "Client hook",
+            "confidence": "observed",
+            "important": true,
+            "scope": "work-pngs",
+            "summary": "All eight PNGs are valid source-tree references.",
+            "files": [],
+            "section_record_id": "work:1098bda6707018605c70dbf78f9643e8040d8b362ea9699043e43211bc813b25",
+            "section_record_ids": [
+              "work:1098bda6707018605c70dbf78f9643e8040d8b362ea9699043e43211bc813b25"
+            ],
+            "section_title": "Review the generated PNG matrix",
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": null,
+            "disposition": null,
+            "client": "codex",
+            "client_session_id": "fixture-active-02",
+            "session_key": "codex::fixture-active-02",
+            "session_title": "Build reusable snapshot harness",
+            "lineage": "Root session · fixture-active-02",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": false
+          },
+          {
+            "id": "work:36901405ae2d5f2cf3f394743dc363d1495c7d2de09b6d3f06ec6a8473434950",
+            "event_id": null,
+            "kind": "work",
+            "occurred_at": null,
+            "started_at": null,
+            "updated_at": null,
+            "time_note": "Source time unavailable",
+            "time_warning": null,
+            "lane": "supporting",
+            "title": "Record canonical Work references",
+            "status": "completed",
+            "source": "codex",
+            "source_label": "Agent section report",
+            "confidence": "claimed",
+            "important": false,
+            "scope": "snapshot-record",
+            "summary": "Recorded and immediately re-verified the source-tree PNGs.",
+            "files": [],
+            "resolution": null,
+            "identity_note": null,
+            "client": "codex",
+            "client_session_id": "fixture-continuation-01",
+            "session_key": "codex::fixture-continuation-01",
+            "session_title": "Record reviewed visual references",
+            "lineage": "Supporting session · fixture-continuation-01"
+          },
+          {
+            "id": "work:7ca9bf4fbaea0aeba6922a0004b20869c2b1acb48f5dc0954c4dbfbc74dcc218",
+            "event_id": null,
+            "kind": "work",
+            "occurred_at": null,
+            "started_at": null,
+            "updated_at": null,
+            "time_note": "Source time unavailable",
+            "time_warning": null,
+            "lane": "supporting",
+            "title": "Probe renderer nondeterminism",
+            "status": "completed",
+            "source": "codex",
+            "source_label": "Agent section report",
+            "confidence": "claimed",
+            "important": false,
+            "scope": "snapshot-adversarial-review",
+            "summary": "Checked clocks, locale, animations, viewport bounds, and async loaders.",
+            "files": [],
+            "resolution": null,
+            "identity_note": null,
+            "client": "codex",
+            "client_session_id": "fixture-active-02:agent-review",
+            "session_key": "codex::fixture-active-02:agent-review",
+            "session_title": "Audit snapshot determinism",
+            "lineage": "Supporting session · fixture-active-02:agent-review"
+          }
+        ],
+        "shown": 15,
+        "total": 15,
+        "truncated": false
+      }
     },
     "attention_receipt": {
       "schema_version": "agentacct.receipt.v1",
@@ -857,7 +1462,10 @@
           "strongest_tier": "unchecked",
           "checkable_total": 2,
           "checked_total": 1,
-          "by_tier": {"self_checked": 1, "unchecked": 1},
+          "by_tier": {
+            "self_checked": 1,
+            "unchecked": 1
+          },
           "checks_total": 2,
           "checks_passed": 1,
           "checks_failed": 1,
@@ -868,24 +1476,45 @@
       },
       "dimensions": {
         "task": {
-          "objectives": ["Calibrate provider limits from representative local usage"],
-          "boundary": {"project": "agentacct-gui", "identity_scope": "repository", "session_count": 1},
-          "provenance": ["agent_report"]
+          "objectives": [
+            "Calibrate provider limits from representative local usage"
+          ],
+          "boundary": {
+            "project": "agentacct-gui",
+            "identity_scope": "repository",
+            "session_count": 1
+          },
+          "provenance": [
+            "agent_report"
+          ]
         },
         "actors": {
           "primary_agent": "codex",
-          "models": ["gpt-5.6-sol"],
+          "models": [
+            "gpt-5.6-sol"
+          ],
           "subagent_session_count": 0,
           "child_session_count": 0,
-          "provenance": ["client_log"]
+          "provenance": [
+            "client_log"
+          ]
         },
         "actions": {
-          "tool_category_counts": {"execute": 7, "read": 12},
+          "tool_category_counts": {
+            "execute": 7,
+            "read": 12
+          },
           "tool_category_total": 19,
           "touched_file_count": 2,
-          "provenance": ["client_log"]
+          "provenance": [
+            "client_log"
+          ]
         },
-        "cost": {"provenance": ["client_log"]},
+        "cost": {
+          "provenance": [
+            "client_log"
+          ]
+        },
         "evidence": {
           "checks_total": 2,
           "checks_passed": 1,
@@ -910,34 +1539,147 @@
               "command_redacted": true
             }
           ],
-          "provenance": ["client_hook"]
+          "provenance": [
+            "client_hook"
+          ]
         },
         "outcome": {
           "decision_status": "blocked",
           "statement": "Representative usage is still required.",
           "asserted_by": "agent_report",
-          "provenance": ["agent_report"]
+          "provenance": [
+            "agent_report"
+          ]
         },
         "gaps": {
           "count": 1,
-          "items": [{"dimension": "evidence", "reason": "The recorded window is not yet representative."}]
+          "items": [
+            {
+              "dimension": "evidence",
+              "reason": "The recorded window is not yet representative."
+            }
+          ]
         },
         "provenance": {
           "by_dimension": {
-            "task": ["agent_report"],
-            "actors": ["client_log"],
-            "actions": ["client_log"],
-            "cost": ["client_log"],
-            "evidence": ["client_hook"],
-            "outcome": ["agent_report"]
+            "task": [
+              "agent_report"
+            ],
+            "actors": [
+              "client_log"
+            ],
+            "actions": [
+              "client_log"
+            ],
+            "cost": [
+              "client_log"
+            ],
+            "evidence": [
+              "client_hook"
+            ],
+            "outcome": [
+              "agent_report"
+            ]
           },
-          "sources_present": ["agent_report", "client_log", "client_hook"],
+          "sources_present": [
+            "agent_report",
+            "client_log",
+            "client_hook"
+          ],
           "legend": {
             "agent_report": "Outcome and blocker reported by the agent.",
             "client_log": "Actions and actors observed in the local client transcript.",
             "client_hook": "Machine result observed by the local client integration."
           }
         }
+      },
+      "timeline": {
+        "schema_version": "agentacct.task-timeline.v1",
+        "events": [
+          {
+            "id": "anonymous-check:129e7fbaf02303d77c4872fc2ef8f73f848a2dddb09928e9dab55948b27024f1",
+            "event_id": null,
+            "kind": "check",
+            "occurred_at": null,
+            "started_at": null,
+            "updated_at": null,
+            "time_note": "Source time unavailable",
+            "lane": "evidence",
+            "title": "Calibration stability",
+            "status": "failed",
+            "source": "mcp",
+            "source_label": "Agent-reported check",
+            "confidence": "observed",
+            "important": true,
+            "scope": null,
+            "summary": "The sample does not yet span the minimum representative window.",
+            "files": [],
+            "section_record_id": null,
+            "section_record_ids": [],
+            "section_title": null,
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": "No event ID; identical anonymous records remain separate.",
+            "disposition": null,
+            "client": null,
+            "client_session_id": null,
+            "session_key": null,
+            "session_title": "Task evidence",
+            "lineage": "Session attribution unavailable",
+            "exit_code": 1,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": true
+          },
+          {
+            "id": "anonymous-check:fbfd42ad4c8abc583551cd11029a71d15f5749a14f2b90f6634a389bf77b4302",
+            "event_id": null,
+            "kind": "check",
+            "occurred_at": null,
+            "started_at": null,
+            "updated_at": null,
+            "time_note": "Source time unavailable",
+            "lane": "evidence",
+            "title": "Usage import integrity",
+            "status": "passed",
+            "source": "mcp",
+            "source_label": "Agent-reported check",
+            "confidence": "observed",
+            "important": true,
+            "scope": null,
+            "summary": "Recorded usage rows are internally consistent.",
+            "files": [],
+            "section_record_id": null,
+            "section_record_ids": [],
+            "section_title": null,
+            "superseded": false,
+            "superseded_by_event_id": null,
+            "resolution": null,
+            "resolution_scope": null,
+            "identity_note": "No event ID; identical anonymous records remain separate.",
+            "disposition": null,
+            "client": null,
+            "client_session_id": null,
+            "session_key": null,
+            "session_title": "Task evidence",
+            "lineage": "Session attribution unavailable",
+            "exit_code": 0,
+            "artifact_ref": null,
+            "artifact_path": null,
+            "artifact_url": null,
+            "artifact_path_redacted": false,
+            "artifact_url_redacted": false,
+            "command_redacted": true
+          }
+        ],
+        "shown": 2,
+        "total": 2,
+        "truncated": false
       }
     },
     "sessions": [
@@ -957,7 +1699,9 @@
           "last_activity_at": 1787618680,
           "duration_seconds": 5247,
           "instrumentation_state": "recording",
-          "observed_models": ["gpt-5.6-sol"],
+          "observed_models": [
+            "gpt-5.6-sol"
+          ],
           "usage": {
             "rows": 18,
             "fresh_tokens": 142000,
@@ -1104,7 +1848,9 @@
           "last_activity_at": 1787618520,
           "duration_seconds": 2620,
           "instrumentation_state": "recording",
-          "observed_models": ["gpt-5.6-sol"]
+          "observed_models": [
+            "gpt-5.6-sol"
+          ]
         },
         "steps": [
           {
@@ -1137,7 +1883,9 @@
           "last_activity_at": 1787618660,
           "duration_seconds": 860,
           "instrumentation_state": "recording",
-          "observed_models": ["gpt-5.6-sol"]
+          "observed_models": [
+            "gpt-5.6-sol"
+          ]
         },
         "steps": [
           {
