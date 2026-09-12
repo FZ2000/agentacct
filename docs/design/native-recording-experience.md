@@ -30,6 +30,7 @@ the install scope and manual-merge qualification beside the action.
 | Timeline data and navigation | `WorkTimelineModel.swift`, `WorkTimelineMemory.swift`, `WorkTimelineViewport.swift`, `WorkTimelineFocus.swift` | Event identity, chronology, source and held snapshots remain authoritative. Selection is independent of the reading position. |
 | Timeline presentation and export | `WorkTimelineView.swift`, `WorkTimelineOverview.swift`, `WorkTimelineExport.swift` | No inferred causality or execution duration; comparison/export retain full identities and qualifications. |
 | Information hierarchy | `ContextHelp.swift`, `ReadingSize.swift`, `Theme.swift`, `UsagePane.swift`, `UsageCapacity.swift` | Optional explanation is available by hover and keyboard; failures, cost basis, incomplete capture and install scope stay visible. |
+| Distributable recorder | `packaging/materialize-cli.py`, `freeze-cli.sh`, `build-app.sh` | Framework aliases become independent files only after all targets are proven inside the frozen output. External or cyclic aliases fail; the installer's no-link contract is preserved. |
 
 The backend and native application are separate commits. Synthetic review
 fixtures are included; frozen reviewer source copies and large image corpora
@@ -52,7 +53,9 @@ are local study artifacts, not production resources.
 
 In the same 1120×860 synthetic timeline, the first evidence row moves from
 vertical position 610 to 304: 306 points recovered. The control region contains
-129 versus 43 OCR whitespace words. This is rendered geometry, not measured
+129 versus 46 OCR whitespace words in the final copy (43 in the frozen paired
+candidate). The final copy adds the loaded-record qualifier beside the failure
+count. This is rendered geometry, not measured
 human comprehension or distraction. A separately preserved single-analyst
 monitoring audit classifies incidental weighted units as 18/41 versus 2/18;
 those classifications depend on the monitoring task and declared unit weights.
@@ -62,8 +65,11 @@ The new evaluation uses 100 fresh evaluator agents: 50 baseline inspections and
 was fixed before review. Ordinal ratings, hard constraints, raw disagreements
 and ten weight sensitivity variants are reported separately from machine tests.
 Agents are not human participants, and preference between two candidates does
-not establish a universal optimum. Final results are added after all reviews
-are sealed.
+not establish a universal optimum. Final cohort results and post-freeze
+dispositions are reported in the PR description. The complete sealed corpus is
+retained locally in `design-plans/native-information-study/`; the content policy,
+measurements and coverage audit are in
+`design-plans/native-macos-overhaul/information-weight/`.
 
 ## Native review without installation
 
@@ -83,22 +89,35 @@ including a 960×640 content window. A separate
 
 ## Verification and remaining limits
 
-- Swift release suite with coverage: 435 reported tests, six canonical visual
+- Swift release suite with coverage: 436 reported tests, six canonical visual
   skips, zero failures. Targeted cases include partial resolutions, artifact
   redaction, full comparison identities, scoped export, saved timestamps,
   file-filter restoration and native scroll offsets.
 - Python tests cover proposals for all four setup clients, reconnect ownership,
   session filtering before pagination, and timezone-independent timestamp bounds.
-  The full final count and coverage audit are recorded with the delivery.
+  Final suite: 2,852 passed. Parent-process coverage is 88.05% of statements and
+  78.63% of branches. Native LLVM line coverage is 66.34%; standalone renders
+  and native interaction checks are not merged into that unit-test profile.
 - Seventy-eight local PNGs cover the baseline counterparts plus enlarged
   Dashboard and Usage. Native interaction checks separately verify history
   restoration, keyboard setup, help access, comparison and export.
-- The current local macOS renderer is 26.5.1; canonical pixel references require
-  26.6. Do not regenerate canonical references from this Mac. CI must verify
-  those baselines or produce reviewed replacement candidates.
+- The local macOS renderer is 26.5.1; canonical pixel references require
+  26.6 (25G72). The dedicated remote candidate workflow also failed its renderer
+  guard: GitHub supplies 26.6.2 (25G83). Ordinary CI builds and review renders
+  passed, but pixel-reference verification is not established. No references
+  were promoted and the guard remains intact.
 - Coverage identifies exercised code, not correctness. Swift UI action paths,
   full VoiceOver use, operating-system Login Items approval, and every lifecycle
   interruption are not exhaustively established by the local checks.
+- Every interactive synthetic setup scene uses an inert installer and process
+  runner, even inside a distributable app. A failure-Retry regression test
+  verifies this boundary; preloaded screenshot state alone is insufficient.
 
 Packaging requires a clean source commit and an embedded CLI carrying the same
 provenance. Source edits alone do not update an installed app or recorder.
+The installed-app smoke check caught an output mismatch that unit tests alone
+missed: [PyInstaller preserves framework aliases](https://www.pyinstaller.org/en/v6.0.0/CHANGES.html),
+while the recorder installer deliberately rejects symlinks. The freeze now
+materializes bounded internal aliases before smoke testing and stamping output;
+the app build also rejects any remaining links. Regression fixtures include
+framework chains, outside targets, cycles, broken links and special files.
