@@ -226,7 +226,12 @@ struct WorkTimeCanvas<Detail: View>: View {
         .accessibilityIdentifier(item.isCluster ? "work.timeline.cluster.\(item.id)" : "work.timeline.record.\(item.recordIDs[0])")
         .accessibilityLabel(item.isCluster ? "\(members.count) records in a time group" : "\(members.first?.title ?? "Activity"), \(members.first?.resultLabel ?? ""), \(members.first?.laneTitle ?? ""), \(members.first?.source ?? ""), \(members.first?.start.map { WorkTimelineTimeAxis.preciseLabel($0) } ?? "Time unavailable")")
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .onKeyPress(.escape) { onDismiss(); return .handled }
+        .onKeyPress(.escape) {
+            expandedCluster = nil
+            detailOwnerID = nil
+            onDismiss()
+            return .handled
+        }
         .popover(isPresented: Binding(
             get: { !SnapshotMode.boundsScrollContentToViewport && (expandedCluster == item.id || (detailOwnerID == item.id && selectedRecord != nil)) },
             set: { showing in
@@ -248,6 +253,7 @@ struct WorkTimeCanvas<Detail: View>: View {
                         detail(record)
                     }
                 }
+                .environment(\.dynamicTypeSize, dynamicTypeSize)
             } else {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -278,6 +284,7 @@ struct WorkTimeCanvas<Detail: View>: View {
                     }.scrollTargetLayout()
                 }.scrollPosition(id: $chooserPosition).frame(maxHeight: 300)
             }.padding(16).frame(width: min(560, 340 * scale))
+            .environment(\.dynamicTypeSize, dynamicTypeSize)
             }
         }
     }

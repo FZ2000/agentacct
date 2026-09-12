@@ -224,6 +224,7 @@ struct WorkTimelineView: View {
                 !SnapshotMode.boundsScrollContentToViewport && showingUndatedDetail && selected != nil
             }, set: { if !$0 { showingUndatedDetail = false; navigation.view.selectedID = nil } })) {
                 WorkRecordPopover(width: 480, maximumHeight: 560) { inspector }
+                    .environment(\.dynamicTypeSize, dynamicTypeSize)
             }
         }
     }

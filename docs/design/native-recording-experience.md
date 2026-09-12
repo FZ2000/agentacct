@@ -37,7 +37,9 @@ a native popover with its actual title, result, source and content. Files,
 Artifacts and Record details disclose supporting data on request. Group chooser
 and record detail share one popover, with a way back to the group. Short records
 fit their content; long or expanded details scroll within a height limit. Close
-dismisses the whole popover. Supporting
+dismisses the whole popover; Escape also dismisses the group chooser. Reading size
+is forwarded explicitly across native popup presentation so text and controls
+scale together. Supporting
 records can be inspected even when their timestamps are outside the current window. Task details has separate categories instead of expanding every
 ledger at once. Full identifiers remain available, and real parent-section or
 later-result links remain contextual to the selected record.
@@ -52,6 +54,11 @@ contains the page-purpose review, per-state hierarchy, exact string-bearing sour
 inventory, independent collection/receipt audits and direct validation record.
 The earlier 100-agent scores do not rate this revision. No human-usability or
 mathematical-optimum claim is made.
+
+[Collapsed record details](images/native-record-popover.png) and
+[the same detail surface at 230% reading size](images/native-record-popover-large.png)
+show the content hierarchy. These are native synthetic captures, not canonical
+pixel-reference approvals. The records in these two examples differ.
 
 ## Pointer and keyboard behavior
 
