@@ -42,8 +42,8 @@ An agent worked on **"Fix the flaky checkout-total test"** and reported it done.
 | --- | --- | --- | --- | --- |
 | +0s | primary | Reproduce the flaky total | completed | claude-code |
 | +3m00s | primary | Fix the rounding in the total | completed | claude-code |
-| +4m00s | evidence | 3 failed (red) | failed | claude-code |
-| +7m40s | evidence | 14 passed | passed | claude-code |
+| +4m00s | evidence | 3 failed (red) | failed | mcp |
+| +7m40s | evidence | 14 passed | passed | mcp |
 | +11m40s | primary | Extract a rounding helper | completed | claude-code |
 
 **Gaps (1)** — what could not be proven
