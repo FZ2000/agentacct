@@ -235,7 +235,7 @@ struct WorkTimelineView: View {
                 Button { dismissSelection() } label: { Image(systemName: "xmark") }
                     .buttonStyle(QuietButtonStyle(horizontalPadding: 7))
                     .accessibilityLabel("Close record group")
-                    .accessibilityIdentifier("work.timeline.inspector.close")
+                    .accessibilityIdentifier("work.timeline.cluster.close")
                     .help("Close record group")
             }
             ScrollView {
