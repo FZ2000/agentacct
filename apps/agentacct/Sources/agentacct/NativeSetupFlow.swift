@@ -338,8 +338,8 @@ struct NativeSetupFlow: View {
     }
     private var recoveryUnavailableReason: String? {
         if let recoveryUnavailableReasonOverride { return recoveryUnavailableReasonOverride }
-        if recoveryKind == .connection { return setup.reconnectUnavailableReason }
-        return setup.canRunInteractiveSetup ? nil
+        if recoveryKind == .connection { return setup.presentation.reconnectUnavailableReason }
+        return setup.presentation.canRunInteractiveSetup ? nil
             : "This build has no validated recorder payload for update recovery. Open the packaged agentacct app that owns this installation to resume the update."
     }
     private var canAttemptRecovery: Bool {
@@ -436,6 +436,10 @@ struct NativeSetupFlow: View {
         .onChange(of: phaseKey) {
             headingFocused = true
             if phaseKey == .failed { showingLog = true }
+        }
+        .task {
+            guard !SnapshotMode.enabled else { return }
+            setup.refreshPresentation()
         }
         .task(id: contentPreviewRequestID) {
             guard contentPreviewRequestID != "inactive" else { return }
@@ -624,7 +628,7 @@ struct NativeSetupFlow: View {
             .background(Theme.card, in: RoundedRectangle(cornerRadius: Metrics.radius))
             .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Theme.cardLine))
             informationRow(symbol: "internaldrive", title: "A local work record", detail: "The recorder uses a local store on this Mac. Setup does not need an API key.")
-            if !setup.canRunInteractiveSetup { unavailableInstaller }
+            if !setup.presentation.canRunInteractiveSetup { unavailableInstaller }
         }
     }
 
@@ -667,7 +671,7 @@ struct NativeSetupFlow: View {
                 .foregroundStyle(Theme.muted).padding(.top, Space.s)
             }
             .workFont(.caption)
-            if !setup.canRunInteractiveSetup { unavailableInstaller }
+            if !setup.presentation.canRunInteractiveSetup { unavailableInstaller }
         }
     }
 
@@ -692,7 +696,7 @@ struct NativeSetupFlow: View {
             heading("\(setup.selectedClient.map { $0.title + " setup" } ?? "Recorder setup") needs attention", detail: message)
             Text("If setup output asks for client consent, complete that step in the client before retrying.")
                 .workFont(.body).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
-            if !setup.canRunInteractiveSetup { unavailableInstaller }
+            if !setup.presentation.canRunInteractiveSetup { unavailableInstaller }
         }
     }
 
@@ -827,7 +831,7 @@ struct NativeSetupFlow: View {
                     if reviewing {
                         Button("Install and connect", action: startSetup)
                             .buttonStyle(NativeSetupActionStyle(prominent: true))
-                            .disabled(!setup.canRunInteractiveSetup || isWorking)
+                            .disabled(!setup.presentation.canRunInteractiveSetup || isWorking)
                             .keyboardShortcut(.defaultAction)
                             .accessibilityIdentifier("setup-install-and-connect")
                     } else {
@@ -843,7 +847,7 @@ struct NativeSetupFlow: View {
                 case .failed:
                     Button("Retry setup", action: startSetup)
                         .buttonStyle(NativeSetupActionStyle(prominent: true))
-                        .disabled(!setup.canRunInteractiveSetup || isWorking)
+                        .disabled(!setup.presentation.canRunInteractiveSetup || isWorking)
                         .keyboardShortcut(.defaultAction)
                 case .done:
                     Button(setup.selectedClient == nil ? "Connect a client" : "Connect another client") {

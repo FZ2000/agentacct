@@ -84,7 +84,10 @@ struct WorkTimelineView: View {
                 && (!navigation.view.failuresOnly || record.isCurrentFailure)
         }
     }
-    private var filtered: [WorkTimelineRecord] { matchingRecords.filter { interval?.contains($0) ?? true } }
+    private var filtered: [WorkTimelineRecord] {
+        let window = interval
+        return matchingRecords.filter { window?.contains($0) ?? true }
+    }
     private var selected: WorkTimelineRecord? { displayProjection.records.first { $0.id == navigation.view.selectedID } }
     private var interval: WorkTimelineInterval? {
         guard let full = displayProjection.interval else { return nil }
@@ -151,9 +154,9 @@ struct WorkTimelineView: View {
         .background(Theme.card, in: RoundedRectangle(cornerRadius: Metrics.radius))
         .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Theme.cardLine))
         .task(id: loadKey) { await loadTask() }
-        .onChange(of: projection) { _, value in
-            guard activeTaskID == receipt.taskId else { return }
-            receive(value)
+        .onChange(of: receipt.timeline) { _, _ in
+            guard activeTaskID == receipt.taskId, timeline == nil else { return }
+            receive(projection)
         }
         .onChange(of: dashboard.nativeReviewRevision) { _, _ in
             guard SnapshotMode.enabled, SnapshotMode.interactiveFixture else { return }
@@ -699,10 +702,12 @@ struct WorkTimelineView: View {
             do {
                 let page = try await dashboard.loadTimeline(taskID: taskID, previous: timeline)
                 guard !Task.isCancelled, activeTaskID == taskID else { return }
-                timeline = page
+                if page != timeline {
+                    timeline = page
+                    receive(page.projection(taskID: taskID))
+                }
                 timelineError = nil
                 lastObserved = Date()
-                receive(page.projection(taskID: taskID))
             } catch {
                 guard !Task.isCancelled, activeTaskID == taskID else { return }
                 timelineError = error.localizedDescription

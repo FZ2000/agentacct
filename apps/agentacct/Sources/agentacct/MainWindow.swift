@@ -40,7 +40,7 @@ struct MainWindow: View {
     }
 
     private var canSetUp: Bool {
-        canSetUpOverride ?? (setup.bundledCLIDir != nil)
+        canSetUpOverride ?? setup.presentation.canSetUp
     }
 
     private var reconnectStoreExplanation: String? {
@@ -58,7 +58,7 @@ struct MainWindow: View {
             ingestion: dashboard.ingestion,
             ingestionError: dashboard.ingestionError,
             canSetUp: canSetUp,
-            needsSetup: setup.shouldOfferSetup,
+            needsSetup: setup.presentation.needsSetup,
             configuredClientIDs: Array(connectionHistory.boundaries.keys).sorted(),
             captures: connectionHistory.captures.values.map { RecordingCaptureObservation(clientID: $0.clientID, eventID: $0.eventID, observedAt: $0.observedAt, taskID: $0.taskID) },
             requiredCaptureAfter: connectionHistory.boundaries
@@ -212,7 +212,7 @@ struct MainWindow: View {
             // First-run: a packaged build whose recorder isn't installed yet
             // offers setup once, automatically. A dev build (no embedded CLI)
             // never prompts.
-            if setup.shouldOfferSetup {
+            if setup.presentation.needsSetup {
                 openWorkAfterSetup = true
                 showSetup = true
             }

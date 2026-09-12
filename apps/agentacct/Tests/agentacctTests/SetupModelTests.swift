@@ -6,6 +6,45 @@ final class SetupModelTests: XCTestCase {
     private let oldCommit = "1111111111111111111111111111111111111111"
     private let newCommit = "2222222222222222222222222222222222222222"
 
+    @MainActor
+    func testPresentationDoesNotReinspectFilesOrAuthorizeReconnect() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: newCommit, installedCommit: newCommit,
+                                         installedAsVersioned: true)
+        defer { fixture.remove() }
+        var launched = false
+        let model = fixture.model { _, _ in
+            launched = true
+            return Self.stream(lines: [])
+        }
+        model.refreshPresentation()
+        let displayed = model.presentation
+        XCTAssertTrue(displayed.canSetUp)
+        XCTAssertNil(displayed.reconnectUnavailableReason)
+
+        // A displayed snapshot may outlive an external change. Reading it must
+        // remain cheap, while the actual action must inspect current evidence.
+        try fixture.removeOuterWrapper()
+        for _ in 0..<1_000 { XCTAssertEqual(model.presentation, displayed) }
+        let reconnected = await model.reconnectRecorder()
+        XCTAssertFalse(reconnected)
+        XCTAssertFalse(launched)
+        XCTAssertNotNil(model.presentation.reconnectUnavailableReason)
+    }
+
+    @MainActor
+    func testSetupPublishesCompletedPresentationWithoutAnotherViewProbe() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: newCommit, installedCommit: nil)
+        defer { fixture.remove() }
+        let model = fixture.model { _, _ in Self.stream(lines: ["configured"]) }
+        model.refreshPresentation()
+        XCTAssertTrue(model.presentation.needsSetup)
+        await model.setUp()
+        XCTAssertEqual(model.phase, .done)
+        XCTAssertTrue(model.presentation.canSetUp)
+        XCTAssertFalse(model.presentation.needsSetup)
+        XCTAssertNil(model.presentation.reconnectUnavailableReason)
+    }
+
     func testProcessRunnerStreamsOutputThenThrowsWhenProcessExitsNonzero() async {
         let stream = ProcessRunner.run(
             executable: URL(fileURLWithPath: "/bin/sh"),

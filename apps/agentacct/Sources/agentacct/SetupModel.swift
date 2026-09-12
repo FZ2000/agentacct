@@ -207,6 +207,25 @@ final class SetupModel: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var log: [String] = []
+    /// Display advice only. Rendering must not traverse/hash recorder payloads.
+    /// Operations continue to use the fresh checks below, never this snapshot.
+    struct Presentation: Equatable {
+        var canSetUp = false
+        var needsSetup = false
+        var canRunInteractiveSetup = false
+        var reconnectUnavailableReason: String? = "Checking the installed recorder…"
+    }
+    @Published private(set) var presentation = Presentation()
+
+    func refreshPresentation() {
+        let value = Presentation(
+            canSetUp: bundledCLIDir != nil,
+            needsSetup: shouldOfferSetup,
+            canRunInteractiveSetup: canRunInteractiveSetup,
+            reconnectUnavailableReason: reconnectUnavailableReason
+        )
+        if presentation != value { presentation = value }
+    }
     /// nil retains the legacy automatic selection used by SetupSheet.
     @Published private(set) var selectedClient: SetupClient?
     /// Completion of the command is an activation boundary, never capture proof.
@@ -263,6 +282,9 @@ final class SetupModel: ObservableObject {
         }
         self.transactionLockObserver = transactionLockObserver
         self.readinessPause = readinessPause
+        // Injected installers are available in inert previews without probing
+        // the host machine. Live availability is published after synchronization.
+        presentation.canRunInteractiveSetup = installer != nil
     }
 
     /// Deterministic state injection for offscreen review renders. Live setup
@@ -457,6 +479,7 @@ final class SetupModel: ObservableObject {
     func setUp() async {
         guard case .idle = phase else { return }
         guard reconnectPhase != .working else { return }
+        defer { refreshPresentation() }
         if pendingRuntimeRecovery {
             await retryRuntimeAfterFailedUpgrade()
             guard phase == .done, selectedClient != nil else { return }
@@ -550,6 +573,7 @@ final class SetupModel: ObservableObject {
     func reconnectRecorder() async -> Bool {
         guard reconnectPhase != .working else { return false }
         if case .working = phase { return false }
+        defer { refreshPresentation() }
         reconnectLog = []
         reconnectPhase = .working
         do {
@@ -650,6 +674,7 @@ final class SetupModel: ObservableObject {
         guard case .idle = phase else {
             return .notNeeded
         }
+        defer { refreshPresentation() }
         guard pathExists(runtimeTransactionJournal)
                 || automaticUpgradeContext != nil
                 || recoverablePartialFirstInstall != nil

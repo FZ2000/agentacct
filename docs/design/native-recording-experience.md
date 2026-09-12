@@ -213,3 +213,22 @@ Review in this order:
 4. Synthetic fixtures: generated with the production Python projection by `generate-timeline-fixtures.py`; no native fallback rebuilds missing timeline records.
 
 PR #172's broad copy and temporal policy is not merged wholesale: it changes app-wide usage/reset copy and source-health models beyond this data-contract integration. Its useful failed-refresh invariant is already retained and tested. Future integration should reconcile remaining copy changes against this branch rather than reinstall its older Work view. PR #190 remains a draft; no branch was merged to main.
+
+## Rendering performance
+
+Ordinary window updates previously revalidated entire packaged and installed CLI
+payloads on the main thread. An installed-app interaction sample attributed
+7,805 of 9,256 main-thread samples to `MainWindow.body`; a 360-event horizontal
+scroll probe took 38.2 seconds including synchronous accessibility requests.
+These are diagnostic observations on one Mac, not frame-rate measurements.
+
+Views now read a stored setup presentation refreshed after startup synchronization,
+setup and reconnect, and when opening setup. The snapshot is display advice only:
+protected operations still validate current ownership, content and provenance
+before acting. Tests remove a previously accepted wrapper and verify that the
+stale display cannot authorize reconnect. Explicit verification still runs during
+these operations; this change removes verification from rendering.
+
+Timeline filtering resolves its time window once per pass, instead of rescanning
+all timestamps for every record. Viewport changes no longer rebuild the canonical
+record projection, and unchanged poll responses do not republish it.
