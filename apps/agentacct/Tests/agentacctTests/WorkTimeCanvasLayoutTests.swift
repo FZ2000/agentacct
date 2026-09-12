@@ -46,9 +46,11 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
         // Anchors are no longer clipped to the viewport: 50 lies half a window
         // before the window's lower bound, so its position is offscreen.
         XCTAssertEqual(crossing?.anchorX, -500)
-        let visible = layout.items(visibleIn: 1000)
-        XCTAssertEqual(Set(visible.flatMap(\.recordIDs)), ["after", "before", "crossing", "left", "right"],
-            "A span crossing the window stays represented; only far-offscreen records cull away")
+        let visible = layout.visibleCards(in: 1000)
+        XCTAssertEqual(Set(visible.flatMap(\.recordIDs)), ["after", "before", "left", "right"],
+            "Cards render only near the viewport: the accessibility tree never holds an invisible card")
+        XCTAssertEqual(layout.crossingSpans(in: 1000).map(\.recordIDs), [["crossing"]],
+            "A span crossing the window keeps its line on screen without pinning a card")
         assertReadable(layout, width: 1000, height: 420)
     }
 
@@ -225,13 +227,15 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
                 XCTAssertFalse(item.frame.intersects(other.frame), "\(item.id) overlaps \(other.id)", file: file, line: line)
             }
         }
-        // Every record whose time intersects the window stays represented in
-        // the rendered set; only far-offscreen frames cull away, and culling
-        // never feeds back into placement.
-        let visible = layout.items(visibleIn: width)
+        // Every record whose time intersects the window stays represented:
+        // either as a visible card or as a drawn span crossing an edge.
+        // Culling never feeds back into placement.
+        let visible = layout.visibleCards(in: width)
+        let crossing = layout.crossingSpans(in: width)
         for item in layout.items
         where item.timeBounds.upper >= layout.window.lower && item.timeBounds.lower <= layout.window.upper {
-            XCTAssertTrue(visible.contains(item), "\(item.id) intersects the window but is culled", file: file, line: line)
+            XCTAssertTrue(visible.contains(item) || crossing.contains(item),
+                "\(item.id) intersects the window but is neither rendered nor drawn", file: file, line: line)
         }
     }
 

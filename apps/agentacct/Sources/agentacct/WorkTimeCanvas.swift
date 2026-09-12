@@ -42,14 +42,15 @@ struct WorkTimeCanvas<Detail: View>: View {
                 let indexedRecords = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 let layout = WorkTimeCanvasLayout(records: records, window: window,
                     width: width, height: canvasHeight, textScale: scale)
-                let visibleItems = layout.items(visibleIn: width)
+                let visibleCards = layout.visibleCards(in: width)
+                let crossingSpans = layout.crossingSpans(in: width)
                 let tickMarkings = WorkTimelineTimeAxis.ticks(in: window, width: width, minimumSpacing: 100 * scale)
-                input(layout: layout, items: visibleItems, width: width) {
+                input(layout: layout, items: visibleCards, width: width) {
                     ZStack(alignment: .topLeading) {
                     Theme.canvas
-                    drawing(layout: layout, items: visibleItems, ticks: tickMarkings.times, width: width, indexedRecords: indexedRecords).allowsHitTesting(false)
+                    drawing(layout: layout, items: visibleCards, crossing: crossingSpans, ticks: tickMarkings.times, width: width, indexedRecords: indexedRecords).allowsHitTesting(false)
                     axisLabels(ticks: tickMarkings, width: width, axisY: layout.axisY).allowsHitTesting(false)
-                    ForEach(visibleItems) { item in
+                    ForEach(visibleCards) { item in
                         itemButton(item, indexedRecords: indexedRecords)
                             .frame(width: item.frame.width, height: item.frame.height)
                             .position(x: item.frame.midX, y: item.frame.midY)
@@ -108,8 +109,11 @@ struct WorkTimeCanvas<Detail: View>: View {
 
     /// Every mark's screen position derives from its absolute time, so panning
     /// translates the whole scene together. The clipped bounds trim partially
-    /// visible cards and spans instead of re-placing them.
-    private func drawing(layout: WorkTimeCanvasLayout, items: [WorkTimeCanvasLayout.Item], ticks: [Double], width: Double, indexedRecords: [String: WorkTimelineRecord]) -> some View {
+    /// visible cards and spans instead of re-placing them. Spans that cross
+    /// the window keep their line running through it even when the record's
+    /// card itself is far offscreen — the line is the honest affordance, and
+    /// panning or zooming out reaches the card.
+    private func drawing(layout: WorkTimeCanvasLayout, items: [WorkTimeCanvasLayout.Item], crossing: [WorkTimeCanvasLayout.Item], ticks: [Double], width: Double, indexedRecords: [String: WorkTimelineRecord]) -> some View {
         Canvas { context, size in
             func xPosition(_ time: Double) -> Double { (time - window.lower) / window.span * width }
             var spine = Path()
@@ -122,6 +126,18 @@ struct WorkTimeCanvas<Detail: View>: View {
                 line.move(to: CGPoint(x: x, y: layout.axisY - 4))
                 line.addLine(to: CGPoint(x: x, y: layout.axisY + 4))
                 context.stroke(line, with: .color(Theme.muted), lineWidth: 1)
+            }
+            // A span crossing the window draws its line even when the card is
+            // offscreen. Non-crossing spans draw beside their card below.
+            for item in crossing {
+                guard !item.isCluster,
+                      let id = item.recordIDs.first, let record = indexedRecords[id], record.isDuration else { continue }
+                let tint: Color = record.isCurrentFailure ? Theme.coral : Theme.accent
+                let y = layout.axisY + (item.isAbove ? -5.0 : 5.0)
+                var span = Path()
+                span.move(to: CGPoint(x: xPosition(record.start!), y: y))
+                span.addLine(to: CGPoint(x: xPosition(record.end!), y: y))
+                context.stroke(span, with: .color(tint.opacity(0.35)), lineWidth: 3)
             }
             for item in items {
                 let selected = selectedID.map(item.recordIDs.contains) ?? false

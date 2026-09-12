@@ -95,17 +95,26 @@ struct WorkTimeCanvasLayout {
         )
     }
 
-    /// Items intersecting the viewport plus one card of margin, plus any item
-    /// whose recorded extent crosses the window (its span line runs through
-    /// even when its card sits offscreen). Culling is presentation-only:
+    /// Cards intersecting the viewport plus one card of margin: the only items
+    /// that render as interactive buttons, so the accessibility tree never
+    /// contains an invisible offscreen card. Culling is presentation-only:
     /// placement and grouping never depend on it, so panning cannot rearrange
     /// or regroup cards at the viewport edges.
-    func items(visibleIn width: Double) -> [Item] {
+    func visibleCards(in width: Double) -> [Item] {
         guard width.isFinite else { return items }
         let margin = cardWidth + Self.gap
+        return items.filter { $0.frame.maxX >= -margin && $0.frame.minX <= width + margin }
+    }
+
+    /// Items whose recorded extent crosses the window while their card sits
+    /// far offscreen. Their span lines still run through the viewport, marking
+    /// activity that continues beyond an edge — without pinning a fake card.
+    func crossingSpans(in width: Double) -> [Item] {
+        guard width.isFinite else { return [] }
+        let margin = cardWidth + Self.gap
         return items.filter {
-            ($0.frame.maxX >= -margin && $0.frame.minX <= width + margin)
-                || ($0.timeBounds.upper >= window.lower && $0.timeBounds.lower <= window.upper)
+            !($0.frame.maxX >= -margin && $0.frame.minX <= width + margin)
+                && $0.timeBounds.upper >= window.lower && $0.timeBounds.lower <= window.upper
         }
     }
 
