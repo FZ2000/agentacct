@@ -294,6 +294,34 @@ final class SetupModel: ObservableObject {
         readinessPause = { try await Task.sleep(nanoseconds: 500_000_000) }
     }
 
+    /// Interactive design review must remain inert even inside a distributable
+    /// app containing a valid recorder. Preloaded screenshot state alone does
+    /// not replace runtime dependencies, so review scenes use this initializer.
+    convenience init(
+        reviewPhase: Phase,
+        selectedClient: SetupClient? = nil,
+        onboardingCompletedAt: Date? = nil
+    ) {
+        self.init(
+            installer: { URL(fileURLWithPath: "/synthetic-review/agentacct") },
+            processRunner: { _, arguments in
+                AsyncThrowingStream { continuation in
+                    continuation.yield("Synthetic review only: \(arguments.joined(separator: " "))")
+                    continuation.yield("No configuration files were changed.")
+                    continuation.finish()
+                }
+            },
+            homeDirectory: URL(fileURLWithPath: "/Users/review"),
+            bundleResourceURL: nil,
+            bundleInfoDictionary: nil,
+            storeDirectory: { URL(fileURLWithPath: "/synthetic-review/state") }
+        )
+        phase = reviewPhase
+        self.selectedClient = selectedClient
+        self.onboardingCompletedAt = onboardingCompletedAt
+        log = ["Synthetic review fixture. No configuration files were changed."]
+    }
+
     // MARK: locations
 
     /// The CLI embedded in the app bundle (Contents/Resources/cli), if this is

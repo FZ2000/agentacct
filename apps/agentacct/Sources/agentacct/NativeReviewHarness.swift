@@ -70,31 +70,12 @@ struct NativeReviewSurface: View {
         case .failure: phase = .failed("Could not update the client configuration: permission denied.")
         default: phase = .idle
         }
-        if [.welcome, .review, .setupContent, .largeSetup, .compactLargeSetup, .sources, .largeSources].contains(screen) {
-            // Deliberately inert process runner. It exercises the app's setup
-            // state transitions without touching configuration or runtime files.
-            _setup = StateObject(wrappedValue: SetupModel(
-                installer: { URL(fileURLWithPath: "/synthetic-review/agentacct") },
-                processRunner: { _, arguments in
-                    AsyncThrowingStream { continuation in
-                        continuation.yield("Synthetic review only: \(arguments.joined(separator: " "))")
-                        continuation.yield("No configuration files were changed.")
-                        continuation.finish()
-                    }
-                },
-                homeDirectory: URL(fileURLWithPath: "/Users/review"),
-                bundleResourceURL: nil,
-                bundleInfoDictionary: nil,
-                storeDirectory: { URL(fileURLWithPath: "/synthetic-review/state") }
-            ))
-        } else {
-            _setup = StateObject(wrappedValue: SetupModel(
-                preloaded: phase,
-                log: ["Synthetic review fixture. No configuration files were changed."],
-                selectedClient: .codex,
-                onboardingCompletedAt: screen == .pending ? Date(timeIntervalSince1970: 1_700_000_000) : nil
-            ))
-        }
+        let choosingClient = [.welcome, .review, .setupContent, .largeSetup, .compactLargeSetup, .sources, .largeSources].contains(screen)
+        _setup = StateObject(wrappedValue: SetupModel(
+            reviewPhase: phase,
+            selectedClient: choosingClient ? nil : .codex,
+            onboardingCompletedAt: screen == .pending ? Date(timeIntervalSince1970: 1_700_000_000) : nil
+        ))
     }
 
     private var health: RecordingHealthSnapshot {

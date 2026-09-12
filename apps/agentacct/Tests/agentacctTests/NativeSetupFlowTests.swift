@@ -3,6 +3,28 @@ import XCTest
 
 final class NativeSetupFlowTests: XCTestCase {
     @MainActor
+    func testPackagedReviewFailureRetryUsesOnlySyntheticDependencies() async {
+        let model = SetupModel(reviewPhase: .failed("Synthetic failure"), selectedClient: .codex)
+        XCTAssertNil(model.bundledCLIDir)
+        XCTAssertFalse(model.shouldAutomaticallyUpgradeCLI)
+        XCTAssertTrue(model.canRunInteractiveSetup)
+        XCTAssertFalse(model.canReconnectRecorder)
+        XCTAssertEqual(model.recordingStorePath, "/synthetic-review/state")
+
+        model.reset()
+        await model.setUp()
+
+        XCTAssertEqual(model.phase, .done)
+        XCTAssertEqual(model.selectedClient, .codex)
+        XCTAssertEqual(model.log, [
+            "Running: agentacct onboard --agent codex --yes",
+            "Synthetic review only: onboard --agent codex --yes",
+            "No configuration files were changed.",
+        ])
+        XCTAssertNotNil(model.onboardingCompletedAt)
+    }
+
+    @MainActor
     func testNamedClientIsTheOnlyOnboardingTarget() async {
         var commands: [[String]] = []
         let model = SetupModel(
