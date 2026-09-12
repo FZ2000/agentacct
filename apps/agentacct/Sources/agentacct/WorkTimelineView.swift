@@ -261,7 +261,7 @@ struct WorkTimelineView: View {
                 .accessibilityFocused($accessibleEvidence, equals: "timeline-heading")
                 .accessibilityAddTraits(.isHeader)
                 ContextHelp(title: "About activity",
-                    message: "Scroll horizontally or drag the background to explore time. Pinch to zoom. Drag the overview window or resize its edges to change the period shown. Select a record for details; dense groups open a record chooser. Stems mark recorded times, not causal links. Section spans end at the latest reported update, not a measured execution finish. Snapshots refresh every 3 seconds.",
+                    message: "Drag the canvas to move through time. Scroll to make the visible time span smaller or larger, or pinch to zoom around the pointer. Drag the overview window to move it and its edges to resize it. Select a record for details; dense groups open a record chooser. Stems mark recorded times, not causal links. Section spans end at the latest reported update, not a measured execution finish. Snapshots refresh every 3 seconds.",
                     identifier: "work.timeline.help")
             }
             HStack(spacing: 5) {

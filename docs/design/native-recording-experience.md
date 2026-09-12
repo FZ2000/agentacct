@@ -7,8 +7,10 @@ reachable during recovery. Recording notices identify actionable causes without
 treating a running daemon as proof of complete capture or usage attribution.
 
 Work now places activity above and below one horizontal time axis. The visible
-window determines which recorded events appear. A compact overview supports
-horizontal scrolling, dragging and edge resizing; pinch changes the time scale.
+window determines which recorded events appear. Dragging the canvas or the
+compact overview moves the window through time — axis ticks, labels and cards
+are anchored to absolute time and move together; wheel input resizes the
+visible span around the pointer and pinch changes the time scale.
 Selecting an event opens its details beside that event, without moving the
 canvas. Dense groups offer a chooser so overlapping timestamps remain reachable. Comparison has been
 removed from the current interface, including its drag targets and saved slots.
@@ -64,13 +66,10 @@ pixel-reference approvals. The records in these two examples differ.
 
 | Input | Behavior |
 | --- | --- |
-| Horizontal trackpad or supported mouse scrolling | Pan time, including over an event card |
-| Shift + mouse wheel | Pan time |
-| Ordinary vertical wheel on the canvas | Scroll the page; vertical gesture drift does not become a time pan |
-| Wheel over the overview | Pan the visible window |
-| Blank-canvas drag | Pan time without editing timestamps |
+| Blank-canvas drag, or dragging the overview window | Move through time; ticks, labels and cards translate together |
+| Wheel over the canvas or overview | Resize the visible time span around the pointer (scroll up to narrow it) |
 | Pinch | Zoom around the pointer while keeping reading size unchanged |
-| Overview body / edges | Move the window / resize one boundary |
+| Overview edges | Resize one boundary of the window |
 | Event click | Hold live movement and open the event's details |
 | Canvas Left/Right, Home/End, +/− | Pan, reach history bounds, or change time scale |
 
@@ -88,8 +87,8 @@ from simulated events. No measured FPS or full VoiceOver certification is claime
 | Health | `RecordingHealth.swift`, `RecordingHealthViews.swift`, `RecordingConnectionHistory.swift`, `SourcesPane.swift` | Reachability, capture, importer health and historical coverage remain distinct. Current causes precede routine diagnostics. |
 | Saved work | `SavedWorkSnapshot.swift`, `SavedWorkView.swift`, `GlanceClient.swift` | Saved responses belong to the same store, retain their own timestamps and cannot fall through to network writes. |
 | Timeline data and navigation | `WorkTimelineModel.swift`, `WorkTimelineMemory.swift`, `WorkTimelineViewport.swift`, `WorkTimelineFocus.swift` | Event identity, chronology, source and held snapshots remain authoritative. Selection is independent of the reading position. |
-| Time canvas geometry | `WorkTimeCanvasLayout.swift` and tests | Every visible dated record is retained exactly once; cards do not overlap; large text reserves time-label space; a long task follows actual latest activity. |
-| Native input | `WorkTimeCanvasInput.swift` and tests | Horizontal/Shift scrolling and pinch work over cards; vertical scrolling stays with the page; reserved OS modifiers pass through; input remains scoped to the canvas. |
+| Time canvas geometry | `WorkTimeCanvasLayout.swift` and tests | Packing covers all loaded dated records with time-anchored positions: panning translates cards without regrouping; every dated record is retained exactly once; cards do not overlap; large text reserves time-label space; a long task follows actual latest activity. |
+| Native input | `WorkTimeCanvasInput.swift` and tests | Wheel input resizes the visible span over cards, canvas and overview; dragging pans; reserved OS modifiers pass through; input remains scoped to the canvas. |
 | Timeline presentation and export | `WorkTimeCanvas.swift`, `WorkTimelineView.swift`, `WorkRecordPopover.swift`, `WorkTimelineExport.swift` | Details appear at selection; clusters stay inspectable; no inferred causality or execution duration; export retains identities and qualifications. |
 | Information hierarchy | `ContextHelp.swift`, `ReadingSize.swift`, `Theme.swift`, `UsagePane.swift`, `UsageCapacity.swift` | Optional explanation is available by hover and keyboard; failures, cost basis, incomplete capture and install scope stay visible. |
 | Distributable recorder | `packaging/materialize-cli.py`, `freeze-cli.sh`, `build-app.sh` | Framework aliases become independent files only after all targets are proven inside the frozen output. External or cyclic aliases fail; the installer's no-link contract is preserved. |

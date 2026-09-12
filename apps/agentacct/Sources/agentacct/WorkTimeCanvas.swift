@@ -42,12 +42,14 @@ struct WorkTimeCanvas<Detail: View>: View {
                 let indexedRecords = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 let layout = WorkTimeCanvasLayout(records: records, window: window,
                     width: width, height: canvasHeight, textScale: scale)
-                input(layout: layout, width: width) {
+                let visibleItems = layout.items(visibleIn: width)
+                let tickMarkings = WorkTimelineTimeAxis.ticks(in: window, width: width, minimumSpacing: 100 * scale)
+                input(layout: layout, items: visibleItems, width: width) {
                     ZStack(alignment: .topLeading) {
                     Theme.canvas
-                    drawing(layout: layout, width: width, indexedRecords: indexedRecords).allowsHitTesting(false)
-                    axisLabels(width: width, axisY: layout.axisY).allowsHitTesting(false)
-                    ForEach(layout.items) { item in
+                    drawing(layout: layout, items: visibleItems, ticks: tickMarkings.times, width: width, indexedRecords: indexedRecords).allowsHitTesting(false)
+                    axisLabels(ticks: tickMarkings, width: width, axisY: layout.axisY).allowsHitTesting(false)
+                    ForEach(visibleItems) { item in
                         itemButton(item, indexedRecords: indexedRecords)
                             .frame(width: item.frame.width, height: item.frame.height)
                             .position(x: item.frame.midX, y: item.frame.midY)
@@ -86,8 +88,8 @@ struct WorkTimeCanvas<Detail: View>: View {
         .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Theme.hairline))
     }
 
-    private func input<Content: View>(layout: WorkTimeCanvasLayout, width: Double, @ViewBuilder content: () -> Content) -> some View {
-        WorkTimeCanvasInput(interactiveRegions: layout.items.map(\.frame),
+    private func input<Content: View>(layout: WorkTimeCanvasLayout, items: [WorkTimeCanvasLayout.Item], width: Double, @ViewBuilder content: () -> Content) -> some View {
+        WorkTimeCanvasInput(interactiveRegions: items.map(\.frame),
             onPan: { pixels in
                 onWindow(WorkTimeCanvasLayout.pannedWindow(window, by: -pixels / max(width, 1) * window.span, within: full))
             },
@@ -104,20 +106,24 @@ struct WorkTimeCanvas<Detail: View>: View {
             content: content).renderingSurface
     }
 
-    private func drawing(layout: WorkTimeCanvasLayout, width: Double, indexedRecords: [String: WorkTimelineRecord]) -> some View {
+    /// Every mark's screen position derives from its absolute time, so panning
+    /// translates the whole scene together. The clipped bounds trim partially
+    /// visible cards and spans instead of re-placing them.
+    private func drawing(layout: WorkTimeCanvasLayout, items: [WorkTimeCanvasLayout.Item], ticks: [Double], width: Double, indexedRecords: [String: WorkTimelineRecord]) -> some View {
         Canvas { context, size in
+            func xPosition(_ time: Double) -> Double { (time - window.lower) / window.span * width }
             var spine = Path()
             spine.move(to: CGPoint(x: 0, y: layout.axisY))
             spine.addLine(to: CGPoint(x: width, y: layout.axisY))
             context.stroke(spine, with: .color(Theme.muted.opacity(0.65)), lineWidth: 1)
-            for tick in ticks(width: width) {
-                let x = window.fraction(tick) * width
+            for tick in ticks {
+                let x = xPosition(tick)
                 var line = Path()
                 line.move(to: CGPoint(x: x, y: layout.axisY - 4))
                 line.addLine(to: CGPoint(x: x, y: layout.axisY + 4))
                 context.stroke(line, with: .color(Theme.muted), lineWidth: 1)
             }
-            for item in layout.items {
+            for item in items {
                 let selected = selectedID.map(item.recordIDs.contains) ?? false
                 let emphasized = selected || hoveredID == item.id || focusedItem == item.id
                 let tint = item.recordIDs.contains { id in indexedRecords[id]?.isCurrentFailure == true }
@@ -128,62 +134,35 @@ struct WorkTimeCanvas<Detail: View>: View {
                 stem.addLine(to: CGPoint(x: item.anchorX, y: edge))
                 context.stroke(stem, with: .color(tint.opacity(emphasized ? 0.85 : 0.32)), lineWidth: emphasized ? 2 : 1)
                 if !item.isCluster, let id = item.recordIDs.first, let record = indexedRecords[id], record.isDuration {
-                    let x1 = window.fraction(record.start!) * width
-                    let x2 = window.fraction(record.end!) * width
+                    let x1 = xPosition(record.start!)
+                    let x2 = xPosition(record.end!)
                     let y = layout.axisY + (item.isAbove ? -5.0 : 5.0)
                     var span = Path()
                     span.move(to: CGPoint(x: x1, y: y)); span.addLine(to: CGPoint(x: x2, y: y))
                     context.stroke(span, with: .color(tint.opacity(emphasized ? 0.9 : 0.35)), lineWidth: 3)
                 }
-                if item.timeBounds.lower < window.lower {
-                    var continuation = Path()
-                    continuation.move(to: CGPoint(x: 7, y: layout.axisY - 4))
-                    continuation.addLine(to: CGPoint(x: 2, y: layout.axisY))
-                    continuation.addLine(to: CGPoint(x: 7, y: layout.axisY + 4))
-                    context.stroke(continuation, with: .color(tint), lineWidth: 2)
-                } else {
-                    let radius = item.isCluster ? 5.0 : 3.5
-                    context.fill(Path(ellipseIn: CGRect(x: item.anchorX - radius, y: layout.axisY - radius,
-                        width: radius * 2, height: radius * 2)), with: .color(tint))
-                }
-                if item.timeBounds.upper > window.upper {
-                    var continuation = Path()
-                    continuation.move(to: CGPoint(x: width - 7, y: layout.axisY - 4))
-                    continuation.addLine(to: CGPoint(x: width - 2, y: layout.axisY))
-                    continuation.addLine(to: CGPoint(x: width - 7, y: layout.axisY + 4))
-                    context.stroke(continuation, with: .color(tint), lineWidth: 2)
-                }
+                let radius = item.isCluster ? 5.0 : 3.5
+                context.fill(Path(ellipseIn: CGRect(x: item.anchorX - radius, y: layout.axisY - radius,
+                    width: radius * 2, height: radius * 2)), with: .color(tint))
             }
         }
         .accessibilityHidden(true)
     }
 
-    private func ticks(width: Double) -> [Double] {
-        let count = max(2, min(7, Int(width / (190 * scale))))
-        return (0..<count).map { window.lower + window.span * Double($0) / Double(count - 1) }
-    }
-
-    private func axisLabels(width: Double, axisY: Double) -> some View {
-        HStack(spacing: 0) {
-            let values = ticks(width: width)
-            ForEach(Array(values.enumerated()), id: \.offset) { index, value in
-                if index > 0 { Spacer(minLength: 0) }
-                Text(axisLabel(value, includeDate: index == 0))
+    /// Labels sit on their tick marks and slide with them. A label's text is
+    /// fixed by its absolute time and the current step, so it never renumbers
+    /// in place while the window moves.
+    private func axisLabels(ticks: (step: Double, times: [Double]), width: Double, axisY: Double) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(ticks.times, id: \.self) { tick in
+                Text(WorkTimelineTimeAxis.tickLabel(tick, step: ticks.step, range: window))
                     .workFont(.dataSmall).foregroundStyle(Theme.muted)
                     .fixedSize().background(Theme.canvas)
+                    .position(x: (tick - window.lower) / window.span * width, y: axisY + 12 + 7 * scale)
             }
         }
-        .padding(.horizontal, 8)
         .frame(width: width)
-        .offset(y: axisY + 12)
         .accessibilityHidden(true)
-    }
-
-    private func axisLabel(_ time: Double, includeDate: Bool) -> String {
-        let formatter = DateFormatter()
-        let showsDate = includeDate || WorkTimelineTimeAxis.showsDates(in: window)
-        formatter.setLocalizedDateFormatFromTemplate(showsDate ? "MMMdjm" : (window.span >= 60 ? "jm" : "jms"))
-        return formatter.string(from: Date(timeIntervalSince1970: time))
     }
 
     private func itemButton(_ item: WorkTimeCanvasLayout.Item, indexedRecords: [String: WorkTimelineRecord]) -> some View {
@@ -319,8 +298,10 @@ struct WorkTimeCanvas<Detail: View>: View {
     }
 }
 
-/// Scrollbar-like overview: its body pans the window, its edges change scale.
-/// The small histogram counts dated records, never elapsed work or utilization.
+/// Scrollbar-like overview: dragging its body pans the window, its edges
+/// resize one boundary, and wheel or pinch input resizes the visible span
+/// around the pointer. The small histogram counts dated records, never elapsed
+/// work or utilization.
 private struct WorkTimeWindowScroller: View {
     let records: [WorkTimelineRecord]
     let full: WorkTimelineInterval
@@ -334,11 +315,13 @@ private struct WorkTimeWindowScroller: View {
             let left = full.fraction(window.lower) * width
             let right = full.fraction(window.upper) * width
             WorkTimeCanvasInput(interactiveRegions: [CGRect(x: 0, y: 0, width: geometry.size.width, height: 32)],
-                allowVerticalScroll: true,
                 onPan: { pixels in
                     onWindow(WorkTimeCanvasLayout.pannedWindow(window, by: -pixels / width * full.span, within: full))
                 }, onZoom: { factor, anchor in
-                    onWindow(WorkTimeCanvasLayout.zoomedWindow(window, factor: factor, anchorFraction: anchor, within: full))
+                    // The pointer position is a fraction of the full domain,
+                    // not of the visible window.
+                    onWindow(WorkTimeCanvasLayout.zoomedWindow(window, factor: factor,
+                        anchorTime: full.lower + full.span * anchor, within: full))
                 }, accessibilityIdentifier: "work.timeline.overview.navigation") {
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 4).fill(Theme.hairline.opacity(0.5))
@@ -369,7 +352,7 @@ private struct WorkTimeWindowScroller: View {
                     }.onEnded { _ in dragStart = nil })
                     .onHover { ($0 ? NSCursor.openHand : NSCursor.arrow).set() }
                     .accessibilityRepresentation { accessibleRangeControl(edge: nil) }
-                    .help("Drag to move through time. Drag either edge to change the visible time span.")
+                    .help("Drag to move through time. Scroll or drag either edge to change the visible time span.")
                 handle(at: left, isStart: true, width: width)
                 handle(at: right, isStart: false, width: width)
             }

@@ -4,6 +4,9 @@ import Foundation
 /// Pure geometry for a time canvas with cards above and below one shared axis.
 /// Card width is reading space, never elapsed execution time. `timeBounds`
 /// retains the recorded extent independently of the card's collision placement.
+/// Packing covers every loaded dated record and positions are anchored to
+/// absolute time, so panning only translates items; grouping changes require a
+/// scale, width or record-set change.
 struct WorkTimeCanvasLayout {
     struct Item: Identifiable, Equatable {
         let id: String
@@ -20,6 +23,7 @@ struct WorkTimeCanvasLayout {
     let items: [Item]
     let window: WorkTimelineInterval
     let axisY: Double
+    let cardWidth: Double
     let cardHeight: Double
     let bandCountPerSide: Int
     let visibleRecordCount: Int
@@ -52,11 +56,17 @@ struct WorkTimeCanvasLayout {
 
         self.window = window
         self.axisY = axisY
+        self.cardWidth = cardWidth
         self.cardHeight = cardHeight
         self.bandCountPerSide = bands
 
+        // Placement packs every loaded dated record, not just the records
+        // inside the window: grouping and band assignment then depend only on
+        // the records and the current scale, so panning translates cards
+        // without rearranging them. Rendering culls far-offscreen items.
         var seen = Set<String>()
         var undated: [String] = []
+        var visibleCount = 0
         var candidates: [Group] = []
         for record in records where seen.insert(record.id).inserted {
             guard let start = WorkTimelineProjection.validTime(record.start) else {
@@ -64,13 +74,13 @@ struct WorkTimeCanvasLayout {
                 continue
             }
             let end = max(start, WorkTimelineProjection.validTime(record.end) ?? start)
-            guard start <= window.upper, end >= window.lower else { continue }
+            if start <= window.upper, end >= window.lower { visibleCount += 1 }
             candidates.append(Group(recordIDs: [record.id], lower: start, upper: end))
         }
         candidates.sort {
             $0.lower == $1.lower ? $0.recordIDs[0] < $1.recordIDs[0] : $0.lower < $1.lower
         }
-        self.visibleRecordCount = candidates.count
+        self.visibleRecordCount = visibleCount
         self.undatedRecordIDs = undated.sorted()
 
         guard width > 0, bands > 0, !candidates.isEmpty else {
@@ -83,6 +93,20 @@ struct WorkTimeCanvasLayout {
             cardWidth: cardWidth, cardHeight: cardHeight,
             lowerAxisClearance: lowerAxisClearance, slots: bands * 2
         )
+    }
+
+    /// Items intersecting the viewport plus one card of margin, plus any item
+    /// whose recorded extent crosses the window (its span line runs through
+    /// even when its card sits offscreen). Culling is presentation-only:
+    /// placement and grouping never depend on it, so panning cannot rearrange
+    /// or regroup cards at the viewport edges.
+    func items(visibleIn width: Double) -> [Item] {
+        guard width.isFinite else { return items }
+        let margin = cardWidth + Self.gap
+        return items.filter {
+            ($0.frame.maxX >= -margin && $0.frame.minX <= width + margin)
+                || ($0.timeBounds.upper >= window.lower && $0.timeBounds.lower <= window.upper)
+        }
     }
 
     /// Enough height for one readable band per side plus the time-label strip.
@@ -172,6 +196,23 @@ struct WorkTimeCanvasLayout {
         return clampedWindow(.init(lower: lower, upper: lower + newSpan), to: full, minimumSpan: minimumSpan)
     }
 
+    /// Zoom keeping an absolute anchor time fixed. Surfaces whose pointer
+    /// position is expressed against the full domain (the overview) convert to
+    /// the window-relative fraction here. An anchor outside the window clamps
+    /// to the nearest edge.
+    static func zoomedWindow(
+        _ window: WorkTimelineInterval,
+        factor: Double,
+        anchorTime: Double,
+        within full: WorkTimelineInterval,
+        minimumSpan: Double = 1
+    ) -> WorkTimelineInterval {
+        let current = clampedWindow(window, to: full, minimumSpan: minimumSpan)
+        let span = current.upper - current.lower
+        let fraction = anchorTime.isFinite && span > 0 ? (anchorTime - current.lower) / span : 0.5
+        return zoomedWindow(current, factor: factor, anchorFraction: fraction, within: full, minimumSpan: minimumSpan)
+    }
+
     private struct Group {
         var recordIDs: [String]
         var lower: Double
@@ -195,7 +236,10 @@ struct WorkTimeCanvasLayout {
         var placed: [PlacedGroup] = []
         for group in groups {
             let anchorX = anchor(group.lower, window: window, width: width)
-            let x = min(max(0, anchorX - cardWidth / 2), width - cardWidth)
+            // Cards are not clamped to the viewport: a partially offscreen card
+            // keeps its time-true position and slides under the edge while
+            // panning, instead of jumping to or away from the boundary.
+            let x = anchorX - cardWidth / 2
             guard let slot = ends.indices.first(where: { x >= ends[$0] + gap }) else {
                 // All bands are occupied. Extend the nearest last card's
                 // membership without moving earlier cards or repacking them.
@@ -228,9 +272,11 @@ struct WorkTimeCanvasLayout {
         }
     }
 
+    /// The unclipped linear time-to-position map. Offscreen times produce
+    /// positions outside `0...width`; that is what keeps relative placement
+    /// independent of the window's position within the full domain.
     private static func anchor(_ time: Double, window: WorkTimelineInterval, width: Double) -> Double {
-        let clipped = min(max(time, window.lower), window.upper)
-        return ((clipped - window.lower) / (window.upper - window.lower)) * width
+        (time - window.lower) / (window.upper - window.lower) * width
     }
 
     private static func stableID(_ members: [String]) -> String {

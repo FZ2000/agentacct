@@ -57,6 +57,90 @@ enum WorkTimelineTimeAxis {
         formatter.setLocalizedDateFormatFromTemplate(showsDates(in: range) ? "MMMdjm" : "jms")
         return formatter.string(from: Date(timeIntervalSince1970: time))
     }
+
+    // MARK: Anchored ticks
+
+    /// Candidate tick intervals in ascending order. Sub-day steps divide the
+    /// hour or day evenly; larger steps count whole local days.
+    private static let tickSteps: [Double] = [
+        1, 2, 5, 10, 15, 30,
+        60, 120, 300, 600, 900, 1_800,
+        3_600, 7_200, 10_800, 21_600, 43_200,
+        86_400, 172_800, 259_200, 604_800, 1_209_600, 2_592_000, 5_184_000,
+        7_776_000, 15_724_800, 31_557_600,
+    ]
+
+    /// The smallest step whose on-screen spacing stays readable at this scale.
+    static func tickStep(span: Double, width: Double, minimumSpacing: Double) -> Double {
+        let span = span.isFinite && span > 0 ? span : 1
+        let width = width.isFinite && width > 0 ? width : 1
+        let spacing = minimumSpacing.isFinite && minimumSpacing > 0 ? minimumSpacing : 100
+        let needed = span * spacing / width
+        for step in tickSteps where step >= needed { return step }
+        var step = tickSteps.last!
+        while step < needed { step *= 4 }
+        return step
+    }
+
+    /// Absolute tick times inside `window`. Sub-day steps anchor to epoch
+    /// multiples; day-and-larger steps align to local midnights. Panning the
+    /// window translates the same marks across the screen rather than
+    /// redividing the window at fixed positions.
+    static func ticks(in window: WorkTimelineInterval, width: Double, minimumSpacing: Double,
+                      calendar: Calendar = .current) -> (step: Double, times: [Double]) {
+        // A window crossing a day boundary needs wider, date-bearing labels.
+        let dated = showsDates(in: window, calendar: calendar)
+        let step = tickStep(span: window.span, width: width,
+                            minimumSpacing: dated ? minimumSpacing * 1.5 : minimumSpacing)
+        let lower = min(window.lower, window.upper), upper = max(window.lower, window.upper)
+        guard lower.isFinite, upper.isFinite else { return (step, []) }
+        let limit = max(2, Int(width / max(minimumSpacing, 1)) + 4)
+        if step < 86_400 {
+            var tick = (lower / step).rounded(.up) * step
+            var times: [Double] = []
+            while tick <= upper, times.count < limit {
+                times.append(tick)
+                tick += step
+            }
+            return (step, times)
+        }
+        // Day-level steps follow local midnights on an absolute lattice: the
+        // phase is counted from the local epoch day, so panning the window
+        // never shifts where marks land.
+        let dayStep = max(1, Int((step / 86_400).rounded()))
+        let reference = calendar.startOfDay(for: Date(timeIntervalSince1970: 0))
+        let lowerDay = calendar.startOfDay(for: Date(timeIntervalSince1970: lower))
+        let elapsedDays = max(0, calendar.dateComponents([.day], from: reference, to: lowerDay).day ?? 0)
+        var offset = (elapsedDays / dayStep) * dayStep
+        var times: [Double] = []
+        while times.count < limit {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: reference) else { break }
+            let time = day.timeIntervalSince1970
+            if time > upper { break }
+            if time >= lower { times.append(time) }
+            offset += dayStep
+        }
+        return (step, times)
+    }
+
+    /// A mark's label depends on its absolute time and the current step, never
+    /// on the window position: panning keeps each mark's label unchanged, and
+    /// reformatting happens only when zoom changes the step or day context.
+    static func tickLabel(_ time: Double, step: Double, range: WorkTimelineInterval,
+                          calendar: Calendar = .current) -> String {
+        let date = Date(timeIntervalSince1970: time)
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        if step >= 86_400 {
+            formatter.setLocalizedDateFormatFromTemplate(range.span > 400 * 86_400 ? "yMMMd" : "MMMdj")
+        } else if showsDates(in: range, calendar: calendar) || date == calendar.startOfDay(for: date) {
+            formatter.setLocalizedDateFormatFromTemplate("MMMdjm")
+        } else {
+            formatter.setLocalizedDateFormatFromTemplate(step < 60 ? "jms" : "jm")
+        }
+        return formatter.string(from: date)
+    }
 }
 
 /// One coordinate system for the labels, Canvas marks, and pointer targets.

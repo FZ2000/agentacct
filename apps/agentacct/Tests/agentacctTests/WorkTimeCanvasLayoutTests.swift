@@ -20,25 +20,55 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
         }
     }
 
-    func testViewportCullsOutsidePointsButRetainsCrossingSpansAndBoundaryEvents() {
+    func testLayoutRetainsOffscreenRecordsAndCullingIsPresentationOnly() {
         let records = [
+            record("far", start: 10, end: 20),
             record("before", start: 80, end: 99),
             record("crossing", start: 50, end: 250),
             record("left", start: 100),
             record("right", start: 200),
             record("after", start: 201),
+            record("farAfter", start: 500),
             record("undated", start: nil),
             record("invalid", start: .nan),
         ]
         let layout = WorkTimeCanvasLayout(records: records, window: full, width: 1000, height: 420)
 
-        XCTAssertEqual(Set(layout.items.flatMap(\.recordIDs)), ["crossing", "left", "right"])
+        // Every dated record keeps a stable placement, including records
+        // outside the window: that is what lets panning translate cards
+        // instead of regrouping them at the viewport edges.
+        XCTAssertEqual(Set(layout.items.flatMap(\.recordIDs)),
+            ["after", "before", "crossing", "far", "farAfter", "left", "right"])
         XCTAssertEqual(layout.visibleRecordCount, 3)
         XCTAssertEqual(layout.undatedRecordIDs, ["invalid", "undated"])
         let crossing = layout.items.first { $0.recordIDs.contains("crossing") }
         XCTAssertEqual(crossing?.timeBounds, .init(lower: 50, upper: 250))
-        XCTAssertEqual(crossing?.anchorX, 0)
+        // Anchors are no longer clipped to the viewport: 50 lies half a window
+        // before the window's lower bound, so its position is offscreen.
+        XCTAssertEqual(crossing?.anchorX, -500)
+        let visible = layout.items(visibleIn: 1000)
+        XCTAssertEqual(Set(visible.flatMap(\.recordIDs)), ["after", "before", "crossing", "left", "right"],
+            "A span crossing the window stays represented; only far-offscreen records cull away")
         assertReadable(layout, width: 1000, height: 420)
+    }
+
+    func testPanningTranslatesEveryItemWithoutRegrouping() {
+        let records = (0..<300).map { record("event-\($0)", start: 100 + Double(($0 * 7919) % 10000) / 100) }
+        let base = WorkTimeCanvasLayout(records: records, window: full, width: 1000, height: 420)
+        let shifted = WorkTimeCanvasLayout(records: records, window: .init(lower: 130, upper: 230), width: 1000, height: 420)
+
+        // Same items, same members, same sides: a pan only translates.
+        XCTAssertEqual(base.items.map(\.id), shifted.items.map(\.id))
+        XCTAssertEqual(base.items.map(\.recordIDs), shifted.items.map(\.recordIDs))
+        let dx = 30 / full.span * 1000
+        for (baseItem, shiftedItem) in zip(base.items, shifted.items) {
+            XCTAssertEqual(shiftedItem.anchorX, baseItem.anchorX - dx, accuracy: 0.000_001)
+            XCTAssertEqual(shiftedItem.frame.minX, baseItem.frame.minX - dx, accuracy: 0.000_001)
+            XCTAssertEqual(shiftedItem.frame.minY, baseItem.frame.minY)
+            XCTAssertEqual(shiftedItem.isAbove, baseItem.isAbove)
+            XCTAssertEqual(shiftedItem.timeBounds, baseItem.timeBounds)
+        }
+        assertReadable(shifted, width: 1000, height: 420)
     }
 
     func testSixThousandCoincidentRecordsRemainBoundedAndFullyInspectable() {
@@ -141,6 +171,18 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
         XCTAssertEqual(WorkTimeCanvasLayout.zoomedWindow(window, factor: .nan, anchorFraction: 0, within: full), window)
     }
 
+    func testZoomByAbsoluteAnchorTimeMatchesFractionAndClampsOutsideAnchors() {
+        let window = WorkTimelineInterval(lower: 120, upper: 180)
+        XCTAssertEqual(WorkTimeCanvasLayout.zoomedWindow(window, factor: 2, anchorTime: 135, within: full),
+                       WorkTimeCanvasLayout.zoomedWindow(window, factor: 2, anchorFraction: 0.25, within: full))
+        // An anchor outside the window (the overview's domain-wide pointer)
+        // clamps to the nearest window edge instead of skipping clamping.
+        XCTAssertEqual(WorkTimeCanvasLayout.zoomedWindow(window, factor: 2, anchorTime: 500, within: full),
+                       WorkTimeCanvasLayout.zoomedWindow(window, factor: 2, anchorFraction: 1, within: full))
+        XCTAssertEqual(WorkTimeCanvasLayout.zoomedWindow(window, factor: 2, anchorTime: .nan, within: full),
+                       WorkTimeCanvasLayout.zoomedWindow(window, factor: 2, anchorFraction: 0.5, within: full))
+    }
+
     func testClampNormalizesReversedDegenerateAndNonfiniteWindows() {
         XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(.init(lower: 160, upper: 140), to: full), .init(lower: 140, upper: 160))
         XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(.init(lower: 200, upper: 200), to: full), .init(lower: 199, upper: 200))
@@ -174,14 +216,22 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
             XCTAssertTrue(item.frame.origin.x.isFinite && item.frame.origin.y.isFinite, file: file, line: line)
             XCTAssertGreaterThan(item.frame.width, 0, file: file, line: line)
             XCTAssertGreaterThan(item.frame.height, 0, file: file, line: line)
-            XCTAssertGreaterThanOrEqual(item.frame.minX, -0.000001, file: file, line: line)
+            // Horizontal positions are time-true: cards may sit partly or
+            // fully outside the viewport. Vertical placement stays inside.
             XCTAssertGreaterThanOrEqual(item.frame.minY, -0.000001, file: file, line: line)
-            XCTAssertLessThanOrEqual(item.frame.maxX, width + 0.000001, file: file, line: line)
             XCTAssertLessThanOrEqual(item.frame.maxY, height + 0.000001, file: file, line: line)
-            XCTAssertTrue((0...width).contains(item.anchorX), file: file, line: line)
+            XCTAssertTrue(item.anchorX.isFinite, file: file, line: line)
             for other in layout.items.dropFirst(index + 1) {
                 XCTAssertFalse(item.frame.intersects(other.frame), "\(item.id) overlaps \(other.id)", file: file, line: line)
             }
+        }
+        // Every record whose time intersects the window stays represented in
+        // the rendered set; only far-offscreen frames cull away, and culling
+        // never feeds back into placement.
+        let visible = layout.items(visibleIn: width)
+        for item in layout.items
+        where item.timeBounds.upper >= layout.window.lower && item.timeBounds.lower <= layout.window.upper {
+            XCTAssertTrue(visible.contains(item), "\(item.id) intersects the window but is culled", file: file, line: line)
         }
     }
 
