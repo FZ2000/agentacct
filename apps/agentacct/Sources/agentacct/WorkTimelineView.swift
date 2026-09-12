@@ -77,7 +77,9 @@ struct WorkTimelineView: View {
         return page.truncated || page.events.contains { $0.id == nil }
     }
     private var matchingRecords: [WorkTimelineRecord] {
-        displayProjection.records.filter { record in
+        guard showingArrivals || !navigation.view.query.isEmpty || navigation.view.file != nil
+                || navigation.view.failuresOnly else { return displayProjection.records }
+        return displayProjection.records.filter { record in
             (!showingArrivals || feed.arrivalIDs.contains(record.id))
                 && (navigation.view.query.isEmpty || record.searchableText.localizedCaseInsensitiveContains(navigation.view.query))
                 && (navigation.view.file == nil || record.files.contains(navigation.view.file!))

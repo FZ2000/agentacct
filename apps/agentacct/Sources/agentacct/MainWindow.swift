@@ -18,7 +18,7 @@ struct MainWindow: View {
     @State private var setupRecoveryReason: String?
     @State private var setupRecoveryKind: NativeRecoveryKind = .connection
     @State private var activationClient: SetupClient?
-    @State private var savedWork = SavedWorkSnapshot.current()
+    @State private var savedWork: SavedWorkSnapshot?
     @State private var offlineDashboard: DashboardStore?
     @State private var openWorkAfterSetup = false
     @State private var recorderSynchronizationFinished = false
@@ -191,6 +191,15 @@ struct MainWindow: View {
         }
         .onChange(of: health, initial: true) { _, snapshot in
             healthCoordinator.update(snapshot)
+        }
+        .task {
+            guard !SnapshotMode.enabled else { return }
+            // State initializers are evaluated whenever the parent recreates
+            // this view. Load the potentially large file once per window, away
+            // from rendering and the main actor.
+            let loaded = await Task.detached(priority: .utility) { SavedWorkSnapshot.current() }.value
+            guard !Task.isCancelled, savedWork == nil else { return }
+            savedWork = loaded
         }
         .task {
             // Fixture-backed design review must stay deterministic and must

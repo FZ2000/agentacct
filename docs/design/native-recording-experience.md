@@ -232,3 +232,9 @@ these operations; this change removes verification from rendering.
 Timeline filtering resolves its time window once per pass, instead of rescanning
 all timestamps for every record. Viewport changes no longer rebuild the canonical
 record projection, and unchanged poll responses do not republish it.
+
+A second profile found saved-work JSON decoding in the window initializer. That
+load now runs once per window in a background task; opening recovery still reads
+a fresh copy. Immutable timeline snapshots retain their time bounds and newest
+record, and pending-arrival differences update only when snapshots change. Tests
+cover cache invalidation through held, arrivals, history and live transitions.

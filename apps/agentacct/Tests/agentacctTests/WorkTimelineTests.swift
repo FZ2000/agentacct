@@ -2,6 +2,40 @@ import XCTest
 @testable import agentacct
 
 final class WorkTimelineTests: XCTestCase {
+    func testCachedPendingIDsFollowReviewRestoreAndLiveTransitions() {
+        let original = WorkTimelineProjection(records: [record("original", time: 10)])
+        let arrived = WorkTimelineProjection(records: [record("new", time: 20)])
+        var feed = WorkTimelineFeed()
+        feed.ingest(original, following: false)
+        XCTAssertTrue(feed.pendingIDs.isEmpty)
+        feed.ingest(arrived, following: false)
+        XCTAssertEqual(feed.pendingIDs, ["original", "new"])
+        feed.reviewArrivals()
+        XCTAssertTrue(feed.pendingIDs.isEmpty)
+        XCTAssertEqual(feed.removedArrivalCount, 1)
+        feed.restoreHistory()
+        XCTAssertEqual(feed.pendingIDs, ["original", "new"])
+        feed.ingest(arrived, following: true)
+        XCTAssertTrue(feed.pendingIDs.isEmpty)
+        feed.ingest(.empty, following: false)
+        XCTAssertEqual(feed.pendingIDs, ["new"])
+        feed.reveal()
+        XCTAssertTrue(feed.pendingIDs.isEmpty)
+    }
+
+    func testSnapshotBoundsIgnoreDiscardedDuplicates() {
+        var first = record("first", time: 10)
+        first.end = 30
+        first.eventID = "same-event"
+        var duplicate = first
+        duplicate.end = 1_000
+        let projection = WorkTimelineProjection(records: [first, duplicate, record("later-start", time: 20)])
+        XCTAssertEqual(projection.interval, .init(lower: 9, upper: 31))
+        XCTAssertEqual(projection.newestRecord?.id, "first")
+        XCTAssertNil(WorkTimelineProjection.empty.interval)
+        XCTAssertNil(WorkTimelineProjection.empty.newestRecord)
+    }
+
     func testChronologyUsesSourceTimeWithStableTiesAndUndatedOutsideAxis() {
         let projection = WorkTimelineProjection(records: [
             record("undated"), record("later", time: 30), record("b", time: 10), record("a", time: 10),

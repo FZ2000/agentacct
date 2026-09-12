@@ -71,9 +71,11 @@ struct WorkTimelineLane: Identifiable, Equatable {
 }
 
 struct WorkTimelineProjection: Equatable {
-    var records: [WorkTimelineRecord]
-    var lanes: [WorkTimelineLane]
-    var notices: [String]
+    let records: [WorkTimelineRecord]
+    let lanes: [WorkTimelineLane]
+    let notices: [String]
+    let newestRecord: WorkTimelineRecord?
+    let interval: WorkTimelineInterval?
 
     static let empty = WorkTimelineProjection(records: [], lanes: [], notices: [])
 
@@ -87,20 +89,14 @@ struct WorkTimelineProjection: Equatable {
         }.sorted(by: Self.chronological)
         self.lanes = lanes
         self.notices = notices
-    }
-
-    var newestRecord: WorkTimelineRecord? {
-        records.filter { $0.latestTime != nil }.max {
+        newestRecord = self.records.filter { $0.latestTime != nil }.max {
             if $0.latestTime == $1.latestTime { return $0.id < $1.id }
             return $0.latestTime! < $1.latestTime!
         }
-    }
-
-    var interval: WorkTimelineInterval? {
-        let times = records.flatMap { [$0.start, $0.end].compactMap { $0 } }
-        guard let lower = times.min(), let upper = times.max() else { return nil }
+        let times = self.records.flatMap { [$0.start, $0.end].compactMap { $0 } }
+        guard let lower = times.min(), let upper = times.max() else { interval = nil; return }
         let padding = max((upper - lower) * 0.03, 1)
-        return WorkTimelineInterval(lower: lower - padding, upper: upper + padding)
+        interval = WorkTimelineInterval(lower: lower - padding, upper: upper + padding)
     }
 
     static func chronological(_ lhs: WorkTimelineRecord, _ rhs: WorkTimelineRecord) -> Bool {
@@ -210,17 +206,19 @@ struct WorkTimelineNavigation: Equatable, Codable {
 /// arrivals. The current polling API has no ingestion cursor, so this claims
 /// snapshot observation only, never lossless event streaming.
 struct WorkTimelineFeed {
-    var visible = WorkTimelineProjection.empty
-    var latest = WorkTimelineProjection.empty
+    private(set) var visible = WorkTimelineProjection.empty
+    private(set) var latest = WorkTimelineProjection.empty
     private(set) var initialized = false
     private(set) var historySnapshot: WorkTimelineProjection?
     private(set) var arrivalIDs: Set<String> = []
     private(set) var removedArrivalCount = 0
 
-    var pendingIDs: Set<String> {
+    private(set) var pendingIDs: Set<String> = []
+
+    private mutating func updatePendingIDs() {
         let existing = Dictionary(visible.records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let incoming = Dictionary(latest.records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return Set(incoming.keys.filter { existing[$0] != incoming[$0] })
+        pendingIDs = Set(incoming.keys.filter { existing[$0] != incoming[$0] })
             .union(Set(existing.keys).subtracting(incoming.keys))
     }
 
@@ -228,9 +226,10 @@ struct WorkTimelineFeed {
         latest = projection
         if following || !initialized { visible = projection }
         initialized = true
+        if following { pendingIDs = [] } else { updatePendingIDs() }
     }
 
-    mutating func reveal() { visible = latest }
+    mutating func reveal() { visible = latest; pendingIDs = [] }
 
     mutating func reviewArrivals() {
         if historySnapshot == nil { historySnapshot = visible }
@@ -238,6 +237,7 @@ struct WorkTimelineFeed {
         let available = Set(latest.records.map(\.id))
         removedArrivalCount = arrivalIDs.subtracting(available).count
         visible = latest
+        pendingIDs = []
     }
 
     mutating func restoreHistory() {
@@ -245,5 +245,6 @@ struct WorkTimelineFeed {
         historySnapshot = nil
         arrivalIDs = []
         removedArrivalCount = 0
+        updatePendingIDs()
     }
 }
