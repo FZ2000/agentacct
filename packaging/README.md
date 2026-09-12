@@ -23,7 +23,8 @@ interpreter-emulation entry in `pyinstaller_entry.py`.
 
 | Script | What it does |
 | --- | --- |
-| `freeze-cli.sh` | Freeze the CLI to `packaging/dist/agentacct/` (onedir). Requires a clean source tree, records its provenance, then smoke-tests `mcp serve` / `serve` / `onboard`. |
+| `freeze-cli.sh` | Freeze the CLI to `packaging/dist/agentacct/` (onedir). Requires a clean source tree, materializes internal framework aliases, smoke-tests `mcp serve` / `serve` / `onboard`, then records provenance. |
+| `materialize-cli.py` | Replace only aliases resolving within the build output with independent copies. Reject external, broken, cyclic, shared-writable or special entries before replacing output. The app's strict no-link payload validator stays unchanged. |
 | `build-dmg.sh` | Freeze → build the app (embeds the CLI) → sign (if configured) → DMG → notarize (if configured). `--release` validates signing and notary credentials before build work. Release output goes to `packaging/release/`; no-flag local output is isolated in `packaging/local-build/`. |
 | `verify-dmg.sh` | Validate stapling, mount the exact DMG read-only, discover its actual mount point, then pin the App to an explicitly trusted Apple Team before verifying App/embedded-CLI version and source identity. |
 | `rename-no-replace.c` | Tiny macOS activation helper compiled by the build scripts; `renamex_np(RENAME_EXCL)` prevents a concurrently-created destination from turning a rename into a successful nested copy. |

@@ -130,6 +130,12 @@ expect_build_rejection \
 
 printf '%s\n' '#!/bin/bash' "echo 'agentacct $release_version'" >"$frozen_cli/agentacct"
 chmod +x "$frozen_cli/agentacct"
+ln -s agentacct "$frozen_cli/linked-runtime"
+expect_build_rejection \
+    "a frozen CLI with a linked runtime" \
+    "$frozen_cli" \
+    "frozen CLI contains symbolic links"
+rm "$frozen_cli/linked-runtime"
 if ! build_app "$frozen_cli"; then
     record_failure "a matching clean frozen CLI was rejected"
 elif ! cmp -s "$frozen_cli/agentacct" "$APP_ROOT/.build/agentacct.app/Contents/Resources/cli/agentacct"; then

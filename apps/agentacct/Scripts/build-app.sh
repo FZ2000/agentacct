@@ -35,6 +35,10 @@ FROZEN_CLI="${AGENTACCT_FROZEN_CLI_DIR:-$REPO_ROOT/packaging/dist/agentacct}"
 EMBED_FROZEN_CLI=false
 if [[ -d "$FROZEN_CLI" ]]; then
     agentacct_verify_source_provenance "$REPO_ROOT" "$FROZEN_CLI"
+    if [[ -L "$FROZEN_CLI" || -n "$(find "$FROZEN_CLI" -type l -print -quit)" ]]; then
+        echo "ERROR: frozen CLI contains symbolic links; rebuild with packaging/freeze-cli.sh" >&2
+        exit 1
+    fi
     FROZEN_CLI_VERSION="$(agentacct_cli_version "$FROZEN_CLI/agentacct")"
     if [[ "$FROZEN_CLI_VERSION" != "$APP_VERSION" ]]; then
         echo "ERROR: frozen CLI version $FROZEN_CLI_VERSION does not match app/project version $APP_VERSION; rebuild the frozen CLI" >&2

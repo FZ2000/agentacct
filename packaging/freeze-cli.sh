@@ -75,6 +75,10 @@ rm -rf "$DIST_DIR" "$WORK_DIR" "$HERE"/*.spec
 # inside the public DMG, so delete every direct_url.json from the output.
 find "$DIST_DIR/agentacct" -name direct_url.json -delete 2>/dev/null || true
 
+# The native installer deliberately rejects links. PyInstaller can preserve
+# Python.framework aliases; materialize only validated in-payload targets.
+"$BUILD_VENV/bin/python" "$HERE/materialize-cli.py" "$DIST_DIR/agentacct"
+
 BIN="$DIST_DIR/agentacct/agentacct"
 echo "==> smoke-testing the frozen binary"
 "$BIN" --version
