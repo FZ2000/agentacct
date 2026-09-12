@@ -11,7 +11,7 @@ window determines which recorded events appear. Dragging the canvas or the
 compact overview moves the window through time — axis ticks, labels and cards
 are anchored to absolute time and move together; wheel input resizes the
 visible span around the pointer and pinch changes the time scale.
-Selecting an event opens its details beside that event, without moving the
+Selecting an event opens its details below the timeline, without moving the
 canvas. Dense groups offer a chooser so overlapping timestamps remain reachable. Comparison has been
 removed from the current interface, including its drag targets and saved slots.
 New snapshots accumulate while someone investigates. Reviewing arrivals preserves
@@ -35,13 +35,13 @@ zero-failure announcement. Search remains close to activity. Current failures an
 remain visible when they occur.
 
 The overview is subordinate to the activity surface. Selecting a record opens
-a native popover with its actual title, result, source and content. Files,
-Artifacts and Record details disclose supporting data on request. Group chooser
-and record detail share one popover, with a way back to the group. Short records
-fit their content; long or expanded details scroll within a height limit. Close
-dismisses the whole popover; Escape also dismisses the group chooser. Reading size
-is forwarded explicitly across native popup presentation so text and controls
-scale together. Supporting
+its details directly below the timeline: actual title, result, source and
+content. Files, Artifacts and Record details disclose supporting data on
+request. Group chooser and record detail share the same region, with a way
+back to the group. The region takes its natural height in the page flow, so
+long content scrolls with the page instead of a nested panel. Close dismisses
+the region; Escape also dismisses the group chooser. Reading size flows
+through the ordinary view tree, so text and controls scale together. Supporting
 records can be inspected even when their timestamps are outside the current window. Task details has separate categories instead of expanding every
 ledger at once. Full identifiers remain available, and real parent-section or
 later-result links remain contextual to the selected record.
@@ -73,7 +73,9 @@ pixel-reference approvals. The records in these two examples differ.
 | Event click | Hold live movement and open the event's details |
 | Canvas Left/Right, Home/End, +/− | Pan, reach history bounds, or change time scale |
 
-System-reserved modified wheel gestures remain available to macOS. Geometry and
+System-reserved modified wheel gestures remain available to macOS. The visible
+window never shrinks below a five-second span, keeping the axis and the
+overview control meaningful. Geometry and
 native input have separate tests; real interaction checks are recorded separately
 from simulated events. No measured FPS or full VoiceOver certification is claimed.
 
@@ -89,7 +91,7 @@ from simulated events. No measured FPS or full VoiceOver certification is claime
 | Timeline data and navigation | `WorkTimelineModel.swift`, `WorkTimelineMemory.swift`, `WorkTimelineViewport.swift`, `WorkTimelineFocus.swift` | Event identity, chronology, source and held snapshots remain authoritative. Selection is independent of the reading position. |
 | Time canvas geometry | `WorkTimeCanvasLayout.swift` and tests | Packing covers all loaded dated records with time-anchored positions: panning translates cards without regrouping; every dated record is retained exactly once; cards do not overlap; large text reserves time-label space; a long task follows actual latest activity. |
 | Native input | `WorkTimeCanvasInput.swift` and tests | Wheel input resizes the visible span over cards, canvas and overview; dragging pans; reserved OS modifiers pass through; input remains scoped to the canvas. |
-| Timeline presentation and export | `WorkTimeCanvas.swift`, `WorkTimelineView.swift`, `WorkRecordPopover.swift`, `WorkTimelineExport.swift` | Details appear at selection; clusters stay inspectable; no inferred causality or execution duration; export retains identities and qualifications. |
+| Timeline presentation and export | `WorkTimeCanvas.swift`, `WorkTimelineView.swift`, `WorkTimelineExport.swift` | Details appear below the timeline at selection; clusters stay inspectable in the same region; no inferred causality or execution duration; export retains identities and qualifications. |
 | Information hierarchy | `ContextHelp.swift`, `ReadingSize.swift`, `Theme.swift`, `UsagePane.swift`, `UsageCapacity.swift` | Optional explanation is available by hover and keyboard; failures, cost basis, incomplete capture and install scope stay visible. |
 | Distributable recorder | `packaging/materialize-cli.py`, `freeze-cli.sh`, `build-app.sh` | Framework aliases become independent files only after all targets are proven inside the frozen output. External or cyclic aliases fail; the installer's no-link contract is preserved. |
 
@@ -108,7 +110,8 @@ are local study artifacts, not production resources.
   possible manual merge steps remain beside Install. Usage keeps cost basis and
   partial subtotals beside monetary values.
 - Display no comparison workspace or empty inspector. A selected record opens
-  a native detail popover without changing the timeline's width or position.
+  its details in the region below the timeline without changing the timeline's
+  width or position.
   The overview pans and resizes the visible window; export and show-all time
   are available from Activity actions.
 - Task status and activity take priority. The task navigator carries titles,

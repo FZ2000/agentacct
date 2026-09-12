@@ -52,8 +52,9 @@ struct WorkTimelineView: View {
     @State private var lastObserved: Date?
     @State private var scrollTarget: String?
     @State private var showingArrivals = false
-    @State private var popoverDismissRequest = 0
-    @State private var showingUndatedDetail = false
+    @State private var clusterMembers: [WorkTimelineRecord] = []
+    @State private var clusterBounds: WorkTimelineInterval?
+    @State private var chooserPosition: String?
     @State private var exportError: String?
     @FocusState private var focusedEvidence: String?
     @AccessibilityFocusState private var accessibleEvidence: String?
@@ -194,15 +195,107 @@ struct WorkTimelineView: View {
         .accessibilityIdentifier("work.timeline")
     }
 
-    /// Selected details open at their event without changing canvas geometry.
-    /// Static review images include the detail inline because popovers have
-    /// their own native window and are captured separately during interaction.
+    /// Selection details open below the timeline, never in a floating window:
+    /// the canvas keeps its position and scale, and the region reveals itself
+    /// by scrolling the outer page only when it would open out of view.
     private var evidenceAndInspector: some View {
         VStack(alignment: .leading, spacing: Space.m) {
             recordsSurface.id("work.timeline.records")
                 .background(WorkTimelineScrollObserver(viewport: viewport) { hold() })
-            if navigation.view.selectedID != nil,
-               SnapshotMode.boundsScrollContentToViewport { inspector }
+            selectionRegion
+        }
+    }
+
+    @ViewBuilder private var selectionRegion: some View {
+        if !clusterMembers.isEmpty && navigation.view.selectedID == nil {
+            clusterChooser
+        } else if navigation.view.selectedID != nil {
+            inspector
+        }
+    }
+
+    /// The dense-group member list uses the same surface as record details,
+    /// so moving between a group and a member never opens another window.
+    private var clusterChooser: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                Text("\(clusterMembers.count) records").workFont(.titleCard)
+                Spacer()
+                Button("Zoom here") {
+                    hold()
+                    if let bounds = clusterBounds, let full = displayProjection.interval {
+                        let padding = max(bounds.span * 0.15, 1)
+                        navigation.view.interval = WorkTimeCanvasLayout.clampedWindow(.init(
+                            lower: bounds.lower - padding, upper: bounds.upper + padding), to: full)
+                    }
+                    clearSelection()
+                }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                .disabled(clusterBounds.map { $0.span <= 1 || $0.span >= (interval?.span ?? 0) * 0.9 } ?? true)
+                .help("Resize the visible window to this group's time range")
+                Button { dismissSelection() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(QuietButtonStyle(horizontalPadding: 7))
+                    .accessibilityLabel("Close record group")
+                    .accessibilityIdentifier("work.timeline.inspector.close")
+                    .help("Close record group")
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(clusterMembers) { record in
+                        Button {
+                            inspect(record)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(record.title).workFont(.rowLabel)
+                                Text("\(record.laneTitle) · \(record.resultLabel)")
+                                    .workFont(.caption).foregroundStyle(color(record))
+                            }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
+                        }.buttonStyle(SurfaceButtonStyle())
+                        .accessibilityIdentifier("work.timeline.record.\(record.id)")
+                    }
+                }.scrollTargetLayout()
+            }.scrollPosition(id: $chooserPosition).frame(maxHeight: 300)
+        }
+        .padding(Space.m).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.canvas, in: RoundedRectangle(cornerRadius: Metrics.radius))
+        .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Theme.cardLine))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("work.timeline.cluster.chooser")
+        .accessibilityLabel("\(clusterMembers.count) records in a time group")
+        .background(WorkTimelineRevealProbe { onRevealInspector?() })
+        .onKeyPress(.escape) { dismissSelection(); return .handled }
+    }
+
+    private var selectionActive: Bool { !clusterMembers.isEmpty || navigation.view.selectedID != nil }
+
+    private func clearSelection() {
+        navigation.view.selectedID = nil
+        clusterMembers = []
+        clusterBounds = nil
+    }
+
+    private func dismissSelection() {
+        let focusTarget = selected?.id ?? clusterMembers.first?.id
+        clearSelection()
+        requestedRowFocus = focusTarget
+        scrollRequest += 1
+    }
+
+    private func presentCluster(_ members: [WorkTimelineRecord], bounds: WorkTimelineInterval) {
+        hold()
+        clusterBounds = bounds
+        clusterMembers = members
+        navigation.view.selectedID = nil
+        focusSelectionRegion()
+    }
+
+    private func focusSelectionRegion() {
+        let generation = focusGeneration
+        Task { @MainActor in
+            await Task.yield()
+            guard viewIsVisible, selectionActive, generation == focusGeneration else { return }
+            await Task.yield()
+            guard viewIsVisible, selectionActive, generation == focusGeneration else { return }
+            focusedEvidence = "inspector"; accessibleEvidence = "inspector"
         }
     }
 
@@ -211,10 +304,10 @@ struct WorkTimelineView: View {
             WorkTimeCanvas(records: matchingRecords, full: full, window: interval,
                 selectedRecord: selected,
                 onWindow: { value in hold(); navigation.view.interval = value },
-                onSelect: { inspect($0, focusInspector: false) },
-                onDismiss: { navigation.view.selectedID = nil },
-                onHold: hold, dismissRequest: popoverDismissRequest, focusRecordID: requestedRowFocus, focusRequest: scrollRequest, compact: compactViewport,
-                detail: { _ in inspector })
+                onSelect: { inspect($0) },
+                onCluster: { members, bounds in presentCluster(members, bounds: bounds) },
+                onDismiss: { clearSelection() },
+                onHold: hold, focusRecordID: requestedRowFocus, focusRequest: scrollRequest, compact: compactViewport)
         } else {
             Text(displayProjection.records.isEmpty ? "No activity recorded yet." : "Recorded times are unavailable.")
                 .workFont(.body).foregroundStyle(Theme.muted)
@@ -224,7 +317,7 @@ struct WorkTimelineView: View {
         if !undated.isEmpty {
             Menu {
                 ForEach(undated) { record in
-                    Button("\(record.title) · \(record.laneTitle) · \(record.resultLabel)") { showingUndatedDetail = true; inspect(record, focusInspector: false) }.buttonStyle(QuietButtonStyle())
+                    Button("\(record.title) · \(record.laneTitle) · \(record.resultLabel)") { inspect(record, focusInspector: false) }.buttonStyle(QuietButtonStyle())
                 }
             } label: {
                 Label("Time unavailable · \(undated.count)", systemImage: "clock.badge.questionmark")
@@ -232,12 +325,6 @@ struct WorkTimelineView: View {
             .menuStyle(.borderlessButton).buttonStyle(QuietButtonStyle())
             .fixedSize().accessibilityIdentifier("work.timeline.undated")
             .help("These records have no usable timestamp and cannot be placed on the timeline.")
-            .popover(isPresented: Binding(get: {
-                !SnapshotMode.boundsScrollContentToViewport && showingUndatedDetail && selected != nil
-            }, set: { if !$0 { showingUndatedDetail = false; navigation.view.selectedID = nil } })) {
-                WorkRecordPopover(width: 480, maximumHeight: 560) { inspector }
-                    .environment(\.dynamicTypeSize, dynamicTypeSize)
-            }
         }
     }
 
@@ -261,7 +348,7 @@ struct WorkTimelineView: View {
                 .accessibilityFocused($accessibleEvidence, equals: "timeline-heading")
                 .accessibilityAddTraits(.isHeader)
                 ContextHelp(title: "About activity",
-                    message: "Drag the canvas to move through time. Scroll to make the visible time span smaller or larger, or pinch to zoom around the pointer. Drag the overview window to move it and its edges to resize it. Select a record for details; dense groups open a record chooser. Stems mark recorded times, not causal links. Section spans end at the latest reported update, not a measured execution finish. Snapshots refresh every 3 seconds.",
+                    message: "Drag the canvas to move through time. Scroll to make the visible time span smaller or larger, or pinch to zoom around the pointer. Drag the overview window to move it and its edges to resize it. Select a record to read its details below the timeline; dense groups list their members there. Stems mark recorded times, not causal links. Section spans end at the latest reported update, not a measured execution finish. Snapshots refresh every 3 seconds.",
                     identifier: "work.timeline.help")
             }
             HStack(spacing: 5) {
@@ -440,6 +527,13 @@ struct WorkTimelineView: View {
     @ViewBuilder private var inspector: some View {
         if let record = selected {
             VStack(alignment: .leading, spacing: 12) {
+                if !clusterMembers.isEmpty {
+                    Button { navigation.view.selectedID = nil } label: {
+                        Label("Back to \(clusterMembers.count) records", systemImage: "chevron.left")
+                    }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                    .accessibilityIdentifier("work.timeline.cluster.back")
+                    .help("Return to the group member list")
+                }
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(record.title).workFont(.titleCard)
@@ -515,7 +609,7 @@ struct WorkTimelineView: View {
                                 HStack(alignment: .top, spacing: 8) {
                                     Text(file).workFont(.caption).textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                    Button { hold(); navigation.view.selectedID = nil; showingUndatedDetail = false; navigation.showFile(file) } label: {
+                                    Button { hold(); clearSelection(); navigation.showFile(file) } label: {
                                         Image(systemName: "line.3.horizontal.decrease.circle")
                                     }
                                     .buttonStyle(QuietButtonStyle(horizontalPadding: 6))
@@ -558,8 +652,10 @@ struct WorkTimelineView: View {
             .padding(Space.m).frame(maxWidth: .infinity, alignment: .leading)
             .background(Theme.canvas, in: RoundedRectangle(cornerRadius: Metrics.radius))
             .id("work.timeline.inspector")
+            .background(WorkTimelineRevealProbe { onRevealInspector?() })
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("work.timeline.inspector")
+            .onKeyPress(.escape) { dismissInspector(record); return .handled }
         } else if navigation.view.selectedID != nil {
             VStack(alignment: .leading, spacing: 8) {
                 Text("This record is unavailable in the current snapshot.").workFont(.caption).foregroundStyle(Theme.muted)
@@ -570,9 +666,7 @@ struct WorkTimelineView: View {
     }
 
     private func dismissInspector(_ record: WorkTimelineRecord) {
-        popoverDismissRequest += 1
-        showingUndatedDetail = false
-        navigation.view.selectedID = nil
+        clearSelection()
         requestedRowFocus = record.id
         scrollRequest += 1
     }
@@ -587,7 +681,6 @@ struct WorkTimelineView: View {
             Task { @MainActor in
                 await Task.yield()
                 guard viewIsVisible, navigation.view.selectedID == record.id, generation == focusGeneration else { return }
-                if SnapshotMode.boundsScrollContentToViewport { onRevealInspector?() }
                 await Task.yield()
                 guard viewIsVisible, navigation.view.selectedID == record.id, generation == focusGeneration else { return }
                 focusedEvidence = "inspector"; accessibleEvidence = "inspector"
@@ -758,10 +851,45 @@ struct WorkTimelineView: View {
     }
 }
 
+/// Reveals the selection region when it appears outside the visible scroll
+/// area. It measures its own position against the enclosing scroll view once,
+/// on appearance; it never observes scrolling and never moves the page for an
+/// already-visible region.
+private struct WorkTimelineRevealProbe: NSViewRepresentable {
+    var onNeedReveal: () -> Void
+    func makeNSView(context: Context) -> RevealProbeView {
+        let view = RevealProbeView()
+        view.onNeedReveal = onNeedReveal
+        return view
+    }
+    func updateNSView(_ nsView: RevealProbeView, context: Context) { nsView.onNeedReveal = onNeedReveal }
+
+    final class RevealProbeView: NSView {
+        var onNeedReveal: (() -> Void)?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                var current = superview
+                while let view = current {
+                    if let scroll = view as? NSScrollView {
+                        let visible = scroll.contentView.bounds
+                        let mine = convert(bounds, to: scroll.contentView)
+                        let heading = CGPoint(x: mine.midX, y: mine.minY)
+                        if !visible.contains(heading) { onNeedReveal?() }
+                        return
+                    }
+                    current = view.superview
+                }
+            }
+        }
+    }
+}
+
 /// A scoped event observer holds the timeline when native scrolling begins.
 /// It returns the event unchanged and never captures events from another pane.
-private struct WorkTimelineScrollObserver: NSViewRepresentable {
-    var viewport: WorkTimelineViewport
+private struct WorkTimelineScrollObserver: NSViewRepresentable {    var viewport: WorkTimelineViewport
     var onScroll: () -> Void
     func makeNSView(context: Context) -> ScrollObserverView {
         let view = ScrollObserverView()

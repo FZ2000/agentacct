@@ -33,6 +33,12 @@ struct WorkTimeCanvasLayout {
     private static let upperAxisClearance = 12.0
     private static let outerMargin = 8.0
 
+    /// The smallest time window the canvas will show. Below a few seconds the
+    /// axis cannot stay meaningful and the overview pill becomes ungrabbable;
+    /// dense bursts are still separable at this scale. The maximum window is
+    /// the full recorded domain.
+    static let minimumVisibleSpan = 5.0
+
     init(
         records: [WorkTimelineRecord],
         window: WorkTimelineInterval,
@@ -146,12 +152,14 @@ struct WorkTimeCanvasLayout {
     }
 
     /// Constrain a requested window to the domain, preserving its span where
-    /// possible. Invalid domains become [0, 1]; a finite point domain expands
-    /// by one second when representable. Invalid windows show the full domain.
+    /// possible. Spans clamp to at least `minimumVisibleSpan` (unless the
+    /// domain itself is smaller). Invalid domains become [0, 1]; a finite
+    /// point domain expands by one second when representable. Invalid windows
+    /// show the full domain.
     static func clampedWindow(
         _ window: WorkTimelineInterval,
         to full: WorkTimelineInterval,
-        minimumSpan: Double = 1
+        minimumSpan: Double = minimumVisibleSpan
     ) -> WorkTimelineInterval {
         let full = normalizedDomain(full)
         guard window.lower.isFinite, window.upper.isFinite else { return full }
@@ -191,7 +199,7 @@ struct WorkTimeCanvasLayout {
         factor: Double,
         anchorFraction: Double,
         within full: WorkTimelineInterval,
-        minimumSpan: Double = 1
+        minimumSpan: Double = minimumVisibleSpan
     ) -> WorkTimelineInterval {
         let full = normalizedDomain(full)
         let current = clampedWindow(window, to: full, minimumSpan: minimumSpan)
@@ -214,7 +222,7 @@ struct WorkTimeCanvasLayout {
         factor: Double,
         anchorTime: Double,
         within full: WorkTimelineInterval,
-        minimumSpan: Double = 1
+        minimumSpan: Double = minimumVisibleSpan
     ) -> WorkTimelineInterval {
         let current = clampedWindow(window, to: full, minimumSpan: minimumSpan)
         let span = current.upper - current.lower

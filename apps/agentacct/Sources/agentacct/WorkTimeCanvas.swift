@@ -3,7 +3,9 @@ import SwiftUI
 
 /// A viewport into recorded time. Card positions describe timestamps; neither
 /// their placement nor their connecting stems claims an execution dependency.
-struct WorkTimeCanvas<Detail: View>: View {
+/// Selection is presented by the parent below the canvas, keeping this
+/// surface's geometry stable.
+struct WorkTimeCanvas: View {
     let records: [WorkTimelineRecord]
     let full: WorkTimelineInterval
     let window: WorkTimelineInterval
@@ -11,19 +13,15 @@ struct WorkTimeCanvas<Detail: View>: View {
     private var selectedID: String? { selectedRecord?.id }
     let onWindow: (WorkTimelineInterval) -> Void
     let onSelect: (WorkTimelineRecord) -> Void
+    let onCluster: ([WorkTimelineRecord], WorkTimelineInterval) -> Void
     let onDismiss: () -> Void
     let onHold: () -> Void
-    var dismissRequest = 0
     var focusRecordID: String? = nil
     var focusRequest = 0
     var compact = false
-    let detail: (WorkTimelineRecord) -> Detail
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var systemScale: CGFloat = 1
-    @State private var expandedCluster: String?
-    @State private var detailOwnerID: String?
     @State private var lastTriggerID: String?
-    @State private var chooserPosition: String?
     @State private var hoveredID: String?
     @FocusState private var focusedItem: String?
 
@@ -63,18 +61,14 @@ struct WorkTimeCanvas<Detail: View>: View {
                     }
                     }
                 }.clipped()
-                .task(id: FocusTarget(request: focusRequest, recordID: focusRecordID, ownerID: detailOwnerID)) {
-                    guard focusRecordID != nil, detailOwnerID == nil else { return }
-                    // Native popover dismissal restores its window's responder
+                .task(id: FocusTarget(request: focusRequest, recordID: focusRecordID)) {
+                    guard focusRecordID != nil else { return }
+                    // Selection dismissal restores its surface's responder
                     // first. Restore the event after that transition completes.
                     focusedItem = nil
                     try? await Task.sleep(for: .milliseconds(200))
-                    guard !Task.isCancelled, detailOwnerID == nil else { return }
+                    guard !Task.isCancelled else { return }
                     focus(in: layout)
-                }
-                .onChange(of: dismissRequest) { _, _ in
-                    expandedCluster = nil
-                    detailOwnerID = nil
                 }
             }
             .frame(height: canvasHeight)
@@ -222,79 +216,20 @@ struct WorkTimeCanvas<Detail: View>: View {
         .accessibilityLabel(item.isCluster ? "\(members.count) records in a time group" : "\(members.first?.title ?? "Activity"), \(members.first?.resultLabel ?? ""), \(members.first?.laneTitle ?? ""), \(members.first?.source ?? ""), \(members.first?.start.map { WorkTimelineTimeAxis.preciseLabel($0) } ?? "Time unavailable")")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .onKeyPress(.escape) {
-            expandedCluster = nil
-            detailOwnerID = nil
             onDismiss()
             return .handled
-        }
-        .popover(isPresented: Binding(
-            get: { !SnapshotMode.boundsScrollContentToViewport && (expandedCluster == item.id || (detailOwnerID == item.id && selectedRecord != nil)) },
-            set: { showing in
-                if !showing {
-                    if expandedCluster == item.id { expandedCluster = nil }
-                    if detailOwnerID == item.id { detailOwnerID = nil; onDismiss() }
-                }
-            })) {
-            if detailOwnerID == item.id, let record = selectedRecord {
-                WorkRecordPopover(width: CGFloat(min(600, 420 * scale)), maximumHeight: 560) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if item.isCluster {
-                            Button { onDismiss() } label: {
-                                Label("Back to \(members.count) records", systemImage: "chevron.left")
-                            }.buttonStyle(QuietButtonStyle(horizontalPadding: 8)).padding(8)
-                            .accessibilityIdentifier("work.timeline.cluster.back")
-                            Divider().overlay(Theme.hairline)
-                        }
-                        detail(record)
-                    }
-                }
-                .environment(\.dynamicTypeSize, dynamicTypeSize)
-            } else {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("\(members.count) records").workFont(.titleCard)
-                    Spacer()
-                    Button("Zoom here") {
-                        expandedCluster = nil
-                        let padding = max(item.timeBounds.span * 0.15, 1)
-                        onWindow(WorkTimeCanvasLayout.clampedWindow(.init(lower: item.timeBounds.lower - padding,
-                            upper: item.timeBounds.upper + padding), to: full))
-                    }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
-                    .disabled(item.timeBounds.span <= 1 || item.timeBounds.span >= window.span * 0.9)
-                }
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(members) { record in
-                            Button {
-                                onSelect(record)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(record.title).workFont(.rowLabel)
-                                    Text("\(record.laneTitle) · \(record.resultLabel)")
-                                        .workFont(.caption).foregroundStyle(tint(record))
-                                }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
-                            }.buttonStyle(SurfaceButtonStyle())
-                            .accessibilityIdentifier("work.timeline.record.\(record.id)")
-                        }
-                    }.scrollTargetLayout()
-                }.scrollPosition(id: $chooserPosition).frame(maxHeight: 300)
-            }.padding(16).frame(width: min(560, 340 * scale))
-            .environment(\.dynamicTypeSize, dynamicTypeSize)
-            }
         }
     }
 
     private func activate(_ item: WorkTimeCanvasLayout.Item, members: [WorkTimelineRecord]) {
-        detailOwnerID = item.id
         lastTriggerID = item.id
-        if item.isCluster { onHold(); onDismiss(); expandedCluster = item.id }
-        else if let record = members.first { expandedCluster = nil; onSelect(record) }
+        if item.isCluster { onHold(); onCluster(members, item.timeBounds) }
+        else if let record = members.first { onSelect(record) }
     }
 
     private struct FocusTarget: Equatable {
         let request: Int
         let recordID: String?
-        let ownerID: String?
     }
 
     private func focus(in layout: WorkTimeCanvasLayout) {
@@ -389,8 +324,9 @@ private struct WorkTimeWindowScroller: View {
             .simultaneousGesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("work-time-overview")).onChanged { value in
                 let start = dragStart ?? window; dragStart = start
                 let delta = value.translation.width / width * full.span
-                let lower = isStart ? min(max(start.lower + delta, full.lower), start.upper - min(1, full.span)) : start.lower
-                let upper = isStart ? start.upper : max(min(start.upper + delta, full.upper), start.lower + min(1, full.span))
+                let minimum = min(WorkTimeCanvasLayout.minimumVisibleSpan, full.span)
+                let lower = isStart ? min(max(start.lower + delta, full.lower), start.upper - minimum) : start.lower
+                let upper = isStart ? start.upper : max(min(start.upper + delta, full.upper), start.lower + minimum)
                 onWindow(.init(lower: lower, upper: upper))
             }.onEnded { _ in dragStart = nil })
             .onHover { ($0 ? NSCursor.resizeLeftRight : NSCursor.arrow).set() }
@@ -401,7 +337,7 @@ private struct WorkTimeWindowScroller: View {
     /// The graphical range exposes native slider values and standard
     /// increment/decrement actions to keyboard and accessibility navigation.
     private func accessibleRangeControl(edge: Bool?) -> some View {
-        let minimum = min(1, full.span)
+        let minimum = min(WorkTimeCanvasLayout.minimumVisibleSpan, full.span)
         let lower = edge == false ? window.lower + minimum : full.lower
         let upper = edge == true ? window.upper - minimum
             : (edge == false ? full.upper : full.upper - window.span)

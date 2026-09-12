@@ -168,9 +168,18 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
         XCTAssertEqual(zoomed.lower + (zoomed.upper - zoomed.lower) * 0.25, 135, accuracy: 0.000001)
         XCTAssertEqual(WorkTimeCanvasLayout.zoomedWindow(window, factor: 0.001, anchorFraction: 0, within: full), full)
         let smallest = WorkTimeCanvasLayout.zoomedWindow(window, factor: .greatestFiniteMagnitude, anchorFraction: 0.25, within: full)
-        XCTAssertEqual(smallest.upper - smallest.lower, 1, accuracy: 0.000001)
-        XCTAssertEqual(smallest.lower + 0.25, 135, accuracy: 0.000001)
+        XCTAssertEqual(smallest.upper - smallest.lower, WorkTimeCanvasLayout.minimumVisibleSpan, accuracy: 0.000001)
+        XCTAssertEqual(smallest.lower + (smallest.upper - smallest.lower) * 0.25, 135, accuracy: 0.000001)
         XCTAssertEqual(WorkTimeCanvasLayout.zoomedWindow(window, factor: .nan, anchorFraction: 0, within: full), window)
+    }
+
+    func testWindowSpanNeverShrinksBelowTheReadableMinimum() {
+        let window = WorkTimelineInterval(lower: 120, upper: 140)
+        let zoomed = WorkTimeCanvasLayout.zoomedWindow(window, factor: 1_000_000, anchorFraction: 0.5, within: full)
+        XCTAssertEqual(zoomed.upper - zoomed.lower, WorkTimeCanvasLayout.minimumVisibleSpan, accuracy: 0.000001)
+        // Unless the whole recorded domain is smaller than the minimum.
+        let tiny = WorkTimelineInterval(lower: 42, upper: 43)
+        XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(tiny, to: tiny), tiny)
     }
 
     func testZoomByAbsoluteAnchorTimeMatchesFractionAndClampsOutsideAnchors() {
@@ -187,7 +196,8 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
 
     func testClampNormalizesReversedDegenerateAndNonfiniteWindows() {
         XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(.init(lower: 160, upper: 140), to: full), .init(lower: 140, upper: 160))
-        XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(.init(lower: 200, upper: 200), to: full), .init(lower: 199, upper: 200))
+        XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(.init(lower: 200, upper: 200), to: full), .init(lower: 195, upper: 200),
+            "A degenerate point window expands to the readable minimum span")
         XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(.init(lower: .nan, upper: 150), to: full), full)
         XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(full, to: .init(lower: 42, upper: 42)), .init(lower: 42, upper: 43))
         XCTAssertEqual(WorkTimeCanvasLayout.clampedWindow(full, to: .init(lower: -.greatestFiniteMagnitude, upper: .greatestFiniteMagnitude)), .init(lower: 0, upper: 1))
