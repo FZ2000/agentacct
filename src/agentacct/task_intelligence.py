@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .task_timeline import build_timeline_events, task_checks as _checks
 from .task_outcome import reduce_task_outcome, step_verification_counts
 
 
@@ -25,24 +26,6 @@ def _number(value: Any) -> float:
 def _items(task: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     rows = task.get("work_items") if isinstance(task.get("work_items"), list) else []
     return [row for row in rows if isinstance(row, Mapping)]
-
-
-def _checks(task: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    rows: list[Mapping[str, Any]] = []
-    seen: set[str] = set()
-    sources = [task.get("task_evidence_events")]
-    sources.extend(item.get("evidence_events") for item in _items(task))
-    for source in sources:
-        if not isinstance(source, list):
-            continue
-        for row in source:
-            if not isinstance(row, Mapping):
-                continue
-            key = _text(row.get("event_id")) or repr(sorted(dict(row).items()))
-            if key not in seen:
-                seen.add(key)
-                rows.append(row)
-    return sorted(rows, key=lambda row: _number(row.get("created_at") or row.get("occurred_at")))
 
 
 def _latest_checks(task: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -385,72 +368,7 @@ def _task_span_seconds(task: Mapping[str, Any]) -> float | None:
 def _timeline(
     task: Mapping[str, Any], control: Mapping[str, Any] | None, *, limit: int
 ) -> tuple[list[dict[str, Any]], int]:
-    events: list[dict[str, Any]] = []
-    primary = task.get("primary_root") if isinstance(task.get("primary_root"), Mapping) else {}
-    primary_client = _text(primary.get("client"))
-    primary_session = _text(primary.get("client_session_id"))
-    for item in _items(task):
-        client = _text(item.get("client") or item.get("reporting_source"))
-        session_id = _text(item.get("client_session_id"))
-        lane = "primary" if (client, session_id) == (primary_client, primary_session) else "supporting"
-        events.append(
-            {
-                "kind": "work",
-                "occurred_at": _number(item.get("started_at") or item.get("updated_at")),
-                "lane": lane,
-                "title": _text(item.get("title") or item.get("summary") or "Recorded work"),
-                "status": _text(item.get("latest_status") or "recorded"),
-                "source": _text(item.get("reporting_source") or item.get("client") or "work-ledger"),
-                "confidence": _text(item.get("join_confidence") or "claimed"),
-                "important": bool(item.get("blocker")),
-            }
-        )
-    for check in _checks(task):
-        result = _text(check.get("result") or "unknown").lower()
-        events.append(
-            {
-                "kind": "check",
-                "occurred_at": _number(check.get("created_at") or check.get("occurred_at")),
-                "lane": "evidence",
-                "title": _proof_summary(check),
-                "status": result,
-                "source": _text(check.get("source") or "machine evidence"),
-                "confidence": "observed",
-                "important": True,
-            }
-        )
-    if isinstance(control, Mapping):
-        for attempt in control.get("attempts") if isinstance(control.get("attempts"), list) else []:
-            if not isinstance(attempt, Mapping):
-                continue
-            events.append(
-                {
-                    "kind": "attempt",
-                    "occurred_at": _number(attempt.get("started_at") or attempt.get("created_at")),
-                    "lane": "control",
-                    "title": "agentacct-owned execution attempt",
-                    "status": _text(attempt.get("execution_state") or "pending"),
-                    "source": "agentacct Control Store",
-                    "confidence": "owned",
-                    "important": True,
-                }
-            )
-        for event in control.get("events") if isinstance(control.get("events"), list) else []:
-            if not isinstance(event, Mapping):
-                continue
-            events.append(
-                {
-                    "kind": "control",
-                    "occurred_at": _number(event.get("occurred_at")),
-                    "lane": "control",
-                    "title": _text(event.get("action") or "Control action").replace("_", " ").title(),
-                    "status": _text(event.get("next_state") or "recorded"),
-                    "source": "agentacct Control Store",
-                    "confidence": "owned",
-                    "important": True,
-                }
-            )
-    events.sort(key=lambda event: (event["occurred_at"], event["kind"], event["title"]))
+    events = build_timeline_events(task, _checks(task), control)
     total = len(events)
     if total <= limit:
         return events, total
@@ -505,6 +423,7 @@ def build_task_intelligence(
         "coverage": _coverage(task, control),
         "lanes": _lanes(task),
         "timeline": {
+            "schema_version": "agentacct.task-timeline.v1",
             "events": timeline,
             "shown": len(timeline),
             "total": total,

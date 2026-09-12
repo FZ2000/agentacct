@@ -3296,6 +3296,32 @@ def create_local_api_app(
             "truncated": offset + len(items) < total,
         }
 
+    from .task_timeline import TimelineCursorError, TimelineSnapshotCache, build_timeline_events
+
+    timeline_snapshots = TimelineSnapshotCache()
+
+    @app.get("/v1/task-timeline")
+    def v1_task_timeline(
+        request: Request,
+        task: str = Query(..., min_length=1),
+        limit: int = Query(200, ge=1, le=500),
+        cursor: str | None = Query(None, min_length=1, max_length=128),
+    ) -> dict[str, Any]:
+        """Pages from one immutable, task-scoped timeline snapshot. Expired cursors return 409."""
+        _require_v1_token(request)
+        if cursor is not None:
+            try:
+                return timeline_snapshots.page(task, limit=limit, cursor=cursor)
+            except TimelineCursorError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        projection = _v1_task_projection()
+        selected = next((row for row in _visible_tasks(projection)
+                         if str(row.get("public_task_id")) == task), None)
+        if selected is None:
+            raise HTTPException(status_code=404, detail="unknown task for this store")
+        return timeline_snapshots.page(task, limit=limit,
+            events=build_timeline_events(selected))
+
     @app.get("/v1/receipt")
     def v1_receipt(
         request: Request,

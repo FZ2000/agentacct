@@ -266,15 +266,9 @@ def tool_names_preview(
 # --- Evidence axis ------------------------------------------------------------
 
 def _check_source(check: Mapping[str, Any]) -> str:
-    # Trust ``source_type`` only. The raw ``source`` is agent-authored and would
-    # let an MCP check forge the CI label; see task_outcome._check_independence,
-    # which is the load-bearing version of this same rule for the evidence tier.
-    source_type = _text(check.get("source_type")).lower()
-    if source_type == "client_hook":
-        return SOURCE_HOOK
-    if source_type in {"ci", "external", "provider"}:
-        return SOURCE_CI
-    return SOURCE_MCP
+    from .task_timeline import check_source
+
+    return check_source(check)
 
 
 def _project_checks(task: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -559,6 +553,30 @@ def evidence_coverage_ledger(evidence: Mapping[str, Any]) -> str:
     if still_open:
         bits.append(f"{still_open} step(s) still open")
     return " · ".join(bits)
+
+
+def receipt_cost_text(cost: Mapping[str, Any]) -> str:
+    """The Cost line — one dollar grammar shared by every surface. ``—`` when no
+    estimate exists; otherwise ``$X.XX · <basis>`` with a ``(partial)`` suffix
+    when the cost is incomplete. The basis (e.g. ``pricing_table``) is always
+    named, so an estimate can never read as a billed figure."""
+
+    amount = cost.get("estimated_cost_usd")
+    if amount is None:
+        return "—"
+    basis = cost.get("cost_basis") or "unknown basis"
+    suffix = "" if cost.get("cost_complete") else " (partial)"
+    return f"${float(amount):.2f} · {basis}{suffix}"
+
+
+def receipt_category_text(counts: Mapping[str, Any]) -> str:
+    """The tool-category summary — ``category×N`` pairs, or ``not instrumented``
+    when no hook/transcript categories were captured. Shared by every surface so
+    the Actions line reads identically."""
+
+    if not counts:
+        return "not instrumented"
+    return " ".join(f"{name}×{value}" for name, value in sorted(counts.items()))
 
 
 def plan_share_headline(plan_share: Mapping[str, Any] | None) -> str:
@@ -1028,15 +1046,9 @@ def _sessions_block(task: Mapping[str, Any]) -> list[dict[str, Any]]:
 
     primary = _mapping(task.get("primary_root"))
     primary_key = (_text(primary.get("client")), _text(primary.get("client_session_id")))
-    # Only roots carry a ``client_session_title``; a subagent's is null, so the
-    # drill-down showed a raw session id until you expanded it. Recover a name
-    # from the subagent's FIRST recorded step so the row is legible up front.
-    step_title_by_session: dict[str, str] = {}
-    for item in _items(task):
-        session_id = _text(item.get("client_session_id"))
-        title = _text(item.get("title") or item.get("objective") or item.get("summary"))
-        if session_id and title and session_id not in step_title_by_session:
-            step_title_by_session[session_id] = title
+    from .task_timeline import session_display_titles
+
+    titles = session_display_titles(task)
     sessions_by_key: dict[tuple[str, str], Mapping[str, Any]] = {}
     raw_sessions = task.get("sessions") if isinstance(task.get("sessions"), list) else []
     for session in raw_sessions:
@@ -1068,11 +1080,7 @@ def _sessions_block(task: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "client_session_id": key[1],
                     "session_kind": _text(session.get("session_kind")) or None,
                     "role": "root" if key == root_key else "subagent",
-                    "title": (
-                        _text(session.get("client_session_title"))
-                        or step_title_by_session.get(key[1])
-                        or None
-                    ),
+                    "title": titles.get(key) or None,
                     "project": _text(session.get("project")) or None,
                     "last_activity_at": _number(session.get("last_activity_at")) or None,
                 }
@@ -1435,6 +1443,9 @@ __all__ = [
     "build_attention_reason",
     "evidence_coverage_headline",
     "evidence_coverage_ledger",
+    "receipt_cost_text",
+    "receipt_category_text",
+    "plan_share_headline",
     "latest_store_activity",
     "session_start_index",
 ]
