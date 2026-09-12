@@ -16,7 +16,7 @@ final class WorkTimelineExportTests: XCTestCase {
         XCTAssertTrue(output.contains("Slot A: event:first"))
         XCTAssertTrue(output.contains("Slot B: event:second"))
         XCTAssertTrue(output.contains("Relationship: " + projection.relationship(first, second)))
-        XCTAssertTrue(output.contains("1 selected comparison records fall outside the displayed filters"))
+        XCTAssertTrue(output.contains("1 selected comparison record falls outside the displayed filters"))
         XCTAssertTrue(output.contains("Comparison-only record: event:second"))
         XCTAssertFalse(output.contains("Displayed record: event:second"))
     }
@@ -81,7 +81,7 @@ final class WorkTimelineExportTests: XCTestCase {
         XCTAssertTrue(output.contains("Current failures filter: on"))
         XCTAssertTrue(output.contains("Time range: 1970-01-01T00:01:40Z to 1970-01-01T00:03:20Z"))
         XCTAssertTrue(output.contains("Undated records remain included"))
-        XCTAssertTrue(output.contains("1 displayed records of 2 loaded records"))
+        XCTAssertTrue(output.contains("1 displayed record of 2 loaded records"))
         XCTAssertTrue(output.contains("Recorded at: unknown"))
         XCTAssertTrue(output.contains("Result: Failed"))
         XCTAssertTrue(output.contains("Agent-reported check"))

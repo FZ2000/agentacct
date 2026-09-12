@@ -265,8 +265,8 @@ struct WorkTimelineView: View {
         panel.title = "Export displayed work evidence"
         let displayedIDs = Set(filtered.map(\.id))
         let additional = selectedComparison.filter { !displayedIDs.contains($0.id) }.count
-        panel.message = "\(filtered.count) displayed records from this task. "
-            + (additional > 0 ? "Also includes \(additional) selected comparison records outside the filters. " : "")
+        panel.message = "\(filtered.count) displayed \(filtered.count == 1 ? "record" : "records") from this task. "
+            + (additional > 0 ? "Also includes \(additional) selected comparison \(additional == 1 ? "record" : "records") outside the filters. " : "")
             + "Source identities, the selected comparison and coverage limits are included."
         guard panel.runModal() == .OK, let destination = panel.url else { return }
         do {
@@ -338,7 +338,7 @@ struct WorkTimelineView: View {
             }
             HStack {
                 let failureCount = displayProjection.records.filter(\.isCurrentFailure).count
-                Button(navigation.view.failuresOnly ? "Show all records" : "Current failures · \(failureCount)") {
+                Button(navigation.view.failuresOnly ? "Show all records" : "Current failures · \(failureCount) in loaded records") {
                     hold()
                     navigation.view.failuresOnly.toggle()
                 }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
@@ -539,6 +539,7 @@ struct WorkTimelineView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(SurfaceButtonStyle(focusInset: 2))
+        .help("Inspect this record's source, scope, identity and files")
         .id(record.id)
         .focusable()
         .focused($focusedEvidence, equals: record.id)

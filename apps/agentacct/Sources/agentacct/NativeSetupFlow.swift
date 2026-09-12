@@ -689,9 +689,8 @@ struct NativeSetupFlow: View {
 
     private func failureContent(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: Space.xl) {
-            heading("\(setup.selectedClient.map { $0.title + " setup" } ?? "Recorder setup") needs attention", detail: "Review the reported issue, then retry setup. Some changes may already have completed.")
-            informationRow(symbol: "exclamationmark.triangle", title: "Setup stopped", detail: message, tint: Theme.coral)
-            Text("Retry checks the existing installation before continuing. If the output asks for client consent, complete that step in the client first.")
+            heading("\(setup.selectedClient.map { $0.title + " setup" } ?? "Recorder setup") needs attention", detail: message)
+            Text("If setup output asks for client consent, complete that step in the client before retrying.")
                 .workFont(.body).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             if !setup.canRunInteractiveSetup { unavailableInstaller }
         }
@@ -808,6 +807,10 @@ struct NativeSetupFlow: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("setup-install-scope")
                 Text("Files requiring a manual merge may be skipped; setup output identifies the next steps.")
+                    .workFont(.caption).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if phaseKey == .failed {
+                Text("Some changes may already be applied. Retry checks the existing installation.")
                     .workFont(.caption).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }

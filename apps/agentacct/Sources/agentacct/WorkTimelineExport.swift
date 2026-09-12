@@ -13,7 +13,7 @@ enum WorkTimelineExport {
             "Last successful session snapshot: \(snapshotAt?.ISO8601Format() ?? "not observed in this view")",
             "Task outcome: \(outcome ?? "not supplied")", "Handoff: \(handoff ?? "not supplied")",
             "View: \(following ? "following latest observed snapshot" : "held for review")",
-            "Scope: \(records.count) displayed records of \(projection.records.count) loaded records.",
+            "Scope: \(records.count) displayed \(records.count == 1 ? "record" : "records") of \(projection.records.count) loaded \(projection.records.count == 1 ? "record" : "records").",
             "These are displayed records, not deduplicated check runs. Unloaded evidence is excluded.",
             "Search: \(query.isEmpty ? "none" : query)", "Exact file filter: \(file ?? "none")",
             "Current failures filter: \(failuresOnly ? "on" : "off")",
@@ -36,7 +36,7 @@ enum WorkTimelineExport {
         let displayedIDs = Set(records.map(\.id))
         let comparisonOnly = comparison.filter { !displayedIDs.contains($0.id) }
         if !comparisonOnly.isEmpty {
-            lines.append("\(comparisonOnly.count) selected comparison records fall outside the displayed filters; included separately below.")
+            lines.append("\(comparisonOnly.count) selected comparison \(comparisonOnly.count == 1 ? "record falls" : "records fall") outside the displayed filters; included separately below.")
         }
         for record in records + comparisonOnly {
             lines += ["", "---", record.title, "\(displayedIDs.contains(record.id) ? "Displayed record" : "Comparison-only record"): \(record.id)",

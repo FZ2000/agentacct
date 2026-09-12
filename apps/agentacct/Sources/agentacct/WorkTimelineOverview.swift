@@ -46,9 +46,8 @@ enum WorkTimelineRangeNavigation {
 
 enum WorkTimelineTimeAxis {
     static func preciseLabel(_ time: Double) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return "\(formatter.string(from: Date(timeIntervalSince1970: time))) · Unix \(time)"
+        let date = Date(timeIntervalSince1970: time)
+        return "\(date.ISO8601Format(.init(includingFractionalSeconds: true))) · Unix \(time)"
     }
     static func showsDates(in range: WorkTimelineInterval, calendar: Calendar = .current) -> Bool {
         !calendar.isDate(Date(timeIntervalSince1970: range.lower), inSameDayAs: Date(timeIntervalSince1970: range.upper))

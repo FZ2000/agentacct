@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Native reading controls for the detailed Work, recording and Sources views.
+/// Native reading controls for the main window's content views.
 /// Default typography stays unchanged; the setting persists in the real app.
 enum ReadingSize {
     struct Option: Identifiable {
@@ -39,7 +39,7 @@ struct ReadingSizeCommands: Commands {
                 .buttonStyle(QuietButtonStyle())
                 .keyboardShortcut("0", modifiers: .command)
             Divider()
-            Picker("Work, recording and Sources text", selection: Binding(
+            Picker("Window content text size", selection: Binding(
                 get: { ReadingSize.clamped(selection) }, set: { selection = $0 }
             )) {
                 ForEach(ReadingSize.options) { option in Text(option.title).tag(option.id) }
