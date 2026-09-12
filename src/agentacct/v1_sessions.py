@@ -367,6 +367,7 @@ def slice_sessions_payload(
     roots_only: bool,
     limit: int,
     offset: int,
+    client: str | None = None,
 ) -> dict[str, Any]:
     """The wire envelope for one request — a filter + slice over the cached view.
 
@@ -380,6 +381,10 @@ def slice_sessions_payload(
 
     rows = view.get("rows") or []
     pool = [row for row in rows if row.get("is_root")] if roots_only else list(rows)
+    if client is not None:
+        # Filter before pagination so another client's busy session population
+        # cannot starve an explicitly requested client's capture lookup.
+        pool = [row for row in pool if row.get("client") == client]
     page = pool[offset : offset + limit]
     # ``is_root``/``fold_top`` are view-internal bookkeeping (the wire has
     # related.parent); strip them without mutating the cached rows.
@@ -394,6 +399,7 @@ def slice_sessions_payload(
         "total_root_sessions": view.get("total_root_sessions"),
         "filtered_total": len(pool),
         "roots_only": roots_only,
+        "client": client,
         "offset": offset,
         "limit": limit,
         "returned": len(page),
@@ -527,6 +533,7 @@ def _project_step(item: dict[str, Any], models: list[dict[str, Any]]) -> dict[st
         "section_id": item.get("section_id"),
         "title": item.get("title"),
         "latest_status": item.get("latest_status"),
+        "latest_event_id": item.get("latest_event_id"),
         "kind": item.get("kind"),
         "phase": item.get("phase"),
         "started_at": item.get("started_at"),

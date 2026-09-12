@@ -267,6 +267,62 @@ def test_pagination_disclose_totals_and_truncation(tmp_path):
     assert beyond["truncated"] is False
 
 
+def test_client_filter_precedes_pagination_without_changing_store_totals(tmp_path):
+    service = SentinelService(tmp_path)
+    now = time.time()
+    for index in range(55):
+        _record_usage(service, client="claude-code", session_id=f"busy-{index}", tokens=1, updated_at=now - index)
+    for index in range(3):
+        _record_usage(service, client="codex", session_id=f"target-{index}", tokens=1, updated_at=now - 100 - index)
+    client = TestClient(create_local_api_app(store_dir=tmp_path, v1_auth_token=TOKEN))
+
+    response = client.get("/v1/sessions", headers=AUTH, params={"client": "codex", "roots_only": "false", "limit": 1, "offset": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["client"] == "codex"
+    assert payload["total_sessions"] == 58
+    assert payload["filtered_total"] == 3
+    assert payload["returned"] == 1
+    assert payload["offset"] == 1
+    assert payload["truncated"] is True
+    assert [row["client_session_id"] for row in payload["sessions"]] == ["target-1"]
+    assert {row["client"] for row in payload["sessions"]} == {"codex"}
+
+    rest = client.get("/v1/sessions", headers=AUTH, params={"client": "codex", "limit": 2, "offset": 2}).json()
+    assert [row["client_session_id"] for row in rest["sessions"]] == ["target-2"]
+    assert rest["truncated"] is False
+    unknown = client.get("/v1/sessions", headers=AUTH, params={"client": "unknown-client"}).json()
+    assert unknown["sessions"] == []
+    assert unknown["filtered_total"] == 0
+    assert unknown["total_sessions"] == 58
+    assert _sessions(client, limit=1)["sessions"][0]["client"] == "claude-code"
+
+
+def test_client_and_root_filters_both_apply_before_slice_without_mutating_cached_rows():
+    from agentacct.v1_sessions import slice_sessions_payload
+
+    rows = [
+        {"client": "claude-code", "client_session_id": "other-root", "is_root": True},
+        {"client": "codex", "client_session_id": "target-child", "is_root": False},
+        {"client": "codex", "client_session_id": "target-root", "is_root": True},
+    ]
+    view = {"rows": rows, "total_sessions": 3, "total_root_sessions": 2, "generated_at": 100}
+
+    roots = slice_sessions_payload(view, roots_only=True, limit=1, offset=0, client="codex")
+    everyone = slice_sessions_payload(view, roots_only=False, limit=1, offset=0, client="codex")
+
+    assert [row["client_session_id"] for row in roots["sessions"]] == ["target-root"]
+    assert roots["filtered_total"] == 1
+    assert roots["total_root_sessions"] == 2
+    assert roots["truncated"] is False
+    assert [row["client_session_id"] for row in everyone["sessions"]] == ["target-child"]
+    assert everyone["filtered_total"] == 2
+    assert everyone["truncated"] is True
+    assert all("is_root" in row for row in rows)
+    assert roots["generated_at"] == 100
+
+
 # ---------------------------------------------------------------------------
 # status + row shape
 # ---------------------------------------------------------------------------
@@ -856,6 +912,10 @@ def test_detail_steps_carry_tui_grade_depth(tmp_path):
     step = steps[0]
     assert step["section_id"] == "s1"
     assert step["latest_status"] == "completed"
+    assert isinstance(step["latest_event_id"], str) and step["latest_event_id"]
+    # Native first-capture confirmation needs the observed section event, not
+    # the session's last-activity timestamp (which can be a usage import).
+    assert step["latest_event_id"] == f"evt_sec_claude-code_root-a_s1_{int(now - 600)}"
     assert step["kind"] == "implementation"
     assert step["title"] == "build the thing"
     assert step["started_at"] is not None and step["updated_at"] is not None

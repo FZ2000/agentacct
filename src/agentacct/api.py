@@ -344,7 +344,9 @@ def _fmt_time(value: Any) -> str:
         timestamp = float(value)
     except (OverflowError, TypeError, ValueError):
         return ""
-    if not math.isfinite(timestamp) or timestamp <= 0:
+    # Apply the UTC domain bound before local-time conversion: west-of-UTC
+    # timezones can otherwise render the year-10000 boundary as year 9999.
+    if not math.isfinite(timestamp) or not 0 < timestamp < 253_402_300_800:
         return ""
     try:
         return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
@@ -2965,10 +2967,11 @@ def create_local_api_app(
         roots_only: bool = Query(True),
         limit: int = Query(50, ge=1, le=500),
         offset: int = Query(0, ge=0),
+        client: str | None = Query(None, min_length=1),
     ) -> dict[str, Any]:
         """The versioned session list for native shells (see agentacct.v1_sessions).
 
-        ``roots_only`` filters BEFORE the recency slice (the "12 root
+        ``client`` and ``roots_only`` filter BEFORE the recency slice (the "12 root
         sessions" fix), ``offset``/``limit`` walk the filtered population, and
         the envelope disclose every cut (totals + ``truncated``). Rows carry
         per-session weekly-plan shares with children folded into their root
@@ -2984,7 +2987,7 @@ def create_local_api_app(
                 _derived_work_ledger(events, fingerprint=fingerprint), events
             ),
         )
-        return slice_sessions_payload(view, roots_only=roots_only, limit=limit, offset=offset)
+        return slice_sessions_payload(view, roots_only=roots_only, limit=limit, offset=offset, client=client)
 
     @app.get("/v1/session")
     def v1_session_detail(

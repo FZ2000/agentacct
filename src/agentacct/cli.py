@@ -3136,14 +3136,24 @@ def runtime_start(
             ),
         ),
     ] = False,
+    sync_clients: Annotated[
+        bool,
+        typer.Option(
+            "--sync-clients/--no-sync-clients",
+            help="Refresh client integrations on startup. Disable for recorder-only reconnection.",
+        ),
+    ] = True,
 ) -> None:
     """Idempotently start continuous local sync and the local JSON API."""
 
     if foreground:
-        _runtime_start_foreground(store_dir, host=host, port=port, json_output=json_output)
+        _runtime_start_foreground(
+            store_dir, host=host, port=port, json_output=json_output, sync_clients=sync_clients
+        )
         return
     resolved = _resolve_dashboard_cli_store_dir(store_dir).path
-    _resync_client_integration_on_start(resolved)
+    if sync_clients:
+        _resync_client_integration_on_start(resolved)
     _health, external_watcher_running = _runtime_ingestion_health(resolved)
     try:
         payload = _managed_runtime(resolved, host=host, port=port).start(
@@ -3165,11 +3175,13 @@ def _runtime_start_foreground(
     host: str,
     port: int,
     json_output: bool,
+    sync_clients: bool = True,
 ) -> None:
     """Ensure the runtime is up, then supervise it in the foreground."""
 
     resolved = _resolve_dashboard_cli_store_dir(store_dir).path
-    _resync_client_integration_on_start(resolved)
+    if sync_clients:
+        _resync_client_integration_on_start(resolved)
     manager = _managed_runtime(resolved, host=host, port=port)
 
     def _ensure() -> dict[str, Any]:
@@ -5206,6 +5218,41 @@ def _instruction_target_path(agent: str, *, user: bool, path: Path | None) -> Pa
             return _opencode_config_dir() / "AGENTS.md"
         return Path.home() / install_guide.INSTRUCTION_USER_FILES[agent]
     return Path.cwd() / install_guide.INSTRUCTION_PROJECT_FILES[agent]
+
+
+@setup_app.command("preview")
+def setup_preview(
+    agent: Annotated[str, typer.Option(help="Client to preview: codex, claude-code, opencode, or hermes.")],
+    user: Annotated[bool, typer.Option("--user", help="Preview the user-level onboarding content.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit the versioned read-only preview payload.")] = False,
+    store_dir: Annotated[Optional[Path], typer.Option(help="Proposed absolute recording store; no store is created or opened.")] = None,
+) -> None:
+    """Inspect proposed managed setup content without changing any files."""
+    from .setup_preview import CLIENTS, build_setup_preview
+
+    if agent not in CLIENTS:
+        raise typer.BadParameter("agent must be one of: " + ", ".join(CLIENTS))
+    if not user:
+        raise typer.BadParameter("This preview supports user scope only; pass --user.")
+    if store_dir is None:
+        store_dir, _ = _resolve_onboard_global_store_dir()
+    else:
+        store_dir = store_dir.expanduser()
+        if not store_dir.is_absolute():
+            raise typer.BadParameter("store-dir must be absolute for a user-scope preview.")
+    preview = build_setup_preview(
+        agent, home=Path.home(), store_dir=store_dir,
+        command=_resolve_absolute_mcp_command(), python_executable=sys.executable,
+    )
+    if json_output:
+        print(json.dumps(preview, indent=2))
+        return
+    print(preview["basis"])
+    for file in preview["files"]:
+        print(f"\n{file['title']}: {file['path']} ({file['existing_status']})")
+        print(file["proposed_content"])
+        for condition in file["conditions"]:
+            print(f"- {condition}")
 
 
 @setup_app.command("instructions")
