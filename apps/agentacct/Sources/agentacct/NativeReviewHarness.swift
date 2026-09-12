@@ -10,13 +10,14 @@ struct NativeTimelineReviewFrame: Decodable {
 }
 
 enum NativeReviewScreen: String, CaseIterable, Identifiable {
-    case largeDashboard, largeUsage, liveTimeline, largeOffline, largeSources, largeTimeline, largeHealth, largeSetup, compactLargeSetup, largeSetupContent, largeActivation, welcome, review, setupContent, working, pending, failure, recovery, recovered, updateRecovery, activation, timeline, comparison, focus, work, compactWork, offline, health, sources
+    case largeDashboard, largeUsage, liveTimeline, largeOffline, largeSources, largeTimeline, largeHealth, largeSetup, compactLargeSetup, largeSetupContent, largeActivation, welcome, review, setupContent, working, pending, failure, recovery, recovered, updateRecovery, activation, timeline, recordDetail, focus, work, compactWork, offline, health, sources
     var id: String { rawValue }
     var usesLargeText: Bool { [.largeDashboard, .largeUsage, .largeOffline, .largeSources, .largeTimeline, .largeHealth, .largeSetup, .compactLargeSetup, .largeSetupContent, .largeActivation].contains(self) }
     var title: String {
         switch self {
         case .largeOffline: return "Large text saved work"
         case .liveTimeline: return "Live sample timeline"
+        case .recordDetail: return "Record details"
         case .largeSources: return "Large text Sources"
         case .largeTimeline: return "Large text timeline"
         case .largeHealth: return "Large text health"
@@ -133,11 +134,11 @@ struct NativeReviewSurface: View {
                     DashboardPane()
                 case .largeUsage:
                     UsagePane()
-                case .timeline, .comparison, .largeTimeline, .liveTimeline:
+                case .timeline, .recordDetail, .largeTimeline, .liveTimeline:
                     if let receipt = (screen == .liveTimeline ? dashboard.receipt : fixture.work?.receipt) {
                         ScrollViewReader { proxy in
                             ScrollView {
-                                WorkTimelineView(receipt: receipt, reviewComparison: screen == .comparison,
+                                WorkTimelineView(receipt: receipt, reviewSelectedRecord: screen == .recordDetail,
                                     onRevealInspector: { proxy.scrollTo("work.timeline.inspector", anchor: .top) },
                                     onRevealRecords: { proxy.scrollTo("work.timeline.records", anchor: .top) },
                                     onRevealHeading: { proxy.scrollTo("work.timeline.heading", anchor: .top) }).padding(20)
@@ -354,7 +355,7 @@ enum NativeReviewRunner {
             for scheme in [ColorScheme.light, .dark] {
                 SnapshotScheme.override = scheme
                 let compact = screen == .largeOffline || screen == .largeSources || screen == .compactWork || screen == .compactLargeSetup || screen == .largeActivation
-                let tall = screen == .comparison || screen == .sources || screen == .setupContent || screen == .largeSetupContent
+                let tall = screen == .recordDetail || screen == .sources || screen == .setupContent || screen == .largeSetupContent
                 let size = CGSize(width: screen == .focus ? 1320 : compact ? 960 : 1120, height: compact ? 640 : tall ? 1500 : 860)
                 let view = NativeReviewSurface(fixture: fixture, screen: screen)
                     .frame(width: size.width, height: size.height)

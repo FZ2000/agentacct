@@ -33,11 +33,10 @@ final class WorkTimelineViewportTests: XCTestCase {
         navigation.view.selectedID = "previously-selected"
         navigation.view.scrollOffsets = [.init(x: 30, y: 850), .init(x: 0, y: 170)]
         navigation.view.overviewExpanded = true
-        navigation.view.comparisonExpanded = false
         let original = navigation.view
         navigation.beginArrivals()
         navigation.view.scrollOffsets = [.init(x: 0, y: 0)]
-        navigation.view.comparisonExpanded = true
+        navigation.view.overviewExpanded = false
         navigation.beginArrivals()
         navigation.returnToHistory()
         XCTAssertEqual(navigation.view, original)
@@ -51,7 +50,6 @@ final class WorkTimelineViewportTests: XCTestCase {
         navigation.view.failuresOnly = true
         navigation.view.interval = .init(lower: 100, upper: 200)
         navigation.view.selectedID = "selected"
-        navigation.view.compareIDs = ["a", "b"]
         let original = navigation.view
         navigation.showFile("first.swift")
         navigation.showFile("second.swift")
@@ -71,5 +69,57 @@ final class WorkTimelineViewportTests: XCTestCase {
         let bookmark = try JSONDecoder().decode(WorkTimelineBookmark.self, from: old)
         XCTAssertNil(bookmark.scrollOffsets)
         XCTAssertNil(bookmark.overviewExpanded)
+    }
+
+    func testLegacyComparisonBookmarksPreserveInvestigationAndHistory() throws {
+        let old = Data(#"""
+        {
+          "view": {
+            "selectedID": "arrival", "query": "arrival search", "file": "new.swift",
+            "failuresOnly": false, "mode": "list", "interval": {"lower": 300, "upper": 400},
+            "compareIDs": ["first", "second"], "comparisonExpanded": true,
+            "anchorID": "arrival-anchor", "scrollOffsets": [{"x": 10, "y": 20}],
+            "overviewExpanded": false
+          },
+          "following": false,
+          "history": {
+            "selectedID": "original", "query": "failing parser", "file": "parser.swift",
+            "failuresOnly": true, "mode": "timeline", "interval": {"lower": 100, "upper": 200},
+            "compareIDs": ["old-first", "old-second"], "comparisonExpanded": false,
+            "anchorID": "history-anchor", "scrollOffsets": [{"x": 30, "y": 850}],
+            "overviewExpanded": true,
+            "previousFileFilters": {
+              "query": "previous search", "failuresOnly": false,
+              "interval": {"lower": 50, "upper": 250}
+            }
+          }
+        }
+        """#.utf8)
+        var navigation = try JSONDecoder().decode(WorkTimelineNavigation.self, from: old)
+        XCTAssertEqual(navigation.view.selectedID, "arrival")
+        XCTAssertEqual(navigation.view.query, "arrival search")
+        XCTAssertEqual(navigation.view.file, "new.swift")
+        XCTAssertEqual(navigation.view.interval, .init(lower: 300, upper: 400))
+        XCTAssertFalse(navigation.following)
+
+        let history = try XCTUnwrap(navigation.history)
+        XCTAssertEqual(history.selectedID, "original")
+        XCTAssertEqual(history.query, "failing parser")
+        XCTAssertEqual(history.file, "parser.swift")
+        XCTAssertTrue(history.failuresOnly)
+        XCTAssertEqual(history.interval, .init(lower: 100, upper: 200))
+        XCTAssertEqual(history.anchorID, "history-anchor")
+        XCTAssertEqual(history.scrollOffsets, [.init(x: 30, y: 850)])
+        XCTAssertEqual(history.overviewExpanded, true)
+        XCTAssertEqual(history.previousFileFilters?.query, "previous search")
+
+        let encoded = try JSONEncoder().encode(navigation)
+        let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertFalse(json.contains("compareIDs"))
+        XCTAssertFalse(json.contains("comparisonExpanded"))
+        XCTAssertEqual(try JSONDecoder().decode(WorkTimelineNavigation.self, from: encoded), navigation)
+        navigation.returnToHistory()
+        XCTAssertEqual(navigation.view, history)
+        XCTAssertNil(navigation.history)
     }
 }

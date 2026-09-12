@@ -20,6 +20,8 @@ final class WorkTimelineTests: XCTestCase {
         let inverted = WorkTimelineProjection.stepBounds(start: 30, update: 10)
         XCTAssertNil(inverted.end)
         XCTAssertTrue(inverted.note.contains("inconsistent"))
+        XCTAssertNotNil(inverted.warning, "Clock errors must remain visible when explanatory timing details are collapsed")
+        XCTAssertNil(duration.warning)
         let point = WorkTimelineProjection.stepBounds(start: nil, update: 20)
         XCTAssertEqual(point.start, 20)
         XCTAssertNil(point.end)
@@ -92,7 +94,6 @@ final class WorkTimelineTests: XCTestCase {
         state.view.selectedID = "original"
         state.view.query = "test.swift"
         state.view.file = "Sources/test.swift"
-        state.view.compareIDs = ["a", "b"]
         state.view.anchorID = "anchor"
         state.view.interval = WorkTimelineInterval(lower: 10, upper: 20)
         let original = state.view

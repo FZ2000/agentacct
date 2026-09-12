@@ -2,33 +2,38 @@ import XCTest
 @testable import agentacct
 
 final class WorkTimelineExportTests: XCTestCase {
-    func testComparisonRetainsFullSessionIdentitiesAndLabelsEvidenceOutsideFilters() {
-        let first = WorkTimelineRecord(id: "event:first", laneID: "codex::same-prefix-0001", laneTitle: "Review parser",
-            lineage: "Root session", kind: .check, title: "Test parser", result: "failed", source: "Client hook")
-        let second = WorkTimelineRecord(id: "event:second", laneID: "codex::same-prefix-0002", laneTitle: "Review parser",
+    func testFilteredExportIncludesOnlyDisplayedRecordsWithFullIdentity() {
+        let first = WorkTimelineRecord(id: "event:first", eventID: "first", laneID: "codex::same-prefix-0001", laneTitle: "Review parser",
+            lineage: "Root session", kind: .check, title: "Test parser", result: "failed", source: "Client hook", scope: "parser-check")
+        let second = WorkTimelineRecord(id: "event:second", eventID: "second", laneID: "codex::same-prefix-0002", laneTitle: "Review parser",
             lineage: "Root session", kind: .check, title: "Test parser", result: "passed", source: "Client hook")
         let projection = WorkTimelineProjection(records: [first, second])
-        let output = WorkTimelineExport.text(taskID: "task", title: nil, records: [first], projection: projection,
+        let displayed = projection.records.filter(\.isCurrentFailure)
+        let output = WorkTimelineExport.text(taskID: "task", title: nil, records: displayed, projection: projection,
             following: false, query: "", file: nil, generatedAt: Date(timeIntervalSince1970: 1_000),
-            comparisonIDs: [first.id, second.id])
+            failuresOnly: true)
+        XCTAssertTrue(output.contains("1 displayed record of 2 loaded records"))
+        XCTAssertTrue(output.contains("Current failures filter: on"))
+        XCTAssertTrue(output.contains("Displayed record: event:first"))
+        XCTAssertTrue(output.contains("Event identity: first"))
         XCTAssertTrue(output.contains("Evidence lane identity: codex::same-prefix-0001"))
-        XCTAssertTrue(output.contains("Evidence lane identity: codex::same-prefix-0002"))
-        XCTAssertTrue(output.contains("Slot A: event:first"))
-        XCTAssertTrue(output.contains("Slot B: event:second"))
-        XCTAssertTrue(output.contains("Relationship: " + projection.relationship(first, second)))
-        XCTAssertTrue(output.contains("1 selected comparison record falls outside the displayed filters"))
-        XCTAssertTrue(output.contains("Comparison-only record: event:second"))
-        XCTAssertFalse(output.contains("Displayed record: event:second"))
+        XCTAssertTrue(output.contains("Scope: parser-check"))
+        XCTAssertFalse(output.contains("event:second"))
+        XCTAssertFalse(output.contains("Event identity: second"))
+        XCTAssertFalse(output.contains("Evidence lane identity: codex::same-prefix-0002"))
+        XCTAssertFalse(output.contains("Slot A:"))
+        XCTAssertFalse(output.contains("Selected comparison:"))
     }
 
-    func testUnavailableComparisonIsExplicitAndDoesNotInventEvidence() {
-        let output = WorkTimelineExport.text(taskID: "task", title: nil, records: [], projection: .init(records: []),
-            following: false, query: "", file: nil, generatedAt: Date(timeIntervalSince1970: 1_000),
-            comparisonIDs: ["", "missing-record"])
-        XCTAssertTrue(output.contains("Slot A: not selected"))
-        XCTAssertTrue(output.contains("Slot B: missing-record (unavailable in this snapshot)"))
-        XCTAssertFalse(output.contains("Relationship:"))
-        XCTAssertFalse(output.contains("Comparison-only record:"))
+    func testEmptyFilteredExportDoesNotFallBackToLoadedRecords() {
+        let hidden = WorkTimelineRecord(id: "hidden", laneID: "session", laneTitle: "Review parser",
+            lineage: "Root session", kind: .check, title: "Hidden evidence", result: "passed", source: "Client hook")
+        let output = WorkTimelineExport.text(taskID: "task", title: nil, records: [], projection: .init(records: [hidden]),
+            following: false, query: "unmatched", file: nil, generatedAt: Date(timeIntervalSince1970: 1_000))
+        XCTAssertTrue(output.contains("0 displayed records of 1 loaded record"))
+        XCTAssertTrue(output.contains("Search: unmatched"))
+        XCTAssertFalse(output.contains("Hidden evidence"))
+        XCTAssertFalse(output.contains("Displayed record:"))
     }
 
     func testExportKeepsPartialResolutionAllArtifactLocatorsAndSourcePrecision() {

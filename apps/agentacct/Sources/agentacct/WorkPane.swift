@@ -2,7 +2,7 @@ import SwiftUI
 
 // The Work surface — one receipts collection in three adaptive presentations:
 //
-// * No Task selected → the full comparison table.
+// * No Task selected → the task collection.
 // * A Task selected at a wide width → a resizable master list and the record.
 // * A Task selected at a compact width or accessibility text size → the record
 //   is pushed over the collection, with an explicit route back.
@@ -129,12 +129,25 @@ final class WorkBrowseState: ObservableObject {
     @Published var pendingFocusRestorationTaskId: String?
     @Published var shouldFocusSearchOnReturn = false
 
-    func visibleTasks(in tasks: [ReceiptSummary]) -> [ReceiptSummary] {
-        visibleWorkReceipts(tasks, query: query, group: group, sort: sort)
+    func visibleTasks(
+        in tasks: [ReceiptSummary],
+        attention: V1AttentionPayload? = nil
+    ) -> [ReceiptSummary] {
+        WorkTaskPresentation(
+            tasks: tasks,
+            attention: attention,
+            group: group,
+            query: query,
+            sort: sort
+        ).visibleTasks
     }
 
-    func prepareReturnFocus(from taskId: String?, in tasks: [ReceiptSummary]) {
-        let visible = visibleTasks(in: tasks)
+    func prepareReturnFocus(
+        from taskId: String?,
+        in tasks: [ReceiptSummary],
+        attention: V1AttentionPayload? = nil
+    ) {
+        let visible = visibleTasks(in: tasks, attention: attention)
         if let taskId, visible.contains(where: { $0.taskId == taskId }) {
             pendingFocusRestorationTaskId = taskId
             shouldFocusSearchOnReturn = false
@@ -194,7 +207,7 @@ func workBrowseCountText(
     if total < loaded {
         return "\(loadedCount) · \(total) total reported"
     }
-    return "\(visible) of \(total) receipts"
+    return "\(visible) of \(total) tasks"
 }
 
 func workReceiptRefreshError(
@@ -224,7 +237,7 @@ func workLayoutMode(
     return .split
 }
 
-/// One semantic row contract for both the comparison table and compact master.
+/// One semantic row contract for both the task collection and compact master.
 /// When the selected receipt has richer/fresher detail, its evidence, check, and
 /// cost values replace the compact summary so adjacent UI cannot disagree.
 struct WorkReceiptRowPresentation {
@@ -466,7 +479,7 @@ struct DecisionLegendButton: View {
     var body: some View {
         // Popovers need live interaction; the offscreen renderer draws the
         // trigger as noise, so snapshots omit the control entirely.
-        if !SnapshotMode.enabled {
+        if !SnapshotMode.enabled || SnapshotMode.interactiveFixture {
             Button {
                 shown.toggle()
             } label: {
@@ -500,9 +513,10 @@ struct DecisionLegendButton: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    Text("Words come from the daemon's receipt — the legend explains, it never re-grades.")
-                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                        .padding(.top, Space.xs)
+                    DisclosureGroup("Evidence grades") {
+                        Text("Externally verified: external evidence. Independently checked: an independent check. Self checked: the agent checked its own work. Unchecked or claimed: no supporting check. Not gradeable: no meaningful grade is available. Counts describe captured evidence, not the probability that a task is correct.")
+                            .workFont(.caption).textSelection(.enabled)
+                    }.workFont(.caption)
                 }
                 .padding(Space.l)
                 .frame(width: 440)
@@ -620,7 +634,7 @@ struct WorkPane: View {
             if SnapshotMode.enabled && !SnapshotMode.interactiveFixture {
                 HStack(alignment: .top, spacing: 0) {
                     WorkMasterList(browse: selection.workBrowse)
-                        .frame(width: 368)
+                        .frame(width: 320)
                     Rectangle().fill(Theme.rule).frame(width: 1)
                     recordDetail(autoFocusEntry: false)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -628,7 +642,7 @@ struct WorkPane: View {
             } else {
                 HSplitView {
                     WorkMasterList(browse: selection.workBrowse)
-                        .frame(minWidth: 320, idealWidth: 368, maxWidth: 480)
+                        .frame(minWidth: 280, idealWidth: 320, maxWidth: 360)
                     recordDetail(autoFocusEntry: false)
                         .frame(minWidth: 620, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
@@ -803,7 +817,8 @@ private struct WorkRecordPlaceholder: View {
         Button {
             selection.workBrowse.prepareReturnFocus(
                 from: selection.taskId,
-                in: dashboard.receiptTasks
+                in: dashboard.receiptTasks,
+                attention: dashboard.attention
             )
             selection.taskId = nil
             selection.sessionId = nil
@@ -891,7 +906,6 @@ private struct WorkTablePage: View {
                                 ? Space.m : Space.l
                         )
                     footer(visibleTasks: presentation.visibleTasks).padding(.top, Space.m)
-                    legend.padding(.top, Space.l)
                 }
                 .padding(Space.gutter)
                 .frame(maxWidth: 1172 + Space.gutter * 2, alignment: .leading)
@@ -965,18 +979,10 @@ private struct WorkTablePage: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Work receipts")
+            Text("Work")
                 .workFont(.titlePage).tracking(Type.titlePageTracking)
                 .foregroundStyle(Theme.ink)
                 .accessibilityAddTraits(.isHeader)
-            HStack(spacing: 0) {
-                Text(receiptCollectionHeaderText)
-                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                if let updated = dashboard.receiptListLastUpdated {
-                    Text(" · refreshed \(dashboardFreshnessText(updated))")
-                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                }
-            }
         }
     }
 
@@ -1063,9 +1069,9 @@ private struct WorkTablePage: View {
                 if SnapshotMode.enabled {
                     // ImageRenderer draws a TextField / .menu Picker as a yellow
                     // placeholder; a snapshot shows plain stand-ins instead.
-                    Text("Filter by task, client, or id").workFont(.caption).foregroundStyle(Theme.muted)
+                    Text("Search tasks").workFont(.caption).foregroundStyle(Theme.muted)
                 } else {
-                    TextField("Filter by task, client, or id", text: $browse.query)
+                    TextField("Search tasks", text: $browse.query)
                         .textFieldStyle(.plain).workFont(.caption)
                         .focused($searchFocused)
                         .accessibilityFocused($searchAccessibilityFocused)
@@ -1310,7 +1316,7 @@ private struct WorkTablePage: View {
             loaded: dashboard.receiptTasks.count,
             total: dashboard.totalReceiptTasks,
             truncated: dashboard.receiptTasksTruncated
-        ) + " · \(browse.sort.footerText)"
+        )
     }
 
     private var filteredEmptyMessage: String {
@@ -1328,60 +1334,7 @@ private struct WorkTablePage: View {
         return "Adjust the lifecycle tab or the filter to broaden the result."
     }
 
-    private var receiptCollectionHeaderText: String {
-        if dashboard.isLoadingReceipts, dashboard.receiptTasks.isEmpty {
-            return "local store · loading receipts"
-        }
-        if let total = dashboard.totalReceiptTasks {
-            if workReceiptCollectionIsPartial(
-                loaded: dashboard.receiptTasks.count,
-                total: total,
-                truncated: dashboard.receiptTasksTruncated
-            ) {
-                return "local store · \(total) receipts · latest \(dashboard.receiptTasks.count) loaded"
-            }
-            return "local store · \(total) receipts"
-        }
-        let suffix = dashboard.receiptTasksTruncated == true ? " · more may exist" : ""
-        return "local store · \(dashboard.receiptTasks.count) loaded · total not reported\(suffix)"
-    }
 
-    private var legend: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: Space.l) {
-                legendItems
-                Spacer()
-                Text("Evidence counts checkable steps · claim ≠ proof")
-                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
-            }
-            VStack(alignment: .leading, spacing: Space.s) {
-                HStack(spacing: Space.l) { legendItems }
-                Text("Evidence counts checkable steps · claim ≠ proof")
-                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var legendItems: some View {
-        ForEach(
-            ["externally_verified", "independently_checked", "self_checked", "unchecked"],
-            id: \.self
-        ) { grade in
-            let style = EvidenceTierStyle.forGrade(grade)
-            HStack(spacing: 6) {
-                EvidencePip(shape: style.pip, tint: style.tint)
-                // The amber hollow pip carries both approved words (the
-                // aggregate "unchecked" and the per-step grade "claimed").
-                Text(grade == "unchecked" ? "unchecked · claimed" : style.label)
-                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                }
-            }
-        HStack(spacing: 6) {
-            EvidencePip(shape: .hollow, tint: Theme.muted)
-            Text("not gradeable").workFont(.dataSmall).foregroundStyle(Theme.muted)
-        }
-    }
 }
 
 /// One receipts-table row (52pt): task + decision badge, evidence tier pip and
@@ -1529,7 +1482,7 @@ private struct WorkTableRow: View {
     }
 }
 
-/// Accessibility text sizes trade the fixed six-column comparison rail for a
+/// Accessibility text sizes trade the fixed six-column task table for a
 /// complete vertical record summary. No fact disappears; labels and values can
 /// wrap without colliding with neighboring columns.
 private struct WorkAccessibleTableRow: View {
@@ -1593,9 +1546,43 @@ private struct WorkMasterList: View {
     @ObservedObject var browse: WorkBrowseState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedTaskId: String?
+    @State private var isRetryingAttention = false
 
     private var visibleTasks: [ReceiptSummary] {
-        browse.visibleTasks(in: dashboard.receiptTasks)
+        browse.visibleTasks(in: dashboard.receiptTasks, attention: dashboard.attention)
+    }
+
+    private var sourceTasks: [ReceiptSummary] {
+        browse.group == .attention ? dashboard.attention?.items ?? [] : dashboard.receiptTasks
+    }
+
+    private var collectionError: String? {
+        browse.group == .attention ? dashboard.attentionError : dashboard.receiptListError
+    }
+
+    private var isLoadingCollection: Bool {
+        if browse.group == .attention {
+            return isRetryingAttention || (dashboard.attention == nil && dashboard.attentionError == nil)
+        }
+        return dashboard.isLoadingReceipts
+    }
+
+    private var collectionCount: String {
+        if browse.group == .attention {
+            guard let attention = dashboard.attention else {
+                return collectionError == nil ? "Loading review items…" : "Review status unavailable"
+            }
+            if attention.truncated {
+                return "\(visibleTasks.count) of \(attention.items.count) loaded · \(attention.total) review items"
+            }
+            return "\(visibleTasks.count) of \(attention.total) review items"
+        }
+        return workBrowseCountText(
+            visible: visibleTasks.count,
+            loaded: dashboard.receiptTasks.count,
+            total: dashboard.totalReceiptTasks,
+            truncated: dashboard.receiptTasksTruncated
+        )
     }
 
     private var renderedTasks: [ReceiptSummary] {
@@ -1606,7 +1593,7 @@ private struct WorkMasterList: View {
     private var selectionIsOutsideBrowse: Bool {
         workSelectionIsOutsideBrowse(
             taskId: selection.taskId,
-            allTasks: dashboard.receiptTasks,
+            allTasks: sourceTasks,
             visibleTasks: visibleTasks
         )
     }
@@ -1614,17 +1601,10 @@ private struct WorkMasterList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: Space.s) {
-                Text("Work receipts").workFont(.titleCard).foregroundStyle(Theme.ink)
+                Text("Tasks").workFont(.titleCard).foregroundStyle(Theme.ink)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 0)
-                Text(
-                    workBrowseCountText(
-                        visible: visibleTasks.count,
-                        loaded: dashboard.receiptTasks.count,
-                        total: dashboard.totalReceiptTasks,
-                        truncated: dashboard.receiptTasksTruncated
-                    )
-                )
+                Text(collectionCount)
                     .workFont(.dataSmall).foregroundStyle(Theme.muted)
             }
             .padding(.horizontal, Space.l)
@@ -1638,7 +1618,7 @@ private struct WorkMasterList: View {
                     Spacer(minLength: 0)
                     Button("Show") {
                         browse.query = ""
-                        browse.group = nil
+                        if browse.group != .attention { browse.group = nil }
                     }
                     .buttonStyle(QuietButtonStyle(tint: Theme.accent))
                     .accessibilityIdentifier("work.master.show-selection")
@@ -1647,52 +1627,70 @@ private struct WorkMasterList: View {
                 .padding(.bottom, Space.s)
                 .accessibilityElement(children: .contain)
             }
-            if let error = dashboard.receiptListError, !dashboard.receiptTasks.isEmpty {
+            if let error = collectionError, !sourceTasks.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if dashboard.isLoadingReceipts, !SnapshotMode.enabled {
+                    if isLoadingCollection, !SnapshotMode.enabled {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.amber)
                             .accessibilityHidden(true)
                     }
-                    Text(dashboard.isLoadingReceipts ? "Retrying · showing saved list" : "Showing saved list · refresh failed")
+                    Text(isLoadingCollection ? "Retrying · showing saved list" : "Showing saved list · refresh failed")
                         .workFont(.dataSmall).foregroundStyle(Theme.muted)
                         .help(error)
                     Spacer(minLength: 0)
+                    if !SnapshotMode.enabled, !isLoadingCollection {
+                        Button("Retry", action: retryCollection)
+                            .buttonStyle(QuietButtonStyle(tint: Theme.accent))
+                            .accessibilityIdentifier("work.master.retry")
+                    }
                 }
                 .padding(.horizontal, Space.l)
                 .padding(.bottom, Space.s)
-                .accessibilityLabel("Showing the last loaded receipt list. Refresh failed. \(error)")
+                .accessibilityElement(children: .contain)
             }
             Rectangle().fill(Theme.rule).frame(height: 1)
 
             ScrollViewReader { scrollProxy in
                 ScrollBox {
                     ScrollContentStack(spacing: 0) {
-                    if dashboard.isLoadingReceipts, dashboard.receiptTasks.isEmpty {
+                    if isLoadingCollection, sourceTasks.isEmpty {
                         masterEmpty(
-                            title: "Loading receipts",
-                            message: "Reading the latest recorded work from the local store."
+                            title: browse.group == .attention ? "Loading review items" : "Loading receipts",
+                            message: nil
                         )
-                        .accessibilityLabel("Loading receipts from the local store")
-                    } else if let error = dashboard.receiptListError, dashboard.receiptTasks.isEmpty {
+                    } else if let error = collectionError, sourceTasks.isEmpty {
                         VStack(alignment: .leading, spacing: Space.s) {
-                            masterEmpty(title: "Receipts unavailable", message: error)
-                            if !SnapshotMode.enabled, !dashboard.isLoadingReceipts {
-                                Button("Retry") { Task { await dashboard.fetchReceipts() } }
+                            masterEmpty(
+                                title: browse.group == .attention ? "Review items unavailable" : "Receipts unavailable",
+                                message: error
+                            )
+                            if !SnapshotMode.enabled {
+                                Button("Retry", action: retryCollection)
                                     .buttonStyle(QuietButtonStyle(tint: Theme.accent))
                                     .padding(.horizontal, Space.l)
                                     .accessibilityIdentifier("work.master.retry")
                             }
                         }
                     } else if visibleTasks.isEmpty {
-                        masterEmpty(
-                            title: dashboard.receiptTasks.isEmpty ? "No receipts recorded yet" : "No matching receipts",
-                            message: dashboard.receiptTasks.isEmpty
-                                ? "Recorded work will appear here."
-                                : "Clear the filter or choose another status."
-                        )
+                        if browse.group == .attention, let attention = dashboard.attention {
+                            let copy = WorkAttentionEmptyCopy(payload: attention, query: browse.query)
+                            masterEmpty(title: copy.title, message: copy.detail)
+                            if attention.total > 0, attention.items.isEmpty, !SnapshotMode.enabled {
+                                Button("Retry", action: retryCollection)
+                                    .buttonStyle(QuietButtonStyle(tint: Theme.accent))
+                                    .padding(.horizontal, Space.l)
+                                    .accessibilityIdentifier("work.master.retry")
+                            }
+                        } else {
+                            masterEmpty(
+                                title: dashboard.receiptTasks.isEmpty ? "No receipts recorded yet" : "No matching receipts",
+                                message: dashboard.receiptTasks.isEmpty
+                                    ? "Recorded work will appear here."
+                                    : "Clear the filter or choose another status."
+                            )
+                        }
                     } else {
                         ForEach(renderedTasks) { task in
                             WorkMasterRow(
@@ -1721,6 +1719,15 @@ private struct WorkMasterList: View {
                 .onAppear { focusSelectedRowIfVisible() }
                 .onChange(of: selection.taskId) { focusSelectedRowIfVisible() }
             }
+            if browse.group == .attention, dashboard.attention?.truncated == true {
+                Button(dashboard.isLoadingMoreAttention ? "Loading…" : "Load more") {
+                    Task { await dashboard.fetchMoreAttention() }
+                }
+                .buttonStyle(QuietButtonStyle())
+                .disabled(dashboard.isLoadingMoreAttention || isRetryingAttention)
+                .padding(Space.l)
+                .accessibilityIdentifier("work.attention.load-more")
+            }
         }
         .background(Theme.chrome)
         .accessibilityIdentifier("work.master")
@@ -1732,10 +1739,10 @@ private struct WorkMasterList: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11)).foregroundStyle(Theme.muted)
                 if SnapshotMode.enabled {
-                    Text(browse.query.isEmpty ? "Filter receipts" : browse.query)
+                    Text(browse.query.isEmpty ? "Search tasks" : browse.query)
                         .workFont(.caption).foregroundStyle(Theme.muted)
                 } else {
-                    TextField("Filter receipts", text: $browse.query)
+                    TextField("Search tasks", text: $browse.query)
                         .textFieldStyle(.plain).workFont(.caption)
                         .accessibilityIdentifier("work.master.search")
                 }
@@ -1773,11 +1780,26 @@ private struct WorkMasterList: View {
         }
     }
 
-    private func masterEmpty(title: String, message: String) -> some View {
+    private func retryCollection() {
+        if browse.group == .attention {
+            guard !isRetryingAttention else { return }
+            isRetryingAttention = true
+            Task {
+                defer { isRetryingAttention = false }
+                await dashboard.fetchAttention()
+            }
+        } else {
+            Task { await dashboard.fetchReceipts() }
+        }
+    }
+
+    private func masterEmpty(title: String, message: String?) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).workFont(.rowLabel).foregroundStyle(Theme.ink)
-            Text(message).workFont(.caption).foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            if let message {
+                Text(message).workFont(.caption).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(Space.l)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1842,35 +1864,8 @@ private struct WorkMasterRow: View {
                         .lineLimit(2)
                 }
 
-                HStack(alignment: .top, spacing: Space.l) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        CapsLabel(text: "Claims supported")
-                        Text(presentation.compactCoverageText)
-                            .workFont(.dataSmall)
-                            .foregroundStyle(presentation.coverageIsInconsistent ? Theme.amber : Theme.ink)
-                            .lineLimit(1)
-                            .help(presentation.coverageQualifier)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    VStack(alignment: .leading, spacing: 3) {
-                        CapsLabel(text: "Check runs")
-                        Text(presentation.compactCheckRunsText)
-                            .workFont(.dataSmall)
-                            .foregroundStyle(
-                                presentation.checkRunsAreInconsistent
-                                    ? Theme.amber
-                                    : presentation.checkRunsText.contains("failed") ? Theme.coral : Theme.ink
-                            )
-                            .lineLimit(1)
-                            .help(presentation.checkRunsQualifier)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
                 HStack(spacing: 5) {
                     Text(presentation.clientText)
-                    Text("·")
-                    Text(presentation.compactCostText)
                     Spacer(minLength: 4)
                     Text(presentation.updatedText)
                 }
@@ -1901,23 +1896,8 @@ private struct WorkMasterRow: View {
 
 // MARK: - Record page
 
-enum WorkRecordColumnMode: Equatable {
-    case stacked
-    case sideBySide
-}
-
-private enum WorkRecordColumnMetrics {
-    static let minimumMainWidth: CGFloat = 456
-    static let sideWidth: CGFloat = 344
-    static let spacing: CGFloat = Space.xl
-    static let sideBySideMinimumWidth = minimumMainWidth + sideWidth + spacing
-}
-
-func workRecordColumnMode(for availableWidth: CGFloat) -> WorkRecordColumnMode {
-    availableWidth >= WorkRecordColumnMetrics.sideBySideMinimumWidth ? .sideBySide : .stacked
-}
-
-/// One Work Receipt as an enterprise record page.
+/// A task prioritizes current status and recorded activity. Supporting ledgers
+/// open only after the user asks for that category of detail.
 struct WorkRecordPage: View {
     let receipt: Receipt
     let summary: ReceiptSummary?
@@ -1947,11 +1927,12 @@ struct WorkRecordPage: View {
                         staleDetailBanner(refreshError).padding(.top, Space.m)
                     }
                     let decision = WorkReceiptDecisionPresentation(receipt: receipt)
-                    Text(decision.explanation)
-                        .workFont(.body)
-                        .foregroundStyle(decision.isAttention ? Theme.coral : Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, Space.s)
+                    if decision.isAttention, receipt.axes.decisionStatus.blocker?.text == nil {
+                        Text(decision.explanation)
+                            .workFont(.body).foregroundStyle(Theme.coral)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, Space.s)
+                    }
                     if let blocker = receipt.axes.decisionStatus.blocker, blocker.text != nil {
                         BlockerCallout(blocker: blocker, taskId: receipt.taskId)
                             .padding(.top, Space.s)
@@ -1961,11 +1942,20 @@ struct WorkRecordPage: View {
                         onRevealRecords: { proxy.scrollTo("work.timeline.records", anchor: .top) },
                         onRevealHeading: { proxy.scrollTo("work.timeline.heading", anchor: .top) })
                         .padding(.top, compactViewport ? Space.s : Space.l)
-                    DisclosureGroup("Outcome, usage and all captured details") {
-                        RecordDecisionCard(receipt: receipt).padding(.top, Space.m)
-                        RecordSummaryStrip(receipt: receipt, summary: summary).padding(.top, Space.m)
-                        columns.padding(.top, Space.m)
-                        sessionsSection.padding(.top, Space.l)
+                    DisclosureGroup("Task details") {
+                        VStack(alignment: .leading, spacing: Space.m) {
+                            Text(decision.explanation).workFont(.body).textSelection(.enabled)
+                            Text("Task ID: \(receipt.taskId)").workFont(.caption).textSelection(.enabled)
+                            DisclosureGroup("Task context and usage") {
+                                RecordDimensionsCard(receipt: receipt).padding(.top, Space.s)
+                            }
+                            DisclosureGroup("Check history") {
+                                RecordChecksCard(evidence: receipt.dimensions.evidence, taskId: receipt.taskId)
+                                    .padding(.top, Space.s)
+                            }
+                            DisclosureGroup("Sessions") { sessionsSection.padding(.top, Space.s) }
+                            DisclosureGroup("Recording coverage") { sideColumn.padding(.top, Space.s) }
+                        }.padding(.top, Space.m)
                     }
                     .workFont(.caption)
                     .padding(.top, Space.xl)
@@ -1991,12 +1981,8 @@ struct WorkRecordPage: View {
     private var breadcrumb: some View {
         HStack(spacing: Space.m) {
             backButton
-            HStack(spacing: 6) {
-                CapsLabel(text: "Work")
-                CapsLabel(text: "/ \(shortTaskRef)")
-            }
             Spacer(minLength: 0)
-            if let onToggleTimelineFocus {
+            if let onToggleTimelineFocus, !compactViewport || timelineFocused {
                 Button(action: onToggleTimelineFocus) {
                     Label(timelineFocused ? "Show task list" : "Focus timeline", systemImage: timelineFocused ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
                 }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
@@ -2020,7 +2006,8 @@ struct WorkRecordPage: View {
         Button {
             selection.workBrowse.prepareReturnFocus(
                 from: receipt.taskId,
-                in: dashboard.receiptTasks
+                in: dashboard.receiptTasks,
+                attention: dashboard.attention
             )
             selection.taskId = nil
             selection.sessionId = nil
@@ -2028,7 +2015,7 @@ struct WorkRecordPage: View {
             HStack(spacing: 4) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 10, weight: .semibold))
-                Text("All receipts").workFont(.captionSemibold)
+                Text("All tasks").workFont(.captionSemibold)
             }
             .foregroundStyle(Theme.accent)
         }
@@ -2036,7 +2023,7 @@ struct WorkRecordPage: View {
         .frame(minHeight: 24)
         .focused($backFocused)
         .keyboardShortcut(.cancelAction)
-        .help("Back to the receipts list (Esc)")
+        .help("Back to all tasks (Esc)")
         .accessibilityIdentifier("work.breadcrumb.back")
     }
 
@@ -2059,7 +2046,9 @@ struct WorkRecordPage: View {
                 DecisionLegendButton()
                 Spacer()
             }
-            Text(metaLine).workFont(.dataSmall).foregroundStyle(Theme.muted)
+            if !metaLine.isEmpty {
+                Text(metaLine).workFont(.dataSmall).foregroundStyle(Theme.muted)
+            }
         }
     }
 
@@ -2100,51 +2089,11 @@ struct WorkRecordPage: View {
         .accessibilityIdentifier("work.receipt.stale")
     }
 
-    /// Breadcrumb-sized task reference: "task_" + the id's first 8 hex chars.
-    /// The full id stays in the meta line below the title.
-    private var shortTaskRef: String {
-        let id = receipt.taskId
-        guard id.hasPrefix("task_"), id.count > 13 else { return id }
-        return String(id.prefix(13))
-    }
-
     private var metaLine: String {
-        var parts: [String] = [receipt.taskId]
+        var parts: [String] = []
         if let client = summary?.primaryRoot?.client { parts.append(client) }
-        if let models = receipt.dimensions.actors.models, !models.isEmpty {
-            parts.append(models.joined(separator: ", "))
-        }
         if let ago = agoText(summary?.lastActivityAt) { parts.append("updated \(ago)") }
         return parts.joined(separator: " · ")
-    }
-
-    private var columns: some View {
-        ViewThatFits(in: .horizontal) {
-            WorkRecordSplitLayout(
-                minimumMainWidth: WorkRecordColumnMetrics.minimumMainWidth,
-                sideWidth: WorkRecordColumnMetrics.sideWidth,
-                spacing: WorkRecordColumnMetrics.spacing
-            ) {
-                mainColumn
-                sideColumn
-            }
-            // Force the same explicit breakpoint exercised by interaction and
-            // visual tests. The custom layout measures dense action text at
-            // its final column width, so intrinsic content cannot silently
-            // reject the horizontal candidate at the reference viewport.
-            .frame(minWidth: WorkRecordColumnMetrics.sideBySideMinimumWidth)
-            VStack(alignment: .leading, spacing: Space.xl) {
-                mainColumn
-                sideColumn
-            }
-        }
-    }
-
-    private var mainColumn: some View {
-        VStack(alignment: .leading, spacing: Space.xl) {
-            RecordDimensionsCard(receipt: receipt)
-            RecordChecksCard(evidence: receipt.dimensions.evidence, taskId: receipt.taskId)
-        }
     }
 
     private var sideColumn: some View {
@@ -2195,7 +2144,7 @@ struct WorkRecordPage: View {
                             ForEach(group.members) { member in
                                 SessionDrillRow(
                                     member: member,
-                                    initiallyExpanded: group.role == "primary" && member.role == "root"
+                                    initiallyExpanded: false
                                 )
                             }
                         }
@@ -2208,132 +2157,6 @@ struct WorkRecordPage: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-    }
-}
-
-/// The first card answers the user's decision question before the forensic
-/// ledger begins: why the status exists, what claims have support, and what
-/// machine checks actually ran.
-private struct RecordDecisionCard: View {
-    let receipt: Receipt
-
-    private var presentation: WorkReceiptDecisionPresentation {
-        .init(receipt: receipt)
-    }
-
-    var body: some View {
-        Card(padding: Space.l) {
-            VStack(alignment: .leading, spacing: Space.m) {
-                HStack(alignment: .top, spacing: Space.m) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(presentation.isAttention ? Theme.coral : Theme.accent)
-                        .frame(width: 4, height: 36)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(presentation.headline)
-                            .workFont(.titleCard).foregroundStyle(Theme.ink)
-                            .accessibilityAddTraits(.isHeader)
-                        Text(verbatim: presentation.explanation)
-                            .workFont(.body).foregroundStyle(Theme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                if let blocker = receipt.axes.decisionStatus.blocker, blocker.text != nil {
-                    BlockerCallout(blocker: blocker, taskId: receipt.taskId)
-                }
-
-                Rectangle().fill(Theme.hairline).frame(height: 1)
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: Space.xl) {
-                        metric(
-                            label: "Claims supported",
-                            value: presentation.coverageValue,
-                            qualifier: presentation.coverageQualifier
-                        )
-                        Rectangle().fill(Theme.hairline).frame(width: 1, height: 42)
-                        metric(
-                            label: "Check runs",
-                            value: presentation.checksValue,
-                            qualifier: presentation.checksQualifier
-                        )
-                    }
-                    .frame(minWidth: 460, alignment: .leading)
-                    VStack(alignment: .leading, spacing: Space.m) {
-                        metric(
-                            label: "Claims supported",
-                            value: presentation.coverageValue,
-                            qualifier: presentation.coverageQualifier
-                        )
-                        metric(
-                            label: "Check runs",
-                            value: presentation.checksValue,
-                            qualifier: presentation.checksQualifier
-                        )
-                    }
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("work.receipt.decision-summary")
-    }
-
-    private func metric(label: String, value: String, qualifier: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            CapsLabel(text: label)
-            Text(value).workFont(.kpi).foregroundStyle(Theme.ink)
-            Text(qualifier).workFont(.dataSmall).foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct WorkRecordSplitLayout: Layout {
-    let minimumMainWidth: CGFloat
-    let sideWidth: CGFloat
-    let spacing: CGFloat
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        guard subviews.count == 2 else { return .zero }
-        // ViewThatFits first asks for the candidate's ideal width without a
-        // concrete proposal. Returning the dense ledger's intrinsic width here
-        // makes the candidate look too large even though every row wraps at the
-        // final column width. Report the real responsive minimum instead.
-        let width = proposal.width ?? (minimumMainWidth + spacing + sideWidth)
-        let widths = columnWidths(for: width)
-        let mainSize = subviews[0].sizeThatFits(.init(width: widths.main, height: nil))
-        let sideSize = subviews[1].sizeThatFits(.init(width: widths.side, height: nil))
-        return CGSize(width: width, height: max(mainSize.height, sideSize.height))
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        guard subviews.count == 2 else { return }
-        let widths = columnWidths(for: bounds.width)
-        subviews[0].place(
-            at: bounds.origin,
-            proposal: .init(width: widths.main, height: nil)
-        )
-        subviews[1].place(
-            at: CGPoint(x: bounds.minX + widths.main + spacing, y: bounds.minY),
-            proposal: .init(width: widths.side, height: nil)
-        )
-    }
-
-    private func columnWidths(for width: CGFloat) -> (main: CGFloat, side: CGFloat) {
-        let available = max(0, width - spacing)
-        let resolvedSide = min(sideWidth, available)
-        return (max(0, available - resolvedSide), resolvedSide)
     }
 }
 

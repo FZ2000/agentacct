@@ -37,7 +37,6 @@ final class WorkTimelineMemoryTests: XCTestCase {
         var navigation = WorkTimelineNavigation()
         navigation.view.query = "original query"
         navigation.view.selectedID = "selected"
-        navigation.view.compareIDs = ["a", "b"]
         let original = navigation.view
         navigation.beginArrivals()
         navigation.view.query = "arrival query"

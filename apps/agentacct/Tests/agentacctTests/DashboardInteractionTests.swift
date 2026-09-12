@@ -1404,12 +1404,6 @@ final class DashboardInteractionTests: XCTestCase {
         )
     }
 
-    func testWorkRecordUsesReferenceWidthForSideBySideEvidence() {
-        XCTAssertEqual(workRecordColumnMode(for: 823), .stacked)
-        XCTAssertEqual(workRecordColumnMode(for: 824), .sideBySide)
-        XCTAssertEqual(workRecordColumnMode(for: 860), .sideBySide)
-    }
-
     @MainActor
     func testWorkBrowseStatePreservesNonRoutingFieldsAcrossReceiptDestination() {
         let selection = AppSelection()
@@ -1517,7 +1511,7 @@ final class DashboardInteractionTests: XCTestCase {
     func testWorkBrowseCountsNameTheLoadedSlice() {
         XCTAssertEqual(
             workBrowseCountText(visible: 4, loaded: 4, total: 4, truncated: false),
-            "4 of 4 receipts"
+            "4 of 4 tasks"
         )
         XCTAssertEqual(
             workBrowseCountText(visible: 12, loaded: 200, total: 529, truncated: true),
@@ -1576,6 +1570,85 @@ final class DashboardInteractionTests: XCTestCase {
 
         XCTAssertEqual(browse.pendingFocusRestorationTaskId, visible.taskId)
         XCTAssertFalse(browse.shouldFocusSearchOnReturn)
+    }
+
+    @MainActor
+    func testWorkAttentionNavigationKeepsTasksOutsideTheRecentPage() throws {
+        let recent = try decode(
+            [ReceiptSummary].self,
+            from: """
+            [{
+              "task_id": "task-recent", "title": "Recent task",
+              "decision_status": { "key": "reported" },
+              "evidence_strength": { "key": "unchecked" }, "cost": {}
+            }]
+            """
+        )
+        let attention = try decode(
+            V1AttentionPayload.self,
+            from: """
+            {
+              "schema": "agentacct.v1-attention.v1",
+              "items": [{
+                "task_id": "task-old", "title": "Older review task",
+                "decision_status": { "key": "reported" },
+                "evidence_strength": { "key": "unchecked" }, "cost": {},
+                "attention": { "kind": "failed_check", "summary": "Check needs review" }
+              }],
+              "total": 2,
+              "counts": { "failed_check": 2, "failed_step": 0, "blocker": 0 },
+              "limit": 1, "truncated": true
+            }
+            """
+        )
+        let browse = WorkBrowseState()
+        browse.group = .attention
+
+        let table = WorkTaskPresentation(
+            tasks: recent, attention: attention,
+            group: browse.group, query: browse.query, sort: browse.sort
+        )
+        XCTAssertEqual(table.visibleTasks.map(\.taskId), ["task-old"])
+        XCTAssertEqual(
+            browse.visibleTasks(in: recent, attention: attention).map(\.taskId),
+            table.visibleTasks.map(\.taskId),
+            "Opening the master list must preserve the authoritative review queue"
+        )
+
+        browse.prepareReturnFocus(from: "task-old", in: recent, attention: attention)
+        XCTAssertEqual(browse.pendingFocusRestorationTaskId, "task-old")
+        XCTAssertFalse(browse.shouldFocusSearchOnReturn)
+
+        browse.query = "recent"
+        XCTAssertTrue(browse.visibleTasks(in: recent, attention: attention).isEmpty)
+        browse.prepareReturnFocus(from: "task-old", in: recent, attention: attention)
+        XCTAssertNil(browse.pendingFocusRestorationTaskId)
+        XCTAssertTrue(browse.shouldFocusSearchOnReturn)
+    }
+
+    @MainActor
+    func testWorkAttentionWithoutProjectionDoesNotInferAQueueFromRecentReceipts() throws {
+        let recent = try decode(
+            [ReceiptSummary].self,
+            from: """
+            [{
+              "task_id": "task-recent-failure",
+              "decision_status": { "key": "finding" },
+              "evidence_strength": { "key": "unchecked", "checks_failed": 1 },
+              "cost": {}
+            }]
+            """
+        )
+        let browse = WorkBrowseState()
+        browse.group = .attention
+
+        XCTAssertTrue(browse.visibleTasks(in: recent).isEmpty)
+        browse.prepareReturnFocus(from: "task-recent-failure", in: recent)
+        XCTAssertNil(browse.pendingFocusRestorationTaskId)
+        XCTAssertTrue(browse.shouldFocusSearchOnReturn)
+
+        browse.group = nil
+        XCTAssertEqual(browse.visibleTasks(in: recent).map(\.taskId), ["task-recent-failure"])
     }
 
     func testFailedChecksPutReportedReceiptInAttentionGroupAndSort() throws {

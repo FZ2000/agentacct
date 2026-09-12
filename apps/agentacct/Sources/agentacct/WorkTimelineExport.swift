@@ -5,8 +5,8 @@ enum WorkTimelineExport {
                      projection: WorkTimelineProjection, following: Bool,
                      query: String, file: String?, generatedAt: Date,
                      snapshotAt: Date? = nil, failuresOnly: Bool = false,
-                     interval: WorkTimelineInterval? = nil, offlineReceiptAt: Date? = nil, outcome: String? = nil, handoff: String? = nil,
-                     comparisonIDs: [String] = []) -> String {
+                     interval: WorkTimelineInterval? = nil, offlineReceiptAt: Date? = nil,
+                     outcome: String? = nil, handoff: String? = nil) -> String {
         var lines = [
             title ?? "Work review", "Task: \(taskID)",
             "Exported: \(generatedAt.ISO8601Format())",
@@ -24,22 +24,8 @@ enum WorkTimelineExport {
         ]
         for notice in projection.notices { lines.append("Coverage: \(notice)") }
         for lane in projection.lanes { lines.append("Session coverage — \(lane.title) [\(lane.id)]: \(lane.availability)") }
-        let comparison = comparisonIDs.prefix(2).compactMap { id in projection.records.first { $0.id == id } }
-        if !comparisonIDs.isEmpty {
-            lines.append("\nSelected comparison:")
-            for (slot, id) in comparisonIDs.prefix(2).enumerated() {
-                let record = projection.records.first { $0.id == id }
-                lines.append("Slot \(slot == 0 ? "A" : "B"): \(id.isEmpty ? "not selected" : id)\(record == nil && !id.isEmpty ? " (unavailable in this snapshot)" : "")")
-            }
-            if comparison.count == 2 { lines.append("Relationship: \(projection.relationship(comparison[0], comparison[1]))") }
-        }
-        let displayedIDs = Set(records.map(\.id))
-        let comparisonOnly = comparison.filter { !displayedIDs.contains($0.id) }
-        if !comparisonOnly.isEmpty {
-            lines.append("\(comparisonOnly.count) selected comparison \(comparisonOnly.count == 1 ? "record falls" : "records fall") outside the displayed filters; included separately below.")
-        }
-        for record in records + comparisonOnly {
-            lines += ["", "---", record.title, "\(displayedIDs.contains(record.id) ? "Displayed record" : "Comparison-only record"): \(record.id)",
+        for record in records {
+            lines += ["", "---", record.title, "Displayed record: \(record.id)",
                 "Event identity: \(record.eventID ?? "not supplied")",
                 "Evidence lane identity: \(record.laneID)",
                 "Session: \(record.laneTitle)", record.lineage,

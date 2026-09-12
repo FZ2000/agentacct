@@ -488,7 +488,7 @@ func receiptActionSourceText(_ sources: [String]?) -> String {
 
 // MARK: - Record summary strip
 
-/// The record page's context strip: Actions · Est. cost · Elapsed · Sessions,
+/// The record page's context strip: Tool calls · Est. cost · Elapsed · Sessions,
 /// each a caps caption over an 18/700 mono value with 1px verticals
 /// between the cells. Absent facts are named ("not recorded"), never zeroed.
 /// Check runs live in the decision summary above this strip, beside the distinct
@@ -518,7 +518,7 @@ struct RecordSummaryStrip: View {
         )
         let actionCell = Cell(
             id: "actions",
-            label: "Actions",
+            label: "Tool calls",
             value: actionKPI.value,
             qualifier: actionKPI.qualifier,
             absent: actionKPI.absent
@@ -652,12 +652,12 @@ struct ReceiptActionsDigest: View {
         }
         .padding(.vertical, Space.m)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Actions")
+        .accessibilityLabel("Tool calls")
         .accessibilityIdentifier("receipt.actions.summary")
     }
 
     private var actionsLabel: some View {
-        Text("Actions")
+        Text("Tool calls")
             .font(rowLabelFont)
             .foregroundStyle(Theme.ink)
             .accessibilityHidden(true)
@@ -875,14 +875,14 @@ struct RecordDimensionsCard: View {
     var body: some View {
         Card(padding: Space.xl) {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Receipt dimensions").workFont(.titleCard).foregroundStyle(Theme.ink)
+                Text("Task context").workFont(.titleCard).foregroundStyle(Theme.ink)
                     .accessibilityAddTraits(.isHeader)
                 Rectangle().fill(Theme.hairline).frame(height: 1).padding(.top, Space.m)
                 dimensionRow("Task", taskSummary,
                              provenance: receipt.dimensions.task.provenance,
                              gaps: receipt.dimensions.task.gaps)
                 hairline
-                dimensionRow("Actors", actorsSummary,
+                dimensionRow("Agents", actorsSummary,
                              provenance: receipt.dimensions.actors.provenance,
                              gaps: receipt.dimensions.actors.gaps)
                 hairline
@@ -891,10 +891,12 @@ struct RecordDimensionsCard: View {
                 dimensionRow("Cost", costSummary,
                              provenance: receipt.dimensions.cost.provenance,
                              gaps: receipt.dimensions.cost.gaps)
-                hairline
-                dimensionRow("Weekly plan", weeklyPlanSummary,
-                             provenance: nil,
-                             gaps: nil)
+                if let planShare = receipt.dimensions.cost.planShare {
+                    hairline
+                    dimensionRow("Weekly plan", planShare.rowSummary,
+                                 provenance: nil,
+                                 gaps: nil)
+                }
                 hairline
                 dimensionRow("Checks", evidenceSummary,
                              provenance: receipt.dimensions.evidence.provenance,
@@ -983,7 +985,7 @@ struct RecordDimensionsCard: View {
         if let agent = dim.primaryAgent { parts.append(agent) }
         if let models = dim.models, !models.isEmpty { parts.append(models.joined(separator: ", ")) }
         if let subagents = dim.subagentSessionCount, subagents > 0 { parts.append("\(subagents) subagents") }
-        return parts.isEmpty ? "no actor recorded" : parts.joined(separator: " · ")
+        return parts.isEmpty ? "no agent recorded" : parts.joined(separator: " · ")
     }
 
     private var costSummary: String {
@@ -1017,13 +1019,6 @@ struct RecordDimensionsCard: View {
         // The Task's weekly-plan share has its own "Weekly plan" row below.
         if let tokensLine { line += "\n" + tokensLine }
         return line
-    }
-
-    // The Task's share of its client's weekly plan, as its own receipt row:
-    // the calibrated percentage, or a named calibration state — never a
-    // fabricated number (calibrated-or-nothing). Absent payload → "—".
-    private var weeklyPlanSummary: String {
-        receipt.dimensions.cost.planShare?.rowSummary ?? "—"
     }
 
     private var evidenceSummary: String {
@@ -1120,7 +1115,7 @@ struct DispositionControls: View {
                     resolvePopoverShown = false
                     post("resolve", note: note)
                 } label: {
-                    Text("Record resolve").workFont(.captionSemibold)
+                    Text("Record resolution").workFont(.captionSemibold)
                 }
                 .foregroundStyle(Theme.accent)
                 .buttonStyle(QuietButtonStyle(prominent: true))
@@ -1220,7 +1215,7 @@ struct BlockerCallout: View {
             if let count = blocker.blockedStepCount, count > 1 {
                 // "steps with recorded blockers": sticky blocker text keeps a
                 // step in this count even when its latest status moved on.
-                Text("+\(count - 1) more step\(count == 2 ? "" : "s") with recorded blockers in Sessions & steps below")
+                Text("\(count - 1) more step\(count == 2 ? "" : "s") with recorded blockers")
                     .workFont(.dataSmall).foregroundStyle(Theme.muted)
             }
             if let state = blocker.disposition?.state, state != "open" {
@@ -1280,8 +1275,12 @@ struct RecordCoverageCard: View {
                 HStack {
                     Text("Evidence coverage").workFont(.titleCard).foregroundStyle(Theme.ink)
                         .accessibilityAddTraits(.isHeader)
+                    ContextHelp(
+                        title: "About evidence coverage",
+                        message: "Counts show how many checkable steps carry a passing check, and how independent that check is — counts, not a probability of correctness.\n\nReceipt format: \(schemaVersion)",
+                        identifier: "receipt.coverage.help"
+                    )
                     Spacer()
-                    Text(schemaVersion).workFont(.dataSmall).foregroundStyle(Theme.muted)
                 }
                 Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, Space.m)
 
@@ -1330,10 +1329,6 @@ struct RecordCoverageCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, Space.s)
                 }
-                Text("Counts show how many checkable steps carry a passing check, and how independent that check is — counts, not a probability of correctness.")
-                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, Space.s)
             }
         }
     }

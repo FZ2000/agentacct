@@ -14,6 +14,7 @@ struct WorkTimelineRecord: Identifiable, Equatable, Codable {
     var start: Double? = nil
     var end: Double? = nil
     var timeNote: String = "Source time unavailable"
+    var timeWarning: String? = nil
     var result: String = "unknown"
     var source: String = "Source unavailable"
     var scope: String? = nil
@@ -136,7 +137,7 @@ struct WorkTimelineProjection: Equatable {
                     records.append(WorkTimelineRecord(
                         id: stepID, laneID: member.id, laneTitle: title, lineage: lineage, kind: .step,
                         title: Self.nonempty(step.title) ?? "Unnamed work section",
-                        start: bounds.start, end: bounds.end, timeNote: bounds.note,
+                        start: bounds.start, end: bounds.end, timeNote: bounds.note, timeWarning: bounds.warning,
                         result: step.latestStatus ?? "unknown", source: "Agent section report",
                         scope: step.sectionId ?? step.workId, summary: step.summary,
                         files: Self.exactFiles(step.files), resolution: step.blocker.map { "Reported blocker: \($0)" },
@@ -215,16 +216,16 @@ struct WorkTimelineProjection: Equatable {
         return value
     }
 
-    static func stepBounds(start: Double?, update: Double?) -> (start: Double?, end: Double?, note: String) {
+    static func stepBounds(start: Double?, update: Double?) -> (start: Double?, end: Double?, note: String, warning: String?) {
         let first = validTime(start), last = validTime(update)
         if let first, let last, last > first {
-            return (first, last, "Recorded section start → latest update; not execution duration")
+            return (first, last, "Recorded section start → latest update; not execution duration", nil)
         }
         if let first, let last, last < first {
-            return (first, nil, "Update precedes start; clock order is inconsistent. Duration unavailable.")
+            return (first, nil, "Update precedes start; clock order is inconsistent. Duration unavailable.", "The recorded update precedes the start. Timing is inconsistent.")
         }
-        if let point = last ?? first { return (point, nil, "Recorded section point; duration unavailable") }
-        return (nil, nil, "Source time unavailable")
+        if let point = last ?? first { return (point, nil, "Recorded section point; duration unavailable", nil) }
+        return (nil, nil, "Source time unavailable", nil)
     }
 
     static func exactFiles(_ files: [String]?) -> [String] {
@@ -266,6 +267,8 @@ struct WorkTimelineInterval: Equatable, Codable {
     func fraction(_ time: Double) -> Double { min(max((time - lower) / span, 0), 1) }
 }
 
+/// Synthesized decoding ignores retired comparison keys in saved bookmarks,
+/// retaining the user's filters, selection and history without reviving that UI.
 struct WorkTimelineBookmark: Equatable, Codable {
     var selectedID: String? = nil
     var query = ""
@@ -273,11 +276,9 @@ struct WorkTimelineBookmark: Equatable, Codable {
     var failuresOnly = false
     var mode = "timeline"
     var interval: WorkTimelineInterval? = nil
-    var compareIDs: [String] = []
     var anchorID: String? = nil
     var scrollOffsets: [WorkTimelineScrollOffset]? = nil
     var overviewExpanded: Bool? = nil
-    var comparisonExpanded: Bool? = nil
     var previousFileFilters: WorkTimelineFilterContext? = nil
 }
 
