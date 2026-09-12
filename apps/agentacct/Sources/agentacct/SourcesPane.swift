@@ -67,10 +67,64 @@ struct V1IngestionIssue: Decodable, Identifiable {
     var id: String { "\(code ?? "?")-\(source ?? "*")" }
 }
 
+/// Only this backend code is a store-wide cause projected onto each source.
+/// All other diagnostics, including watcher staleness, remain independent.
+struct SourceIssueGroup: Identifiable {
+    static let globalReconciliationCode = "evidence_refreshable_usage_failed"
+    let id: String
+    private(set) var issues: [V1IngestionIssue]
+
+    var isGlobalReconciliation: Bool { issues.first?.code == Self.globalReconciliationCode }
+    var affectedSources: [String] { Array(Set(issues.compactMap(\.source))).sorted() }
+
+    static func group(_ issues: [V1IngestionIssue]) -> [Self] {
+        var result: [Self] = []
+        var globalIndex: Int?
+        for (index, issue) in issues.enumerated() {
+            if issue.code == globalReconciliationCode {
+                if let globalIndex {
+                    result[globalIndex].issues.append(issue)
+                } else {
+                    globalIndex = result.count
+                    result.append(Self(id: "global:\(globalReconciliationCode)", issues: [issue]))
+                }
+            } else {
+                // Repeated source/code pairs can carry different diagnostics.
+                // Retain every original row instead of inferring a common cause.
+                result.append(Self(id: "issue:\(index):\(issue.id)", issues: [issue]))
+            }
+        }
+        return result
+    }
+}
+
+struct SourceHealthPresentation {
+    let refreshError: String?
+    var isRetained: Bool { refreshError != nil }
+
+    func watcherIsCurrentlyRunning(_ watcher: V1IngestionWatcher?) -> Bool {
+        !isRetained && watcher?.state == "running"
+    }
+
+    func retainedStatus(_ state: String?) -> String {
+        "Last reported: \((state ?? "unknown").replacingOccurrences(of: "_", with: " ").capitalized)"
+    }
+}
+
 // MARK: - Pane
 
 struct SourcesPane: View {
+    var onSetup: (() -> Void)? = nil
     @Environment(DashboardStore.self) var dashboard
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption) private var scaledMonogramSize: CGFloat = 36
+    private var stacksRows: Bool { dynamicTypeSize.isAccessibilitySize }
+    private var monogramSize: CGFloat {
+        WorkTypeScale.resolved(base: 36, systemScaled: scaledMonogramSize, dynamicTypeSize: dynamicTypeSize)
+    }
+    private var presentation: SourceHealthPresentation {
+        SourceHealthPresentation(refreshError: dashboard.ingestionError)
+    }
 
     var body: some View {
         ScrollBox {
@@ -82,64 +136,104 @@ struct SourcesPane: View {
             .frame(maxWidth: 1172 + Space.gutter * 2, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .workFont(.body)
+    }
+
+    private func adaptiveRow<Content: View>(spacing: CGFloat, alignment: VerticalAlignment = .center, @ViewBuilder content: () -> Content) -> some View {
+        let layout = stacksRows
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: spacing))
+            : AnyLayout(HStackLayout(alignment: alignment, spacing: spacing))
+        return layout { content() }
     }
 
     private var header: some View {
+        adaptiveRow(spacing: Space.l) {
         VStack(alignment: .leading, spacing: 6) {
             Text("Evidence sources")
-                .font(Type.titlePage).tracking(Type.titlePageTracking)
+                .workFont(.titlePage).tracking(Type.titlePageTracking)
                 .foregroundStyle(Theme.ink)
-            Text("what feeds the store · capture is local only")
-                .font(Type.dataSmall).foregroundStyle(Theme.muted)
+            Text("Recording connections and local import health")
+                .workFont(.dataSmall).foregroundStyle(Theme.muted)
+        }
+        if !stacksRows { Spacer() }
+        if let onSetup {
+            Button("Connections", action: onSetup).buttonStyle(NativeSetupActionStyle())
+                .accessibilityIdentifier("sources.connections")
+        }
         }
     }
 
     @ViewBuilder
     private var content: some View {
         if let snapshot = dashboard.ingestion {
+            if let error = dashboard.ingestionError {
+                retainedHealthBanner(error).padding(.bottom, Space.l)
+            }
+            issuesCard(snapshot.issues ?? []).padding(.bottom, (snapshot.issues ?? []).isEmpty ? 0 : Space.l)
             connectedCard(snapshot)
             watcherCard(snapshot.watcher).padding(.top, Space.xl)
-            issuesCard(snapshot.issues ?? []).padding(.top, Space.xl)
-            verifierShelf.padding(.top, Space.xl)
+            verificationDisclosure.padding(.top, Space.xl)
             scopeCard.padding(.top, Space.xl)
         } else if let error = dashboard.ingestionError {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Source health unavailable").font(Type.rowLabel).foregroundStyle(Theme.ink)
-                Text(error).font(Type.caption).foregroundStyle(Theme.muted)
-                Text("An older daemon serves no /v1/ingestion — update and restart it.")
-                    .font(Type.caption).foregroundStyle(Theme.muted)
+                Text("Source health unavailable").workFont(.rowLabel).foregroundStyle(Theme.ink)
+                Text(error).workFont(.caption).foregroundStyle(Theme.muted)
+                Text("Reconnect the recorder and refresh source health to load current diagnostics.")
+                    .workFont(.caption).foregroundStyle(Theme.muted)
             }
-            verifierShelf.padding(.top, Space.xl)
+            verificationDisclosure.padding(.top, Space.xl)
             scopeCard.padding(.top, Space.xl)
         } else {
-            Text("Loading source health…").font(Type.body).foregroundStyle(Theme.muted)
+            Text("Loading source health…").workFont(.body).foregroundStyle(Theme.muted)
         }
     }
 
     // MARK: connected sources
 
+    private func retainedHealthBanner(_ error: String) -> some View {
+        Card(padding: Space.l) {
+            HStack(alignment: .top, spacing: Space.m) {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.amber)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: Space.s) {
+                    Text("Current source health unavailable").workFont(.rowLabel).foregroundStyle(Theme.ink)
+                    Text("Showing the previous source snapshot. Statuses below are last reported; current recording and watcher health are unconfirmed.")
+                        .workFont(.body).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(error).workFont(.caption).foregroundStyle(Theme.muted).textSelection(.enabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("sources-retained-health")
+    }
+
     private func connectedCard(_ snapshot: V1IngestionSnapshot) -> some View {
         let sources = (snapshot.sources ?? []).sorted { $0.source < $1.source }
-        let watcherRunning = snapshot.watcher?.state == "running"
+        let watcherRunning = presentation.watcherIsCurrentlyRunning(snapshot.watcher)
         return Card(padding: 0) {
             VStack(spacing: 0) {
-                HStack(spacing: Space.s) {
-                    Text("Connected sources").font(Type.titleCard).foregroundStyle(Theme.ink)
-                    Text("\(sources.count)").font(Type.dataSmall).foregroundStyle(Theme.muted)
-                    Spacer()
+                adaptiveRow(spacing: Space.s) {
+                    HStack(spacing: Space.s) {
+                        Text(presentation.isRetained ? "Last reported sources" : "Connected sources").workFont(.titleCard).foregroundStyle(Theme.ink)
+                        Text("\(sources.count)").workFont(.dataSmall).foregroundStyle(Theme.muted)
+                    }
+                    if !stacksRows { Spacer() }
                     if let overall = snapshot.state {
                         overallLozenge(overall, watcherRunning: watcherRunning)
                     }
                 }
                 .padding(.horizontal, Space.xl)
-                .frame(height: 52)
+                .padding(.vertical, Space.m)
+                .frame(minHeight: 52)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, Space.xl)
                 if sources.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("No import sources configured")
-                            .font(Type.rowLabel).foregroundStyle(Theme.ink)
-                        Text("Run `agentacct onboard` to wire your coding agents into the store.")
-                            .font(Type.caption).foregroundStyle(Theme.muted)
+                            .workFont(.rowLabel).foregroundStyle(Theme.ink)
+                        Text("Use Connections to add a coding client.")
+                            .workFont(.caption).foregroundStyle(Theme.muted)
                     }
                     .padding(Space.xl)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -157,35 +251,42 @@ struct SourcesPane: View {
     }
 
     private func sourceRow(_ source: V1IngestionSource, watcherRunning: Bool) -> some View {
-        HStack(alignment: .center, spacing: Space.l) {
-            RoundedRectangle(cornerRadius: Metrics.radius)
-                .fill(Theme.tintNeutral)
-                .frame(width: 36, height: 36)
-                .overlay(
-                    Text(Self.monogram(source.source))
-                        .font(Type.dataSmallSemibold).foregroundStyle(Theme.muted)
-                )
-            VStack(alignment: .leading, spacing: 4) {
-                Text(source.source).font(Type.rowLabel).foregroundStyle(Theme.ink)
-                Text(sourceDetail(source, watcherRunning: watcherRunning))
-                    .font(Type.dataSmall).foregroundStyle(Theme.muted)
+        adaptiveRow(spacing: Space.l) {
+            HStack(alignment: .top, spacing: Space.l) {
+                RoundedRectangle(cornerRadius: Metrics.radius)
+                    .fill(Theme.tintNeutral)
+                    .frame(width: monogramSize, height: monogramSize)
+                    .overlay(
+                        Text(Self.monogram(source.source))
+                            .workFont(.dataSmallSemibold).foregroundStyle(Theme.muted)
+                    )
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(source.source).workFont(.rowLabel).foregroundStyle(Theme.ink)
+                    Text(sourceDetail(source, watcherRunning: watcherRunning))
+                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 4) {
+            if !stacksRows { Spacer() }
+            VStack(alignment: stacksRows ? .leading : .trailing, spacing: 4) {
                 if let ago = agoText(source.lastSuccessAt) {
-                    Text("last import \(ago)").font(Type.dataSmall).foregroundStyle(Theme.muted)
+                    Text("last import \(ago)").workFont(.dataSmall).foregroundStyle(Theme.muted)
                 } else {
-                    Text("no successful import yet").font(Type.dataSmall).foregroundStyle(Theme.muted)
+                    Text("no successful import yet").workFont(.dataSmall).foregroundStyle(Theme.muted)
                 }
                 if let errors = source.errorCount, errors > 0 {
                     Text("\(errors) error\(errors == 1 ? "" : "s")")
-                        .font(Type.dataSmall).foregroundStyle(Theme.coral)
+                        .workFont(.dataSmall).foregroundStyle(presentation.isRetained ? Theme.muted : Theme.coral)
                 }
             }
             sourceLozenge(source, watcherRunning: watcherRunning)
         }
         .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.s)
         .frame(minHeight: Metrics.rowSource)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     /// Two-letter monogram that actually distinguishes sources: hyphenated
@@ -221,34 +322,42 @@ struct SourcesPane: View {
     /// that has never yielded a row is "Watching", not "Reporting".
     @ViewBuilder
     private func sourceLozenge(_ source: V1IngestionSource, watcherRunning: Bool) -> some View {
-        switch source.state ?? "unknown" {
-        case "healthy" where watcherRunning && (source.parsed ?? 0) > 0:
-            StateLozenge(text: "Reporting", tint: Theme.green, wash: Theme.tintGreen, pip: .filled)
-        case "healthy" where watcherRunning:
-            StateLozenge(text: "Watching · no data yet", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
-        case "healthy":
-            StateLozenge(text: "Idle", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
-        case "degraded":
-            StateLozenge(text: "Degraded", tint: Theme.amber, wash: Theme.tintAmber, pip: .hollow)
-        case "pending":
-            StateLozenge(text: "Pending", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
-        case let state:
-            StateLozenge(text: state.capitalized, tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+        if presentation.isRetained {
+            StateLozenge(text: presentation.retainedStatus(source.state), tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+        } else {
+            switch source.state ?? "unknown" {
+            case "healthy" where watcherRunning && (source.parsed ?? 0) > 0:
+                StateLozenge(text: "Reporting", tint: Theme.green, wash: Theme.tintGreen, pip: .filled)
+            case "healthy" where watcherRunning:
+                StateLozenge(text: "Watching · no data yet", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+            case "healthy":
+                StateLozenge(text: "Idle", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+            case "degraded":
+                StateLozenge(text: "Degraded", tint: Theme.amber, wash: Theme.tintAmber, pip: .hollow)
+            case "pending":
+                StateLozenge(text: "Pending", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+            case let state:
+                StateLozenge(text: state.capitalized, tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+            }
         }
     }
 
     /// The card-level roll-up follows the same live-fact rule.
     @ViewBuilder
     private func overallLozenge(_ state: String, watcherRunning: Bool) -> some View {
-        switch state {
-        case "healthy" where watcherRunning:
-            StateLozenge(text: "Reporting", tint: Theme.green, wash: Theme.tintGreen, pip: .filled)
-        case "healthy":
-            StateLozenge(text: "Idle", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
-        case "degraded":
-            StateLozenge(text: "Degraded", tint: Theme.amber, wash: Theme.tintAmber, pip: .hollow)
-        case let state:
-            StateLozenge(text: state.capitalized, tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+        if presentation.isRetained {
+            StateLozenge(text: presentation.retainedStatus(state), tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+        } else {
+            switch state {
+            case "healthy" where watcherRunning:
+                StateLozenge(text: "Reporting", tint: Theme.green, wash: Theme.tintGreen, pip: .filled)
+            case "healthy":
+                StateLozenge(text: "Idle", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+            case "degraded":
+                StateLozenge(text: "Degraded", tint: Theme.amber, wash: Theme.tintAmber, pip: .hollow)
+            case let state:
+                StateLozenge(text: state.capitalized, tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+            }
         }
     }
 
@@ -258,25 +367,29 @@ struct SourcesPane: View {
     private func watcherCard(_ watcher: V1IngestionWatcher?) -> some View {
         Card(padding: Space.xl) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: Space.s) {
-                    Text("Continuous sync").font(Type.titleCard).foregroundStyle(Theme.ink)
-                    Spacer()
-                    switch watcher?.state {
-                    case "running":
-                        StateLozenge(text: "Running", tint: Theme.green, wash: Theme.tintGreen, pip: .filled)
-                    case "stale":
-                        StateLozenge(text: "Stale", tint: Theme.amber, wash: Theme.tintAmber, pip: .hollow)
-                    case "stopped":
-                        StateLozenge(text: "Stopped", tint: Theme.coral, wash: Theme.tintCoral, pip: .hollow)
-                    case "not_configured":
-                        StateLozenge(text: "Not configured", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
-                    default:
-                        StateLozenge(text: "Unknown", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+                adaptiveRow(spacing: Space.s) {
+                    Text("Continuous sync").workFont(.titleCard).foregroundStyle(Theme.ink)
+                    if !stacksRows { Spacer() }
+                    if presentation.isRetained {
+                        StateLozenge(text: presentation.retainedStatus(watcher?.state), tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+                    } else {
+                        switch watcher?.state {
+                        case "running":
+                            StateLozenge(text: "Running", tint: Theme.green, wash: Theme.tintGreen, pip: .filled)
+                        case "stale":
+                            StateLozenge(text: "Stale", tint: Theme.amber, wash: Theme.tintAmber, pip: .hollow)
+                        case "stopped":
+                            StateLozenge(text: "Stopped", tint: Theme.coral, wash: Theme.tintCoral, pip: .hollow)
+                        case "not_configured":
+                            StateLozenge(text: "Not configured", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+                        default:
+                            StateLozenge(text: "Unknown", tint: Theme.muted, wash: Theme.tintNeutral, pip: .hollow)
+                        }
                     }
                 }
                 Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, Space.m)
                 Text(watcherDetail(watcher))
-                    .font(Type.caption).foregroundStyle(Theme.muted)
+                    .workFont(.caption).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -287,6 +400,9 @@ struct SourcesPane: View {
     private func watcherDetail(_ watcher: V1IngestionWatcher?) -> String {
         guard let watcher else { return "The daemon reported no watcher block." }
         let heartbeat = agoText(watcher.heartbeatAt).map { "last heartbeat \($0)" } ?? "no heartbeat recorded"
+        if presentation.isRetained {
+            return "The previous snapshot reported \(watcher.state ?? "an unknown state") · \(heartbeat). Current watcher activity is unconfirmed."
+        }
         let cadenceSeconds = watcher.intervalSeconds.map { Int($0.rounded()) }
         switch watcher.state {
         case "running":
@@ -297,7 +413,7 @@ struct SourcesPane: View {
             return "The importer's heartbeat is overdue — \(heartbeat)\(cadence)"
         case "stopped":
             let cadence = cadenceSeconds.map { " (expected every \($0)s)" } ?? ""
-            return "Importer stopped — \(heartbeat)\(cadence). Start it with `agentacct start`."
+            return "Importer stopped — \(heartbeat)\(cadence). Open recording health to reconnect."
         case "not_configured":
             return "No continuous sync is configured — imports happen only on manual scans."
         default:
@@ -310,30 +426,68 @@ struct SourcesPane: View {
     @ViewBuilder
     private func issuesCard(_ issues: [V1IngestionIssue]) -> some View {
         if !issues.isEmpty {
+            let groups = SourceIssueGroup.group(issues)
             Card(padding: Space.xl) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Needs attention (\(issues.count))")
-                        .font(Type.titleCard).foregroundStyle(Theme.ink)
+                    adaptiveRow(spacing: Space.s, alignment: .firstTextBaseline) {
+                        Text("\(presentation.isRetained ? "Previously reported" : "Needs attention") (\(groups.count))")
+                            .workFont(.titleCard).foregroundStyle(Theme.ink)
+                        Text("\(issues.count) diagnostic \(issues.count == 1 ? "report" : "reports")")
+                            .workFont(.caption).foregroundStyle(Theme.muted)
+                    }
                     Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, Space.m)
-                    VStack(alignment: .leading, spacing: Space.m) {
-                        ForEach(issues) { issue in
-                            HStack(alignment: .firstTextBaseline, spacing: Space.m) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: Space.s) {
-                                        Text(issueTitle(issue))
-                                            .font(Type.rowLabel).foregroundStyle(Theme.amber)
-                                        Text(issue.code ?? "")
-                                            .font(Type.dataSmall).foregroundStyle(Theme.muted)
-                                    }
-                                    Text(issue.action ?? "see `agentacct doctor`")
-                                        .font(Type.caption).foregroundStyle(Theme.muted)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
+                    VStack(alignment: .leading, spacing: Space.xl) {
+                        ForEach(groups) { group in
+                            if group.isGlobalReconciliation {
+                                sharedReconciliationIssue(group)
+                            } else if let issue = group.issues.first {
+                                originalDiagnostic(issue)
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    private func sharedReconciliationIssue(_ group: SourceIssueGroup) -> some View {
+        VStack(alignment: .leading, spacing: Space.m) {
+            Text("Evidence reconciliation needs review")
+                .workFont(.rowLabel).foregroundStyle(presentation.isRetained ? Theme.muted : Theme.amber)
+            Text(group.affectedSources.isEmpty
+                ? "One global reconciliation fault is reported. Affected sources were not identified."
+                : "One global reconciliation fault is reported across \(group.affectedSources.count) source \(group.affectedSources.count == 1 ? "summary" : "summaries").")
+                .workFont(.body).foregroundStyle(Theme.ink)
+            if !group.affectedSources.isEmpty {
+                Text("Affected sources: \(group.affectedSources.joined(separator: ", "))")
+                    .workFont(.caption).foregroundStyle(Theme.muted)
+            }
+            Text("Usage history may be incomplete or conflicting. This shared fault does not establish that every affected client stopped recording.")
+                .workFont(.caption).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: Space.l) {
+                    ForEach(Array(group.issues.enumerated()), id: \.offset) { _, issue in
+                        originalDiagnostic(issue)
+                    }
+                }
+                .padding(.top, Space.m)
+            } label: {
+                Text("Original diagnostics (\(group.issues.count))")
+                    .workFont(.captionSemibold).foregroundStyle(Theme.ink)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("sources-reconciliation-diagnostics")
+        }
+    }
+
+    private func originalDiagnostic(_ issue: V1IngestionIssue) -> some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            Text(issueTitle(issue))
+                .workFont(.rowLabel).foregroundStyle(presentation.isRetained ? Theme.muted : Theme.amber)
+            Text(issue.code ?? "code not supplied").workFont(.dataSmall).foregroundStyle(Theme.muted)
+            Text(issue.action ?? "See agentacct doctor for source diagnostics.")
+                .workFont(.caption).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }
     }
 
@@ -350,10 +504,19 @@ struct SourcesPane: View {
 
     // MARK: verifier shelf
 
+    private var verificationDisclosure: some View {
+        DisclosureGroup("Verification connections · not connected") {
+            verifierShelf.padding(.top, Space.m)
+        }
+        .workFont(.caption)
+        .accessibilityIdentifier("sources.verification-connections")
+    }
+
     private var verifierShelf: some View {
         VStack(alignment: .leading, spacing: Space.m) {
-            CapsLabel(text: "Verifiers · not connected · upgrade self-checked claims to verified")
-            HStack(alignment: .top, spacing: Space.xl) {
+            Text("Independent evidence can support verification. These connections are not configured.")
+                .workFont(.caption).foregroundStyle(Theme.muted)
+            adaptiveRow(spacing: Space.xl, alignment: .top) {
                 verifierCard(
                     name: "CI check runs",
                     provides: "independent check results recorded against receipts"
@@ -369,19 +532,19 @@ struct SourcesPane: View {
     private func verifierCard(name: String, provides: String) -> some View {
         Card(padding: Space.xl) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: Space.m) {
+                adaptiveRow(spacing: Space.m) {
                     RoundedRectangle(cornerRadius: Metrics.radius)
                         .fill(Theme.tintNeutral)
-                        .frame(width: 36, height: 36)
+                        .frame(width: monogramSize, height: monogramSize)
                         .overlay(EvidencePip(shape: .hollow, tint: Theme.muted, radius: 6))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(name).font(Type.rowLabel).foregroundStyle(Theme.ink)
-                        Text(provides).font(Type.dataSmall).foregroundStyle(Theme.muted)
+                        Text(name).workFont(.rowLabel).foregroundStyle(Theme.ink)
+                        Text(provides).workFont(.dataSmall).foregroundStyle(Theme.muted)
                     }
-                    Spacer()
+                    if !stacksRows { Spacer() }
                     HStack(spacing: 6) {
                         EvidencePip(shape: .verified, tint: Theme.muted)
-                        Text("→ verified").font(Type.captionSemibold).foregroundStyle(Theme.muted)
+                        Text("→ verified").workFont(.captionSemibold).foregroundStyle(Theme.muted)
                     }
                 }
 
@@ -394,20 +557,24 @@ struct SourcesPane: View {
     private var scopeCard: some View {
         Card(padding: Space.xl) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: Space.s) {
-                    StatusDot(color: Theme.green, size: 8)
-                    Text("Local only — nothing leaves this machine")
-                        .font(Type.rowLabel).foregroundStyle(Theme.ink)
-                    Spacer()
-                    Text("store: \((try? GlanceClient.storeDir())?.path ?? "invalid configuration")")
-                        .font(Type.dataSmall).foregroundStyle(Theme.muted)
-                        .lineLimit(1).truncationMode(.middle)
-                        .frame(maxWidth: 420, alignment: .trailing)
+                adaptiveRow(spacing: Space.s) {
+                    HStack(spacing: Space.s) {
+                        StatusDot(color: Theme.green, size: 8)
+                        Text("Local evidence store")
+                            .workFont(.rowLabel).foregroundStyle(Theme.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ContextHelp(title: "What is stored locally",
+                            message: "Imports activity and usage from local client logs, plus work sections and checks reported by agents. Records can include summaries, commands, file paths, exit codes and artifact references.",
+                            identifier: "sources.capture-scope")
+                    }
+                    if !stacksRows { Spacer() }
+                    Text("store: \(SnapshotMode.enabled ? "/synthetic-review/state" : ((try? GlanceClient.storeDir())?.path ?? "invalid configuration"))")
+                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
+                        .lineLimit(stacksRows ? nil : 1).truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: stacksRows ? .infinity : 420, alignment: stacksRows ? .leading : .trailing)
+                        .textSelection(.enabled)
                 }
-                Text("Reads tool names, commands, file paths, exit codes, timestamps, and token counts from your agents' own local logs — never file contents or prompts.")
-                    .font(Type.dataSmall).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, Space.s)
             }
         }
     }
@@ -419,14 +586,18 @@ struct StateLozenge: View {
     let tint: Color
     let wash: Color
     let pip: PipShape
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption) private var scaledMinimumHeight = Metrics.tierBadgeH
 
     var body: some View {
         HStack(spacing: 6) {
             EvidencePip(shape: pip, tint: tint)
-            Text(text).font(Type.captionSemibold).foregroundStyle(tint)
+            Text(text).workFont(.captionSemibold).foregroundStyle(tint)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 11)
-        .frame(height: Metrics.tierBadgeH)
+        .padding(.vertical, 3)
+        .frame(minHeight: WorkTypeScale.resolved(base: Metrics.tierBadgeH, systemScaled: scaledMinimumHeight, dynamicTypeSize: dynamicTypeSize))
         .background(wash, in: RoundedRectangle(cornerRadius: Metrics.radius))
     }
 }

@@ -78,7 +78,10 @@ final class GlanceClient {
 
     private let session: URLSession
 
-    init() {
+    private let savedWork: SavedWorkSnapshot?
+
+    init(savedWork: SavedWorkSnapshot? = nil) {
+        self.savedWork = savedWork
         let config = URLSessionConfiguration.ephemeral
         // The receipt/tasks routes do a full-ledger reduce on a cold cache (a
         // few seconds on a large store); 20s let a legitimately slow first
@@ -279,8 +282,8 @@ final class GlanceClient {
         try storeDir().appendingPathComponent("local-api.json")
     }
 
-    func loadDiscovery() throws -> Discovery {
-        let path = try Self.discoveryPath()
+    func loadDiscovery(store: URL? = nil) throws -> Discovery {
+        let path = try store?.appendingPathComponent("local-api.json") ?? Self.discoveryPath()
         guard let data = try? Data(contentsOf: path) else {
             throw GlanceClientError.noDiscovery(path.path)
         }
@@ -318,16 +321,20 @@ final class GlanceClient {
     /// (daemon restarted → re-read the discovery file once). The window's
     /// data lanes use this so ALL app traffic rides the authenticated lane.
     func getAuthed<T: Decodable>(_ path: String) async throws -> T {
+        if let savedWork { return try savedWork.value(path) }
+        let store = try Self.storeDir().standardizedFileURL.resolvingSymlinksInPath()
+        let requestStartedAt = Date()
         do {
-            return try await get(path, discovery: loadDiscovery())
+            return try await get(path, discovery: loadDiscovery(store: store), cacheStore: store, requestStartedAt: requestStartedAt)
         } catch GlanceClientError.http(401) {
-            return try await get(path, discovery: loadDiscovery())
+            return try await get(path, discovery: loadDiscovery(store: store), cacheStore: store, requestStartedAt: requestStartedAt)
         }
     }
 
     /// A localhost GET on the legacy machine-local JSON surfaces (no bearer —
     /// e.g. /usage/summary, which has no /v1 twin yet).
     func getLocal<T: Decodable>(_ path: String) async throws -> T {
+        if savedWork != nil { throw SavedWorkError.notSaved }
         let discovery = try loadDiscovery()
         let host = discovery.host ?? "127.0.0.1"
         guard let url = URL(string: "http://\(host):\(discovery.port)\(path)") else {
@@ -345,6 +352,7 @@ final class GlanceClient {
     /// daemon's own detail message so honesty copy ("blocker changed…")
     /// reaches the user verbatim.
     func postAuthed<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
+        guard savedWork == nil else { throw SavedWorkError.readOnly }
         do {
             return try await postOnce(path, body: body, discovery: loadDiscovery())
         } catch GlanceClientError.http(401) {
@@ -390,7 +398,7 @@ final class GlanceClient {
         }
     }
 
-    private func get<T: Decodable>(_ path: String, discovery: Discovery) async throws -> T {
+    private func get<T: Decodable>(_ path: String, discovery: Discovery, cacheStore: URL? = nil, requestStartedAt: Date = Date()) async throws -> T {
         let host = discovery.host ?? "127.0.0.1"
         guard let url = URL(string: "http://\(host):\(discovery.port)\(path)") else {
             throw GlanceClientError.transport("bad daemon URL")
@@ -411,7 +419,11 @@ final class GlanceClient {
             throw GlanceClientError.http(http.statusCode)
         }
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            let decoded = try JSONDecoder().decode(T.self, from: data)
+            if !Task.isCancelled, SavedWorkSnapshot.accepts(path), let cacheStore {
+                await SavedWorkCache.shared.record(path: path, data: data, store: cacheStore, requestStartedAt: requestStartedAt)
+            }
+            return decoded
         } catch {
             throw GlanceClientError.transport("payload decode failed: \(error.localizedDescription)")
         }

@@ -249,6 +249,10 @@ enum Face {
     static let mono: String? = resolve(["JetBrains Mono", "JetBrainsMono-Regular"])
 
     private static func resolve(_ candidates: [String]) -> String? {
+        // Exercise the same fallback used when bundled faces are unavailable,
+        // without changing fonts installed on the user's machine.
+        if ProcessInfo.processInfo.arguments.contains("--snapshot-native-fixture"),
+           ProcessInfo.processInfo.environment["AGENTACCT_NATIVE_REVIEW_SYSTEM_FONTS"] == "1" { return nil }
         for name in candidates where NSFont(name: name, size: 13) != nil { return name }
         return nil
     }
@@ -302,12 +306,13 @@ enum Type {
 /// them together so accessibility settings scale the whole task record rather
 /// than only changing its column arrangement.
 enum WorkFontRole {
-    case titlePage, titleCard, kpi, rowLabel, body, caption, captionSemibold
+    case titlePage, titleSection, titleCard, kpi, rowLabel, body, caption, captionSemibold
     case dataSmall, dataSmallSemibold, labelCaps
 
     var metrics: (size: CGFloat, weight: Font.Weight, relativeTo: Font.TextStyle, monospaced: Bool) {
         switch self {
         case .titlePage: return (26, .semibold, .title, false)
+        case .titleSection: return (20, .semibold, .title2, false)
         case .titleCard: return (15, .semibold, .headline, false)
         case .kpi: return (18, .bold, .title3, true)
         case .rowLabel: return (14, .semibold, .body, false)
@@ -323,6 +328,7 @@ enum WorkFontRole {
     var baseFont: Font {
         switch self {
         case .titlePage: return Type.titlePage
+        case .titleSection: return Type.titleSection
         case .titleCard: return Type.titleCard
         case .kpi: return Type.kpi
         case .rowLabel: return Type.rowLabel
@@ -336,10 +342,35 @@ enum WorkFontRole {
     }
 }
 
+/// Some macOS hosts retain base ScaledMetric values even when the reading-size
+/// environment changes. Keep an explicit minimum ramp; respect a larger system
+/// scale, and preserve the existing default typography.
+enum WorkTypeScale {
+    static func resolved(base: CGFloat, systemScaled: CGFloat, dynamicTypeSize: DynamicTypeSize) -> CGFloat {
+        let factor: CGFloat
+        switch dynamicTypeSize {
+        case .xSmall: factor = 0.85
+        case .small: factor = 0.925
+        case .medium, .large: return base
+        case .xLarge: factor = 1.1
+        case .xxLarge: factor = 1.2
+        case .xxxLarge: factor = 1.3
+        case .accessibility1: factor = 1.45
+        case .accessibility2: factor = 1.65
+        case .accessibility3: factor = 1.85
+        case .accessibility4: factor = 2.05
+        case .accessibility5: factor = 2.3
+        @unknown default: factor = 1
+        }
+        return factor < 1 ? min(systemScaled, base * factor) : max(systemScaled, base * factor)
+    }
+}
+
 private struct WorkScaledFontModifier: ViewModifier {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric private var scaledSize: CGFloat
     let baseFont: Font
+    let baseSize: CGFloat
     let weight: Font.Weight
     let monospaced: Bool
 
@@ -352,6 +383,7 @@ private struct WorkScaledFontModifier: ViewModifier {
     ) {
         _scaledSize = ScaledMetric(wrappedValue: size, relativeTo: relativeTo)
         self.baseFont = baseFont
+        self.baseSize = size
         self.weight = weight
         self.monospaced = monospaced
     }
@@ -360,17 +392,18 @@ private struct WorkScaledFontModifier: ViewModifier {
         if dynamicTypeSize == .medium || dynamicTypeSize == .large {
             return content.font(baseFont)
         } else {
+            let size = max(12, WorkTypeScale.resolved(base: baseSize, systemScaled: scaledSize, dynamicTypeSize: dynamicTypeSize))
             let font: Font
             if monospaced {
                 if let name = Face.mono {
-                    font = .custom(name, size: scaledSize).weight(weight).monospacedDigit()
+                    font = .custom(name, size: size).weight(weight).monospacedDigit()
                 } else {
-                    font = .system(size: scaledSize, weight: weight, design: .monospaced).monospacedDigit()
+                    font = .system(size: size, weight: weight, design: .monospaced).monospacedDigit()
                 }
             } else if let name = Face.sans {
-                font = .custom(name, size: scaledSize).weight(weight)
+                font = .custom(name, size: size).weight(weight)
             } else {
-                font = .system(size: scaledSize, weight: weight)
+                font = .system(size: size, weight: weight)
             }
             return content.font(font)
         }
@@ -1151,6 +1184,8 @@ struct SummaryCell: View {
 /// Offscreen ImageRenderer can't lay out ScrollViews/lazy stacks; snapshot
 /// mode swaps them for plain containers so renders match the live app.
 enum SnapshotMode {
+    nonisolated(unsafe) static var reviewExpandSetupDetails = false
+    nonisolated(unsafe) static var interactiveFixture = false
     nonisolated(unsafe) static var enabled = false
 
     /// Optional clock override for deterministic fixture renders.
@@ -1194,7 +1229,7 @@ struct ScrollBox<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        if SnapshotMode.enabled {
+        if SnapshotMode.enabled && !SnapshotMode.interactiveFixture {
             if SnapshotMode.boundsScrollContentToViewport {
                 GeometryReader { proxy in
                     content()
@@ -1230,7 +1265,7 @@ struct ScrollContentStack<Content: View>: View {
     }
 
     var body: some View {
-        if SnapshotMode.enabled {
+        if SnapshotMode.enabled && !SnapshotMode.interactiveFixture {
             VStack(alignment: alignment, spacing: spacing, content: content)
         } else {
             LazyVStack(alignment: alignment, spacing: spacing, content: content)

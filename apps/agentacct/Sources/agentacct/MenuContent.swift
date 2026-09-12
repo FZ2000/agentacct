@@ -594,6 +594,7 @@ private struct MenuLimitMeter: View {
 /// back from the service so the control reflects changes made in Settings.
 struct LaunchAtLoginToggle: View {
     @State private var enabled: Bool
+    @State private var updateMessage: String?
 
     init(initialEnabled: Bool? = nil) {
         _enabled = State(
@@ -602,26 +603,37 @@ struct LaunchAtLoginToggle: View {
     }
 
     var body: some View {
-        Toggle(isOn: Binding(
-            get: { enabled },
-            set: { wanted in
-                do {
-                    if wanted {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { enabled },
+                set: { wanted in
+                    updateMessage = nil
+                    do {
+                        if wanted {
+                            try SMAppService.mainApp.register()
+                        } else {
+                            try SMAppService.mainApp.unregister()
+                        }
+                    } catch {
+                        updateMessage = "Could not change launch at login: \(error.localizedDescription)"
                     }
-                } catch {
-                    // Reflect the service's actual state for unsigned/moved builds.
+                    enabled = SMAppService.mainApp.status == .enabled
+                    if updateMessage == nil, wanted, SMAppService.mainApp.status == .requiresApproval {
+                        updateMessage = "Allow agentacct in macOS Login Items settings to finish enabling launch at login."
+                    }
                 }
-                enabled = SMAppService.mainApp.status == .enabled
+            )) {
+                Text("Launch at login")
             }
-        )) {
-            Text("Launch at login")
+            .toggleStyle(MenuCheckboxToggleStyle())
+            .help("Launch agentacct at login")
+            .accessibilityIdentifier("menu.launch-at-login")
+            if let updateMessage {
+                Text(updateMessage).workFont(.caption).foregroundStyle(Theme.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("menu.launch-at-login.feedback")
+            }
         }
-        .toggleStyle(MenuCheckboxToggleStyle())
-        .help("Launch agentacct at login")
-        .accessibilityIdentifier("menu.launch-at-login")
     }
 }
 

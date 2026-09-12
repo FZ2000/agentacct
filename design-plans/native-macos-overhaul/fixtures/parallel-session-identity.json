@@ -1,0 +1,1545 @@
+{
+  "daemon_version": "0.9.3",
+  "glance": {
+    "schema": "agentacct.glance.v1",
+    "generated_at": 1787618800,
+    "usage": {
+      "windows": [
+        {
+          "label": "today",
+          "days": 1,
+          "totals": {
+            "fresh_tokens": 22500000,
+            "total_tokens_including_cached": 91200000,
+            "estimated_cost_usd": 525.14,
+            "cost_complete": true,
+            "known_additive_cost_usd": 525.14
+          }
+        },
+        {
+          "label": "7d",
+          "days": 7,
+          "totals": {
+            "fresh_tokens": 48100000,
+            "total_tokens_including_cached": 196400000,
+            "estimated_cost_usd": 1087.42,
+            "cost_complete": true,
+            "known_additive_cost_usd": 1087.42
+          }
+        },
+        {
+          "label": "30d",
+          "days": 30,
+          "totals": {
+            "fresh_tokens": 93400000,
+            "total_tokens_including_cached": 382100000,
+            "estimated_cost_usd": 2146.88,
+            "cost_complete": true,
+            "known_additive_cost_usd": 2146.88
+          }
+        }
+      ],
+      "usage_record_count": 54,
+      "by_client": [
+        {
+          "client": "codex",
+          "fresh_tokens": 31200000,
+          "estimated_cost_usd": 402.1,
+          "known_additive_cost_usd": 402.1,
+          "cost_complete": true,
+          "cost_confidence": "estimated_from_tokens",
+          "sessions": 21
+        },
+        {
+          "client": "claude-code",
+          "fresh_tokens": 16500000,
+          "estimated_cost_usd": 680.32,
+          "known_additive_cost_usd": 680.32,
+          "cost_complete": true,
+          "cost_confidence": "estimated_from_tokens",
+          "sessions": 9
+        },
+        {
+          "client": "hermes",
+          "fresh_tokens": 400000,
+          "estimated_cost_usd": 5.0,
+          "known_additive_cost_usd": 5.0,
+          "cost_complete": true,
+          "cost_confidence": "estimated_from_tokens",
+          "sessions": 2
+        }
+      ]
+    },
+    "limits": [
+      {
+        "client": "codex",
+        "stream_id": "codex_rate_limit",
+        "plan_type": "pro",
+        "stale": false,
+        "windows": [
+          {
+            "kind": "7d",
+            "used_percent": 39,
+            "window_minutes": 10080,
+            "resets_at": 1788184000
+          },
+          {
+            "kind": "5h",
+            "used_percent": 12,
+            "window_minutes": 300
+          }
+        ]
+      },
+      {
+        "client": "claude-code",
+        "stream_id": "claude_code_rate_limit",
+        "plan_type": null,
+        "stale": false,
+        "windows": [
+          {
+            "kind": "7d",
+            "used_percent": 47,
+            "window_minutes": 10080
+          },
+          {
+            "kind": "5h",
+            "used_percent": 7,
+            "window_minutes": 300
+          }
+        ]
+      }
+    ],
+    "plan": [
+      {
+        "client": "codex",
+        "confidence": "provider_reported",
+        "calibration_state": "never"
+      },
+      {
+        "client": "claude-code",
+        "confidence": "baseline",
+        "calibration_state": "calibrating",
+        "intervals_used": 9,
+        "intervals_needed": 24,
+        "state_detail": "9 intervals recorded; calibration needs 24 or more stable intervals spanning at least one week"
+      }
+    ],
+    "recent_sessions": [
+      {
+        "client": "codex",
+        "session_id": "fixture-active-01",
+        "title": "Dashboard design system",
+        "status": "in_progress",
+        "last_activity_at": 1787618788
+      },
+      {
+        "client": "codex",
+        "session_id": "fixture-active-02",
+        "title": "Snapshot harness",
+        "status": "checkpoint",
+        "last_activity_at": 1787618752
+      }
+    ]
+  },
+  "menu_sparse_glance": {
+    "schema": "agentacct.glance.v1",
+    "generated_at": 1787618800,
+    "usage": {
+      "windows": [
+        {
+          "label": "today",
+          "days": 1,
+          "totals": {
+            "fresh_tokens": 8000000,
+            "estimated_cost_usd": 200.67,
+            "cost_complete": true,
+            "known_additive_cost_usd": 200.67
+          }
+        },
+        {
+          "label": "last 7 days",
+          "days": 7,
+          "totals": {
+            "fresh_tokens": 39300000,
+            "estimated_cost_usd": 949.36,
+            "cost_complete": true,
+            "known_additive_cost_usd": 949.36
+          }
+        },
+        {
+          "label": "last 30 days",
+          "days": 30,
+          "totals": {
+            "fresh_tokens": 41900000,
+            "estimated_cost_usd": 990.99,
+            "cost_complete": false,
+            "known_additive_cost_usd": 990.99
+          }
+        }
+      ],
+      "usage_record_count": 18,
+      "by_client": []
+    },
+    "limits": [
+      {
+        "client": "codex",
+        "stream_id": "codex_rate_limit",
+        "org": "personal",
+        "plan_type": "pro",
+        "stale": false,
+        "windows": [
+          {
+            "kind": "7d",
+            "used_percent": 4,
+            "window_minutes": 10080,
+            "resets_at": 1788144400
+          }
+        ]
+      }
+    ],
+    "plan": [
+      {
+        "client": "codex",
+        "confidence": "provider_reported",
+        "calibration_state": "never"
+      },
+      {
+        "client": "claude-code",
+        "confidence": "baseline",
+        "calibration_state": "calibrating",
+        "intervals_used": 9,
+        "intervals_needed": 24,
+        "state_detail": "9 intervals recorded; calibration needs 24 or more stable intervals spanning at least one week"
+      }
+    ],
+    "recent_sessions": [
+      {
+        "client": "codex",
+        "session_id": "01a041c8-fixture",
+        "status": "in_progress",
+        "last_activity_at": 1787618788,
+        "plan_pct": 1.2
+      },
+      {
+        "client": "codex",
+        "session_id": "01a04201-fixture",
+        "status": "checkpoint",
+        "last_activity_at": 1787618752
+      },
+      {
+        "client": "claude-code",
+        "session_id": "01a04255-fixture",
+        "title": "Limit calibration",
+        "status": "completed",
+        "last_activity_at": 1787618700
+      }
+    ]
+  },
+  "plan": {
+    "schema": "agentacct.plan.v1",
+    "generated_at": 1787618800,
+    "days": 7,
+    "clients": [
+      {
+        "client": "codex",
+        "confidence": "provider_reported",
+        "calibration_state": "never",
+        "calibratable": false,
+        "state_detail": "Provider-reported account truth",
+        "window_pcts": {
+          "today": null,
+          "7d": null
+        },
+        "daily": []
+      },
+      {
+        "client": "claude-code",
+        "confidence": "baseline",
+        "calibration_state": "calibrating",
+        "calibratable": true,
+        "state_detail": "9 intervals recorded; it calibrates once it holds split-half stable across 24+ intervals spanning a week or more",
+        "window_pcts": {},
+        "daily": []
+      }
+    ]
+  },
+  "ingestion": {
+    "schema": "agentacct.v1-ingestion.v1",
+    "ingestion": {
+      "state": "healthy",
+      "last_success_at": 1787618770,
+      "issues": []
+    }
+  },
+  "attention": {
+    "schema": "agentacct.v1-attention.v1",
+    "total": 2,
+    "counts": {
+      "failed_check": 1,
+      "failed_step": 0,
+      "blocker": 1
+    },
+    "limit": 5,
+    "truncated": false,
+    "items": [
+      {
+        "task_id": "task-visual-regression",
+        "title": "Review dashboard visual regression",
+        "project": "agentacct-gui",
+        "decision_status": {
+          "key": "finding",
+          "label": "Open finding",
+          "asserted_by": "machine"
+        },
+        "evidence_strength": {
+          "key": "unchecked",
+          "gradeable": true,
+          "strongest_tier": "unchecked",
+          "checkable_total": 1,
+          "checked_total": 0,
+          "by_tier": {
+            "unchecked": 1
+          },
+          "checks_total": 1,
+          "checks_passed": 0,
+          "checks_failed": 1
+        },
+        "cost": {
+          "estimated_cost_usd": 1.08,
+          "cost_basis": "pricing_table",
+          "cost_confidence": "estimated",
+          "cost_complete": true
+        },
+        "primary_root": {
+          "client": "codex",
+          "client_session_id": "fixture-failed"
+        },
+        "last_activity_at": 1787618080,
+        "attention": {
+          "kind": "failed_check",
+          "summary": "The minimum-window snapshot differs from its reviewed reference.",
+          "next_step": "Inspect the changed hierarchy before accepting a new reference.",
+          "observed_at": 1787618080,
+          "source": "mcp"
+        }
+      },
+      {
+        "task_id": "task-provider-calibration",
+        "title": "Resolve provider calibration",
+        "project": "agentacct-gui",
+        "decision_status": {
+          "key": "blocked",
+          "label": "Blocked",
+          "asserted_by": "agent_report"
+        },
+        "evidence_strength": {
+          "key": "not_gradeable",
+          "gradeable": false,
+          "checkable_total": 0,
+          "checked_total": 0,
+          "checks_total": 0,
+          "checks_passed": 0,
+          "checks_failed": 0
+        },
+        "cost": {},
+        "primary_root": {
+          "client": "codex",
+          "client_session_id": "fixture-blocked"
+        },
+        "last_activity_at": 1787617900,
+        "attention": {
+          "kind": "blocker",
+          "summary": "Provider allowance calibration is waiting for a complete observation window.",
+          "next_step": "Review the recorded calibration state before changing provider settings.",
+          "observed_at": 1787617900,
+          "source": "mcp"
+        }
+      }
+    ]
+  },
+  "tasks": {
+    "schema": "agentacct.receipt.v1",
+    "total": 4,
+    "truncated": false,
+    "tasks": [
+      {
+        "task_id": "task-snapshot-harness",
+        "title": "Build reusable snapshot harness",
+        "decision_status": {
+          "key": "verified",
+          "label": "Verified",
+          "asserted_by": "machine"
+        },
+        "evidence_strength": {
+          "key": "independently_checked",
+          "gradeable": true,
+          "strongest_tier": "independently_checked",
+          "checkable_total": 4,
+          "checked_total": 4,
+          "by_tier": {
+            "independently_checked": 4
+          },
+          "checks_total": 4,
+          "checks_passed": 4,
+          "checks_failed": 0
+        },
+        "cost": {
+          "estimated_cost_usd": 4.82,
+          "cost_basis": "pricing_table",
+          "cost_confidence": "estimated",
+          "cost_complete": true
+        },
+        "primary_root": {
+          "client": "codex",
+          "client_session_id": "fixture-active-02"
+        },
+        "last_activity_at": 1787618680
+      },
+      {
+        "task_id": "task-dashboard-hierarchy",
+        "title": "Rethink dashboard product hierarchy",
+        "decision_status": {
+          "key": "reported",
+          "label": "Agent reported",
+          "asserted_by": "agent_report"
+        },
+        "evidence_strength": {
+          "key": "self_checked",
+          "gradeable": true,
+          "strongest_tier": "self_checked",
+          "checkable_total": 3,
+          "checked_total": 2,
+          "by_tier": {
+            "self_checked": 2,
+            "unchecked": 1
+          },
+          "checks_total": 2,
+          "checks_passed": 2,
+          "checks_failed": 0
+        },
+        "cost": {
+          "estimated_cost_usd": 2.16,
+          "cost_basis": "pricing_table",
+          "cost_confidence": "estimated",
+          "cost_complete": true
+        },
+        "primary_root": {
+          "client": "codex",
+          "client_session_id": "fixture-active-01"
+        },
+        "last_activity_at": 1787618140
+      },
+      {
+        "task_id": "task-provider-calibration",
+        "title": "Resolve provider calibration",
+        "decision_status": {
+          "key": "blocked",
+          "label": "Blocked",
+          "asserted_by": "agent_report"
+        },
+        "evidence_strength": {
+          "key": "not_gradeable",
+          "gradeable": false,
+          "checkable_total": 0,
+          "checked_total": 0,
+          "checks_total": 0,
+          "checks_passed": 0,
+          "checks_failed": 0
+        },
+        "cost": {},
+        "primary_root": {
+          "client": "codex",
+          "client_session_id": "fixture-blocked"
+        },
+        "last_activity_at": 1787617900
+      },
+      {
+        "task_id": "task-visual-regression",
+        "title": "Review dashboard visual regression",
+        "decision_status": {
+          "key": "finding",
+          "label": "Open finding",
+          "asserted_by": "machine"
+        },
+        "evidence_strength": {
+          "key": "unchecked",
+          "gradeable": true,
+          "strongest_tier": "unchecked",
+          "checkable_total": 1,
+          "checked_total": 0,
+          "by_tier": {
+            "unchecked": 1
+          },
+          "checks_total": 1,
+          "checks_passed": 0,
+          "checks_failed": 1
+        },
+        "cost": {
+          "estimated_cost_usd": 1.08,
+          "cost_basis": "pricing_table",
+          "cost_confidence": "estimated",
+          "cost_complete": true
+        },
+        "primary_root": {
+          "client": "codex",
+          "client_session_id": "fixture-failed"
+        },
+        "last_activity_at": 1787618080
+      }
+    ],
+    "attention": {
+      "total": 2,
+      "limit": 100,
+      "truncated": false,
+      "tasks": [
+        {
+          "task_id": "task-visual-regression",
+          "title": "Review dashboard visual regression",
+          "decision_status": {
+            "key": "finding",
+            "label": "Open finding",
+            "asserted_by": "machine"
+          },
+          "evidence_strength": {
+            "key": "unchecked",
+            "gradeable": true,
+            "checks_failed": 1
+          },
+          "cost": {},
+          "last_activity_at": 1787618080
+        },
+        {
+          "task_id": "task-provider-calibration",
+          "title": "Resolve provider calibration",
+          "decision_status": {
+            "key": "blocked",
+            "label": "Blocked",
+            "asserted_by": "agent_report"
+          },
+          "evidence_strength": {
+            "key": "not_gradeable",
+            "gradeable": false,
+            "checks_failed": 0
+          },
+          "cost": {},
+          "last_activity_at": 1787617900
+        }
+      ]
+    }
+  },
+  "work": {
+    "receipt": {
+      "schema_version": "agentacct.receipt.v1",
+      "task_id": "task-snapshot-harness",
+      "title": "Build reusable snapshot harness",
+      "duration_seconds": 5247,
+      "axes": {
+        "decision_status": {
+          "key": "observed",
+          "label": "Observed sample",
+          "statement": "Synthetic parallel review records; no task-wide verification is asserted.",
+          "asserted_by": "system"
+        },
+        "evidence_strength": {
+          "key": "independently_checked",
+          "gradeable": true,
+          "strongest_tier": "independently_checked",
+          "checkable_total": 4,
+          "checked_total": 4,
+          "by_tier": {
+            "independently_checked": 4
+          },
+          "not_checkable": 1,
+          "open_or_incomplete": 0,
+          "hidden_in_subagents": 1,
+          "unattributed_checks": 2,
+          "total_steps": 5,
+          "checks_total": 6,
+          "checks_passed": 6,
+          "checks_failed": 0,
+          "definition": "Passing checks observed by a client hook cover every checkable step."
+        },
+        "orthogonality_note": "Evidence coverage and decision status are separate axes: an agent reporting done never adds a passing check, and a human review never counts as machine verification."
+      },
+      "dimensions": {
+        "task": {
+          "objectives": [
+            "Render the real Work surface from a deterministic versioned fixture",
+            "Protect light and dark layouts at minimum and reference window sizes"
+          ],
+          "boundary": {
+            "project": "agentacct-gui",
+            "identity_scope": "repository",
+            "session_count": 3
+          },
+          "provenance": [
+            "agent_report",
+            "client_log"
+          ]
+        },
+        "actors": {
+          "primary_agent": "codex",
+          "models": [
+            "gpt-5.6-sol"
+          ],
+          "subagent_session_count": 1,
+          "child_session_count": 1,
+          "provenance": [
+            "client_log"
+          ]
+        },
+        "actions": {
+          "tool_category_counts": {
+            "edit": 7,
+            "execute": 24,
+            "read": 38,
+            "search": 11
+          },
+          "tool_category_total": 80,
+          "touched_file_count": 18,
+          "touched_files": [
+            ".github/workflows/tests.yml",
+            "apps/agentacct/Scripts/visual-snapshots",
+            "apps/agentacct/Sources/agentacct/DashboardSnapshotHarness.swift",
+            "apps/agentacct/Sources/agentacct/DashboardStore.swift",
+            "apps/agentacct/Sources/agentacct/MainWindow.swift",
+            "apps/agentacct/Sources/agentacct/ReceiptsPane.swift",
+            "apps/agentacct/Sources/agentacct/SnapshotRunner.swift",
+            "apps/agentacct/Sources/agentacct/Theme.swift",
+            "apps/agentacct/Sources/agentacct/V1Model.swift",
+            "apps/agentacct/Sources/agentacct/WorkPane.swift",
+            "apps/agentacct/Sources/agentacct/WorkSnapshotHarness.swift",
+            "apps/agentacct/Sources/agentacct/main.swift",
+            "apps/agentacct/Tests/README.md",
+            "apps/agentacct/Tests/agentacctTests/DashboardInteractionTests.swift",
+            "apps/agentacct/Tests/agentacctTests/DashboardSnapshotHarnessTests.swift",
+            "apps/agentacct/Tests/agentacctTests/Support/VisualSnapshotHarness.swift",
+            "apps/agentacct/Tests/agentacctTests/WorkSnapshotHarnessTests.swift",
+            "apps/agentacct/Tests/agentacctTests/WorkVisualRegressionTests.swift"
+          ],
+          "touched_files_preview": [
+            "apps/agentacct/Sources/agentacct/DashboardSnapshotHarness.swift",
+            "apps/agentacct/Sources/agentacct/DashboardStore.swift",
+            "apps/agentacct/Sources/agentacct/WorkPane.swift",
+            "apps/agentacct/Tests/agentacctTests/DashboardSnapshotHarnessTests.swift"
+          ],
+          "touched_files_elided": 14,
+          "command_count": 24,
+          "commands": [
+            "git status --short --branch",
+            "git diff --check",
+            "git diff --stat",
+            "swift test --filter DashboardInteractionTests",
+            "swift test --filter WorkSnapshotHarnessTests",
+            "swift test --filter WorkVisualRegressionTests",
+            "swift test",
+            "./Scripts/visual-snapshots list",
+            "./Scripts/visual-snapshots check-environment",
+            "./Scripts/visual-snapshots verify WorkVisualRegressionTests",
+            "./Scripts/visual-snapshots record WorkVisualRegressionTests",
+            "./Scripts/visual-snapshots verify",
+            "./Tests/visual-snapshots-cli-tests.sh",
+            "./Tests/build-app-identity-tests.sh",
+            "swift build -c release",
+            ".build/release/agentacct --snapshot-work-fixture dashboard.json review",
+            "jq empty Tests/agentacctTests/Fixtures/dashboard.json",
+            "sips -g pixelWidth -g pixelHeight work-receipt-reference-light.png",
+            "rg --files Tests/agentacctTests/ReferenceImages",
+            "git merge-tree --write-tree HEAD origin/main",
+            "git log --oneline --decorate -5",
+            "gh pr checks --watch",
+            "gh run view --json jobs",
+            "gh run download --name ui-review"
+          ],
+          "commands_preview": [
+            "swift test --filter WorkSnapshotHarnessTests",
+            "./Scripts/visual-snapshots verify",
+            "swift build -c release"
+          ],
+          "commands_elided": 21,
+          "tool_names_preview": [
+            {
+              "name": "exec_command",
+              "count": 24
+            },
+            {
+              "name": "apply_patch",
+              "count": 7
+            },
+            {
+              "name": "view_image",
+              "count": 4
+            }
+          ],
+          "tool_names_elided": 4,
+          "tool_name_counts": {
+            "exec_command": 24,
+            "apply_patch": 7,
+            "view_image": 4,
+            "record_machine_check": 3,
+            "record_section": 3,
+            "update_plan": 2,
+            "open": 1
+          },
+          "provenance": [
+            "client_log"
+          ]
+        },
+        "cost": {
+          "estimated_cost_usd": 4.82,
+          "cost_basis": "pricing_table",
+          "cost_confidence": "estimated",
+          "cost_complete": true,
+          "plan_share": {
+            "pct": 2.7,
+            "client": "codex",
+            "calibration_state": "calibrated",
+            "covered_sessions": 3,
+            "session_count": 3
+          },
+          "tokens": {
+            "fresh": 184200,
+            "cache_creation": 22400,
+            "cache_read": 612800,
+            "total": 819400
+          },
+          "provenance": [
+            "client_log",
+            "pricing_table"
+          ]
+        },
+        "evidence": {
+          "checks_total": 6,
+          "checks_passed": 6,
+          "checks_failed": 0,
+          "checks": [
+            {
+              "kind": "test",
+              "name": "Swift semantic suite",
+              "result": "passed",
+              "exit_code": 0,
+              "scope": "app",
+              "source": "hook",
+              "at": 1787618500,
+              "summary": "All Swift unit and interaction tests passed.",
+              "command_redacted": true
+            },
+            {
+              "kind": "test",
+              "name": "Deterministic repeat render",
+              "result": "passed",
+              "exit_code": 0,
+              "scope": "visual harness",
+              "source": "hook",
+              "at": 1787618540,
+              "summary": "Two fixture renders stayed inside the one-channel antialiasing budget.",
+              "artifact_ref": "snapshot-matrix"
+            },
+            {
+              "kind": "test",
+              "name": "Light and dark references",
+              "result": "passed",
+              "exit_code": 0,
+              "scope": "visual baselines",
+              "source": "hook",
+              "at": 1787618580
+            },
+            {
+              "kind": "build",
+              "name": "Release app build",
+              "result": "passed",
+              "exit_code": 0,
+              "scope": "macOS arm64",
+              "source": "hook",
+              "at": 1787618620
+            },
+            {
+              "kind": "lint",
+              "name": "Snapshot CLI contract",
+              "result": "passed",
+              "exit_code": 0,
+              "scope": "shell harness",
+              "source": "hook",
+              "at": 1787618640
+            },
+            {
+              "kind": "artifact",
+              "name": "Review PNG validation",
+              "result": "passed",
+              "exit_code": 0,
+              "scope": "8 images",
+              "source": "hook",
+              "at": 1787618660,
+              "files": [
+                "Tests/agentacctTests/ReferenceImages"
+              ]
+            }
+          ],
+          "provenance": [
+            "client_hook"
+          ],
+          "gaps": [
+            "No hosted CI result is attached to this local receipt"
+          ]
+        },
+        "outcome": {
+          "decision_status": "verified",
+          "statement": "Deterministic fixture rendering and reviewed references are ready.",
+          "asserted_by": "machine",
+          "provenance": [
+            "agent_report",
+            "client_hook"
+          ]
+        },
+        "gaps": {
+          "count": 2,
+          "items": [
+            {
+              "dimension": "evidence",
+              "reason": "No hosted CI evidence is attached to this receipt."
+            },
+            {
+              "dimension": "cost",
+              "reason": "Dollar cost is estimated from the pricing table."
+            }
+          ]
+        },
+        "provenance": {
+          "by_dimension": {
+            "task": [
+              "agent_report",
+              "client_log"
+            ],
+            "actors": [
+              "client_log"
+            ],
+            "actions": [
+              "client_log"
+            ],
+            "cost": [
+              "client_log",
+              "pricing_table"
+            ],
+            "evidence": [
+              "client_hook"
+            ],
+            "outcome": [
+              "agent_report",
+              "client_hook"
+            ]
+          },
+          "sources_present": [
+            "agent_report",
+            "client_log",
+            "client_hook",
+            "pricing_table"
+          ],
+          "legend": {
+            "agent_report": "Outcome and task objective reported by the agent.",
+            "client_log": "Actions and actors observed in the local client transcript.",
+            "client_hook": "Machine result observed by the local client integration.",
+            "pricing_table": "Estimated dollars derived from recorded token usage."
+          }
+        }
+      },
+      "sessions": [
+        {
+          "root": {
+            "client": "codex",
+            "client_session_id": "fixture-active-02"
+          },
+          "role": "primary",
+          "lineage_state": "linked",
+          "supporting_count": 2,
+          "members": [
+            {
+              "client": "codex",
+              "client_session_id": "fixture-active-02",
+              "session_kind": "root",
+              "role": "root",
+              "title": "Build reusable snapshot harness",
+              "project": "agentacct-gui",
+              "last_activity_at": 1787618680
+            },
+            {
+              "client": "codex",
+              "client_session_id": "fixture-parallel-same-prefix-0001",
+              "session_kind": "review",
+              "role": "subagent",
+              "title": "Review parser",
+              "project": "agentacct-gui",
+              "last_activity_at": 1787618520
+            },
+            {
+              "client": "codex",
+              "client_session_id": "fixture-parallel-same-prefix-0002",
+              "session_kind": "review",
+              "role": "subagent",
+              "title": "Review parser",
+              "project": "agentacct-gui",
+              "last_activity_at": 1787618520
+            }
+          ]
+        }
+      ]
+    },
+    "attention_receipt": {
+      "schema_version": "agentacct.receipt.v1",
+      "task_id": "task-provider-calibration",
+      "title": "Resolve provider calibration",
+      "duration_seconds": 1860,
+      "axes": {
+        "decision_status": {
+          "key": "blocked",
+          "label": "Blocked",
+          "statement": "Provider calibration cannot continue until a representative usage window is available.",
+          "asserted_by": "agent_report",
+          "blocker": {
+            "step_title": "Collect a representative usage window",
+            "section_id": "calibration-window",
+            "text": "The current sample is too short to support a stable calibration.",
+            "next_step": "Record normal usage across at least one week, then rerun calibration.",
+            "updated_at": 1787617900,
+            "blocked_step_count": 1,
+            "later_completed_steps": 0
+          }
+        },
+        "evidence_strength": {
+          "key": "unchecked",
+          "gradeable": true,
+          "strongest_tier": "unchecked",
+          "checkable_total": 2,
+          "checked_total": 1,
+          "by_tier": {
+            "self_checked": 1,
+            "unchecked": 1
+          },
+          "checks_total": 2,
+          "checks_passed": 1,
+          "checks_failed": 1,
+          "open_or_incomplete": 1,
+          "total_steps": 3
+        },
+        "orthogonality_note": "The blocker is an agent-reported state; the failed check remains separate evidence."
+      },
+      "dimensions": {
+        "task": {
+          "objectives": [
+            "Calibrate provider limits from representative local usage"
+          ],
+          "boundary": {
+            "project": "agentacct-gui",
+            "identity_scope": "repository",
+            "session_count": 1
+          },
+          "provenance": [
+            "agent_report"
+          ]
+        },
+        "actors": {
+          "primary_agent": "codex",
+          "models": [
+            "gpt-5.6-sol"
+          ],
+          "subagent_session_count": 0,
+          "child_session_count": 0,
+          "provenance": [
+            "client_log"
+          ]
+        },
+        "actions": {
+          "tool_category_counts": {
+            "execute": 7,
+            "read": 12
+          },
+          "tool_category_total": 19,
+          "touched_file_count": 2,
+          "provenance": [
+            "client_log"
+          ]
+        },
+        "cost": {
+          "provenance": [
+            "client_log"
+          ]
+        },
+        "evidence": {
+          "checks_total": 2,
+          "checks_passed": 1,
+          "checks_failed": 1,
+          "checks": [
+            {
+              "kind": "test",
+              "name": "Calibration stability",
+              "result": "failed",
+              "exit_code": 1,
+              "source": "hook",
+              "summary": "The sample does not yet span the minimum representative window.",
+              "command_redacted": true
+            },
+            {
+              "kind": "test",
+              "name": "Usage import integrity",
+              "result": "passed",
+              "exit_code": 0,
+              "source": "hook",
+              "summary": "Recorded usage rows are internally consistent.",
+              "command_redacted": true
+            }
+          ],
+          "provenance": [
+            "client_hook"
+          ]
+        },
+        "outcome": {
+          "decision_status": "blocked",
+          "statement": "Representative usage is still required.",
+          "asserted_by": "agent_report",
+          "provenance": [
+            "agent_report"
+          ]
+        },
+        "gaps": {
+          "count": 1,
+          "items": [
+            {
+              "dimension": "evidence",
+              "reason": "The recorded window is not yet representative."
+            }
+          ]
+        },
+        "provenance": {
+          "by_dimension": {
+            "task": [
+              "agent_report"
+            ],
+            "actors": [
+              "client_log"
+            ],
+            "actions": [
+              "client_log"
+            ],
+            "cost": [
+              "client_log"
+            ],
+            "evidence": [
+              "client_hook"
+            ],
+            "outcome": [
+              "agent_report"
+            ]
+          },
+          "sources_present": [
+            "agent_report",
+            "client_log",
+            "client_hook"
+          ],
+          "legend": {
+            "agent_report": "Outcome and blocker reported by the agent.",
+            "client_log": "Actions and actors observed in the local client transcript.",
+            "client_hook": "Machine result observed by the local client integration."
+          }
+        }
+      }
+    },
+    "sessions": [
+      {
+        "schema": "agentacct.v1-session-detail.v1",
+        "generated_at": 1787618800,
+        "session": {
+          "session_key": "codex::fixture-active-02",
+          "client": "codex",
+          "client_session_id": "fixture-active-02",
+          "client_session_id_short": "fixture-",
+          "session_kind": "root",
+          "title": "Build reusable snapshot harness",
+          "project": "agentacct-gui",
+          "status": "completed",
+          "first_activity_at": 1787613433,
+          "last_activity_at": 1787618680,
+          "duration_seconds": 5247,
+          "instrumentation_state": "recording",
+          "observed_models": [
+            "gpt-5.6-sol"
+          ],
+          "usage": {
+            "rows": 18,
+            "fresh_tokens": 142000,
+            "cache_read_tokens": 488000,
+            "total_tokens": 630000,
+            "estimated_cost_usd": 3.64,
+            "cost_confidence": "estimated"
+          },
+          "plan_pct": 2.1
+        },
+        "steps": [],
+        "descendants": [
+          {
+            "client": "codex",
+            "client_session_id": "fixture-active-02:agent-review",
+            "client_session_id_short": "agent-review",
+            "title": "Audit snapshot determinism",
+            "status": "completed",
+            "last_activity_at": 1787618520,
+            "agent_type": "review",
+            "task": "Audit the Work snapshot harness for unstable inputs."
+          }
+        ],
+        "plan": {
+          "client": "codex",
+          "confidence": "calibrated",
+          "calibration_state": "calibrated",
+          "basis": "token_share",
+          "pct_own": 1.8,
+          "pct_children": 0.3,
+          "pct": 2.1
+        }
+      },
+      {
+        "schema": "agentacct.v1-session-detail.v1",
+        "generated_at": 1787618800,
+        "session": {
+          "session_key": "codex::fixture-active-02:agent-review",
+          "client": "codex",
+          "client_session_id": "fixture-parallel-same-prefix-0001",
+          "client_session_id_short": "agent-review",
+          "session_kind": "review",
+          "title": "Review parser",
+          "project": "agentacct-gui",
+          "status": "completed",
+          "first_activity_at": 1787615900,
+          "last_activity_at": 1787618520,
+          "duration_seconds": 2620,
+          "instrumentation_state": "recording",
+          "observed_models": [
+            "gpt-5.6-sol"
+          ]
+        },
+        "steps": [
+          {
+            "work_id": "parallel-review",
+            "section_id": "parallel-review",
+            "title": "Inspect parser boundary",
+            "latest_status": "completed",
+            "kind": "review",
+            "summary": "Checked clocks, locale, animations, viewport bounds, and async loaders.",
+            "evidence_status": "passed",
+            "evidence_grade": "independently_checked",
+            "checks": [],
+            "section_title": "Inspect parser boundary",
+            "section_status": "completed",
+            "status": "completed",
+            "files": [
+              "app/parser.swift"
+            ],
+            "started_at": 1787615010,
+            "updated_at": 1787615020,
+            "latest_event_id": "synthetic-parallel-1"
+          }
+        ],
+        "descendants": []
+      },
+      {
+        "schema": "agentacct.v1-session-detail.v1",
+        "generated_at": 1787618800,
+        "session": {
+          "session_key": "codex::fixture-active-02:agent-review",
+          "client": "codex",
+          "client_session_id": "fixture-parallel-same-prefix-0002",
+          "client_session_id_short": "agent-review",
+          "session_kind": "review",
+          "title": "Review parser",
+          "project": "agentacct-gui",
+          "status": "completed",
+          "first_activity_at": 1787615900,
+          "last_activity_at": 1787618520,
+          "duration_seconds": 2620,
+          "instrumentation_state": "recording",
+          "observed_models": [
+            "gpt-5.6-sol"
+          ]
+        },
+        "steps": [
+          {
+            "work_id": "parallel-review",
+            "section_id": "parallel-review",
+            "title": "Inspect parser boundary",
+            "latest_status": "completed",
+            "kind": "review",
+            "summary": "Checked clocks, locale, animations, viewport bounds, and async loaders.",
+            "evidence_status": "passed",
+            "evidence_grade": "independently_checked",
+            "checks": [],
+            "section_title": "Inspect parser boundary",
+            "section_status": "completed",
+            "status": "completed",
+            "files": [
+              "app/parser.swift"
+            ],
+            "started_at": 1787615020,
+            "updated_at": 1787615030,
+            "latest_event_id": "synthetic-parallel-2"
+          }
+        ],
+        "descendants": []
+      }
+    ]
+  },
+  "usage": {
+    "by_client": [
+      {
+        "client": "codex",
+        "sessions": 43,
+        "fresh_tokens": 31200000,
+        "cache_read_tokens": 96300000,
+        "estimated_cost_usd": 402.1,
+        "cost_complete": true,
+        "known_additive_cost_usd": 402.1,
+        "cost_confidence_label": "complete"
+      },
+      {
+        "client": "claude-code",
+        "sessions": 9,
+        "fresh_tokens": 16500000,
+        "cache_read_tokens": 51600000,
+        "estimated_cost_usd": 680.32,
+        "cost_complete": true,
+        "known_additive_cost_usd": 680.32,
+        "cost_confidence_label": "complete"
+      },
+      {
+        "client": "hermes",
+        "sessions": 2,
+        "fresh_tokens": 400000,
+        "cache_read_tokens": 400000,
+        "estimated_cost_usd": 5.0,
+        "cost_complete": true,
+        "known_additive_cost_usd": 5.0,
+        "cost_confidence_label": "complete"
+      }
+    ],
+    "by_model": [],
+    "by_period": [
+      {
+        "period": "2026-08-19",
+        "fresh_tokens": 1800000,
+        "estimated_cost_usd": 41.2,
+        "cost_complete": true,
+        "by_client": {
+          "codex": {
+            "fresh_tokens": 1400000
+          },
+          "hermes": {
+            "fresh_tokens": 400000
+          }
+        }
+      },
+      {
+        "period": "2026-08-20",
+        "fresh_tokens": 2400000,
+        "estimated_cost_usd": 52.1,
+        "cost_complete": true,
+        "by_client": {
+          "codex": {
+            "fresh_tokens": 2400000
+          }
+        }
+      },
+      {
+        "period": "2026-08-21",
+        "fresh_tokens": 900000,
+        "estimated_cost_usd": 19.75,
+        "cost_complete": true,
+        "by_client": {
+          "codex": {
+            "fresh_tokens": 900000
+          }
+        }
+      },
+      {
+        "period": "2026-08-22",
+        "fresh_tokens": 3600000,
+        "estimated_cost_usd": 82.44,
+        "cost_complete": true,
+        "by_client": {
+          "codex": {
+            "fresh_tokens": 3600000
+          }
+        }
+      },
+      {
+        "period": "2026-08-23",
+        "fresh_tokens": 4800000,
+        "estimated_cost_usd": 106.27,
+        "cost_complete": true,
+        "by_client": {
+          "codex": {
+            "fresh_tokens": 2700000
+          },
+          "claude-code": {
+            "fresh_tokens": 2100000
+          }
+        }
+      },
+      {
+        "period": "2026-08-24",
+        "fresh_tokens": 12100000,
+        "estimated_cost_usd": 260.52,
+        "cost_complete": true,
+        "by_client": {
+          "codex": {
+            "fresh_tokens": 6800000
+          },
+          "claude-code": {
+            "fresh_tokens": 5300000
+          }
+        }
+      },
+      {
+        "period": "2026-08-25",
+        "fresh_tokens": 22500000,
+        "estimated_cost_usd": 525.14,
+        "cost_complete": true,
+        "by_client": {
+          "codex": {
+            "fresh_tokens": 13400000
+          },
+          "claude-code": {
+            "fresh_tokens": 9100000
+          }
+        }
+      }
+    ],
+    "filters_echo": {
+      "days": "7",
+      "granularity": "daily",
+      "granularity_requested": "auto"
+    },
+    "totals": {
+      "client": null,
+      "sessions": 54,
+      "fresh_tokens": 48100000,
+      "cache_read_tokens": 148300000,
+      "estimated_cost_usd": 1087.42,
+      "cost_complete": true,
+      "known_additive_cost_usd": 1087.42,
+      "cost_confidence_label": "complete"
+    }
+  },
+  "usage_90_days": {
+    "by_client": [
+      {
+        "client": "codex",
+        "sessions": 160,
+        "fresh_tokens": 85000000,
+        "cache_read_tokens": 240000000,
+        "estimated_cost_usd": 920.5,
+        "cost_complete": true,
+        "known_additive_cost_usd": 920.5,
+        "cost_confidence_label": "complete"
+      },
+      {
+        "client": "claude-code",
+        "sessions": 43,
+        "fresh_tokens": 50000000,
+        "cache_read_tokens": 135000000,
+        "estimated_cost_usd": 1174.25,
+        "cost_complete": true,
+        "known_additive_cost_usd": 1174.25,
+        "cost_confidence_label": "complete"
+      },
+      {
+        "client": "hermes",
+        "sessions": 6,
+        "fresh_tokens": 1500000,
+        "cache_read_tokens": 5000000,
+        "estimated_cost_usd": 18.0,
+        "cost_complete": true,
+        "known_additive_cost_usd": 18.0,
+        "cost_confidence_label": "complete"
+      }
+    ],
+    "by_model": [],
+    "by_period": [
+      {
+        "period": "2026-05-25",
+        "fresh_tokens": 6200000,
+        "estimated_cost_usd": 100.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-06-01",
+        "fresh_tokens": 8100000,
+        "estimated_cost_usd": 130.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-06-08",
+        "fresh_tokens": 0
+      },
+      {
+        "period": "2026-06-15",
+        "fresh_tokens": 9400000,
+        "estimated_cost_usd": 145.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-06-22",
+        "fresh_tokens": 7800000,
+        "estimated_cost_usd": 121.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-06-29",
+        "fresh_tokens": 10200000,
+        "estimated_cost_usd": 158.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-07-06",
+        "fresh_tokens": 8700000,
+        "estimated_cost_usd": 135.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-07-13",
+        "fresh_tokens": 11300000,
+        "estimated_cost_usd": 175.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-07-20",
+        "fresh_tokens": 9900000,
+        "estimated_cost_usd": 154.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-07-27",
+        "fresh_tokens": 12400000,
+        "estimated_cost_usd": 192.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-08-03",
+        "fresh_tokens": 10800000,
+        "estimated_cost_usd": 167.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-08-10",
+        "fresh_tokens": 13100000,
+        "estimated_cost_usd": 204.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-08-17",
+        "fresh_tokens": 14600000,
+        "estimated_cost_usd": 226.0,
+        "cost_complete": true
+      },
+      {
+        "period": "2026-08-24",
+        "fresh_tokens": 14000000,
+        "estimated_cost_usd": 205.75,
+        "cost_complete": true
+      }
+    ],
+    "filters_echo": {
+      "days": "90",
+      "granularity": "weekly",
+      "granularity_requested": "auto"
+    },
+    "totals": {
+      "client": null,
+      "sessions": 209,
+      "fresh_tokens": 136500000,
+      "cache_read_tokens": 380000000,
+      "estimated_cost_usd": 2112.75,
+      "cost_complete": true,
+      "known_additive_cost_usd": 2112.75,
+      "cost_confidence_label": "complete"
+    }
+  },
+  "setup_preview": {
+    "schema_version": "agentacct.setup-preview.v1",
+    "client": "codex",
+    "scope": "user",
+    "cli_version": "0.10.7",
+    "generated_at": "2026-09-12T01:00:00+00:00",
+    "store_dir": "/synthetic-review/store",
+    "command": "/Users/review/.local/bin/agentacct",
+    "python_executable": "/synthetic-review/python3",
+    "basis": "Generated managed content with read-only inspection of recognized entries; not a full-file merge diff.",
+    "limits": [
+      "Executable and interpreter paths are resolved for this preview and may differ after installation.",
+      "Existing retained environment values, unrelated configuration, and account data are never included.",
+      "Files can change after preview. Installation re-evaluates its writers and reports actual results."
+    ],
+    "files": [
+      {
+        "id": "instructions",
+        "path": "/Users/review/.codex/AGENTS.md",
+        "kind": "instructions",
+        "title": "Managed recording instructions",
+        "proposed_content": "<!-- agentacct:begin (managed block \u2014 edit via `agentacct setup instructions`) -->\n## agentacct \u2014 record your work\n\nRecord what this session does so the local work views can show it, not just tokens:\n- If these agentacct tools are not directly available, load them first (they may be provided as searchable/deferred tools) before recording.\n- Open a section with `agentacct_record_section` BEFORE your first other tool call, and again before each meaningful task. REQUIRED args: `source` (your client name, e.g. \"codex\" or \"claude-code\"), a stable `section_id` (reuse the SAME id across this section's started/checkpoint/terminal calls), and `section_status`; also set `section_title` to a short human goal. Start with `section_status=started`; normally finish with `completed` or `blocked`. Example: agentacct_record_section(source=\"codex\", section_id=\"add-rate-limit\", section_status=\"started\", section_title=\"add rate-limit to login\").\n- For a long task, send `section_status=checkpoint` updates rather than one giant section.\n- When the user hands the work off or says they are continuing in a new session, record the section as `section_status=handed_off` (a clean stop) \u2014 do not leave it `started`/`checkpoint`.\n- After running tests or a build, record the objective result with `agentacct_record_machine_check`.\n- Keep MCP/event evidence separate from token/cost claims: MCP events prove what work happened; a token or cost figure is only real if it comes from actual client usage the importer read \u2014 never fabricate one.\n- Low-friction: skip recording only for a genuinely trivial throwaway session \u2014 recording nothing is better than recording noise, but do record real work.\n<!-- agentacct:end -->\n",
+        "existing_status": "inspected",
+        "conditions": [
+          "Only the first complete recognized block outside Markdown fences is replaced. Other instruction content is preserved; quoted or incomplete markers are not managed blocks."
+        ],
+        "registrations": [],
+        "managed_block_action": "replace",
+        "recognized_marker_families": [
+          "agentacct",
+          "agent-chronicle",
+          "agent-sentinel"
+        ]
+      },
+      {
+        "id": "mcp",
+        "path": "/Users/review/.codex/config.toml",
+        "kind": "mcp",
+        "title": "Proposed MCP registration",
+        "proposed_content": "# agentacct MCP\n[mcp_servers.agentacct]\ncommand = \"/Users/review/.local/bin/agentacct\"\nargs = [\"mcp\", \"serve\", \"--store-dir\", \"/synthetic-review/store\"]\n",
+        "existing_status": "inspected",
+        "conditions": [
+          "Unrelated entries and retained values are not displayed. This is generated managed content, not a full-file merge diff."
+        ],
+        "registrations": [
+          {
+            "name": "agentacct",
+            "action": "add",
+            "reason": "Set generated command and arguments; retained environment values are not displayed."
+          },
+          {
+            "name": "agent-sentinel",
+            "action": "remove",
+            "reason": "Collapse this recognized legacy registration into agentacct; retain supported environment settings."
+          }
+        ]
+      },
+      {
+        "id": "hooks",
+        "path": "/Users/review/.codex/hooks.json",
+        "kind": "hooks",
+        "title": "Proposed recording hooks",
+        "proposed_content": "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"*\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"/synthetic-review/python3 /Users/review/.codex/hooks/agentacct_codex_hook.py\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"/synthetic-review/python3 /Users/review/.codex/hooks/agentacct_codex_hook.py\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+        "existing_status": "absent",
+        "conditions": [
+          "Existing user hooks are preserved. Matching agentacct wrapper entries are updated."
+        ],
+        "registrations": []
+      },
+      {
+        "id": "wrapper",
+        "path": "/Users/review/.codex/hooks/agentacct_codex_hook.py",
+        "kind": "wrapper",
+        "title": "Generated hook wrapper",
+        "proposed_content": "#!/usr/bin/env python3\n\"\"\"Codex hook wrapper for agentacct (observe-only).\n\nOne wrapper serves the installed Codex hook events (dispatch on the event's own\n`hook_event_name`):\n- PreToolUse: spool the tool NAME + category for the Receipt's Actions dimension\n  (observe-only \u2014 agentacct never makes an allow/block decision for Codex; Codex\n  owns its own sandbox/approval layer).\n- SessionEnd: spool a content-free session-end fact for the ended_open inference.\n\nShells out to the installed `agentacct` CLI. Fail-open: if no agentacct\nexecutable can be started, or the CLI exits without output, this wrapper prints\nan empty no-op response `{}` and exits 0, so a broken or moved install can never\nblock a Codex tool call. Reinstall with: agentacct hooks codex install --force\n\"\"\"\n\nimport json\nimport os\nimport shutil\nimport subprocess\nimport sys\n\nAGENTACCT_CANDIDATES = ['/Users/review/.local/bin/agentacct', 'agentacct', 'agent-chronicle', 'agent-sentinel']\nAGENTACCT_HOOK_ARGS = ['--store-dir', '/synthetic-review/store']\n\n\ndef resolve_agentacct():\n    for candidate in AGENTACCT_CANDIDATES:\n        if not candidate:\n            continue\n        if os.path.basename(candidate) != candidate:\n            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):\n                return candidate\n        else:\n            found = shutil.which(candidate)\n            if found:\n                return found\n    return None\n\n\ndef no_op(reason=\"\"):\n    if reason:\n        sys.stderr.write(\"agentacct codex hook: %s; failing open\\n\" % reason)\n    sys.stdout.write(\"{}\\n\")\n    return 0\n\n\ndef main():\n    raw = sys.stdin.buffer.read().decode(\"utf-8\", \"replace\")\n    hook_event = \"\"\n    try:\n        event = json.loads(raw)\n        if isinstance(event, dict):\n            value = event.get(\"hook_event_name\")\n            if isinstance(value, str):\n                hook_event = value\n    except ValueError:\n        pass\n    subcommand = \"session-end\" if hook_event == \"SessionEnd\" else \"pre-tool-use\"\n    executable = resolve_agentacct()\n    if executable is None:\n        return no_op(\"agentacct executable not found (re-run: agentacct hooks codex install --force)\")\n    try:\n        proc = subprocess.run(\n            [executable, \"hooks\", \"codex\", subcommand, *AGENTACCT_HOOK_ARGS],\n            input=raw,\n            text=True,\n            capture_output=True,\n            # A bounded wait is part of the never-block contract: fail-open covers\n            # the CLI RETURNING an error, but a hung child (stalled store mount,\n            # held SQLite lock, cold-import stall) would otherwise block the Codex\n            # tool call forever. A timeout turns that into a no-op {} instead.\n            timeout=5,\n        )\n    except subprocess.TimeoutExpired:\n        return no_op(\"agentacct timed out\")\n    except OSError as exc:\n        return no_op(\"agentacct failed to start (%s)\" % exc)\n    if proc.stderr:\n        sys.stderr.write(proc.stderr)\n    if proc.returncode == 0 and proc.stdout.strip():\n        sys.stdout.write(proc.stdout)\n        return 0\n    return no_op(\"agentacct exited with code %s without output\" % proc.returncode)\n\n\nif __name__ == \"__main__\":\n    try:\n        exit_code = main()\n    except Exception as exc:  # fail-open: a wrapper bug must never break Codex sessions.\n        exit_code = no_op(\"unexpected codex hook wrapper error (%s: %s)\" % (type(exc).__name__, exc))\n    raise SystemExit(exit_code)\n",
+        "existing_status": "absent",
+        "conditions": [],
+        "registrations": []
+      }
+    ],
+    "review_fixture": "Synthetic inputs passed to the production generator; no real user configuration."
+  }
+}

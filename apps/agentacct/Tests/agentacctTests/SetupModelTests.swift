@@ -1847,6 +1847,287 @@ final class SetupModelTests: XCTestCase {
     }
 }
 
+final class RecorderReconnectTests: XCTestCase {
+    private let commit = "2222222222222222222222222222222222222222"
+
+    @MainActor
+    func testReconnectStartsOnlyMatchingRecorderAndPreservesOnboarding() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        var commands: [[String]] = []
+        let model = fixture.model { _, arguments in
+            commands.append(arguments)
+            return SetupModelTests.stream(lines: arguments.first == "status" ? [fixture.readyRuntimeStatus] : [])
+        }
+        model.selectClientForSetup(.codex)
+        await model.setUp()
+        XCTAssertEqual(model.phase, .done)
+        let boundary = try XCTUnwrap(model.onboardingCompletedAt)
+        let target = try XCTUnwrap(fixture.selectedTarget)
+        let wrapper = try Data(contentsOf: fixture.wrapper)
+        commands = []
+
+        XCTAssertTrue(model.canReconnectRecorder)
+        let reconnected = await model.reconnectRecorder()
+
+        XCTAssertTrue(reconnected)
+        XCTAssertEqual(commands, [
+            ["start", "--no-sync-clients", "--store-dir", fixture.store.path, "--json"],
+            ["status", "--store-dir", fixture.store.path, "--json"]
+        ])
+        XCTAssertEqual(model.selectedClient, .codex)
+        XCTAssertEqual(model.onboardingCompletedAt, boundary)
+        XCTAssertEqual(model.phase, .done)
+        XCTAssertEqual(model.reconnectPhase, .done)
+        XCTAssertNotNil(model.reconnectCompletedAt)
+        XCTAssertEqual(fixture.selectedTarget, target)
+        XCTAssertEqual(try Data(contentsOf: fixture.wrapper), wrapper)
+        XCTAssertFalse(fixture.runtimeTransactionExists)
+    }
+
+    @MainActor
+    func testReconnectRechecksOwnershipAfterTakingLock() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        var commands: [[String]] = []
+        var mutateOnLock = false
+        let model = fixture.model(
+            processRunner: { _, arguments in
+                commands.append(arguments)
+                return SetupModelTests.stream(lines: [])
+            },
+            transactionLockObserver: {
+                if mutateOnLock { try? fixture.replaceWrapperWithUserManagedFile() }
+            }
+        )
+        await model.setUp()
+        XCTAssertEqual(model.phase, .done)
+        commands = []
+        mutateOnLock = true
+
+        let reconnected = await model.reconnectRecorder()
+
+        XCTAssertFalse(reconnected)
+        XCTAssertTrue(commands.isEmpty)
+        XCTAssertNil(model.reconnectCompletedAt)
+        XCTAssertTrue(try String(contentsOf: fixture.wrapper).contains("changed-by-user"))
+    }
+
+    @MainActor
+    func testReconnectRejectsStoreChangeAfterStartWithoutIssuingAnotherCommand() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        var activeStore = fixture.store
+        var commands: [[String]] = []
+        let model = fixture.model(
+            processRunner: { _, arguments in
+                commands.append(arguments)
+                if arguments.first == "start" { activeStore = fixture.root.appendingPathComponent("other-store") }
+                return SetupModelTests.stream(lines: [])
+            },
+            storeDirectory: { activeStore }
+        )
+        await model.setUp()
+        XCTAssertEqual(model.phase, .done)
+        let boundary = model.onboardingCompletedAt
+        commands = []
+
+        let reconnected = await model.reconnectRecorder()
+
+        XCTAssertFalse(reconnected)
+        XCTAssertEqual(commands.count, 1)
+        XCTAssertEqual(commands.first?.first, "start")
+        XCTAssertNil(model.reconnectCompletedAt)
+        XCTAssertEqual(model.onboardingCompletedAt, boundary)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: activeStore.path))
+    }
+
+    @MainActor
+    func testStartSuccessWithoutReadinessRemainsFailedAndCanRetry() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        var ready = false
+        let model = fixture.model { _, arguments in
+            SetupModelTests.stream(lines: arguments.first == "status"
+                ? [ready ? fixture.readyRuntimeStatus : "{\"state\":\"stopped\",\"processes\":[]}"] : [])
+        }
+        model.selectClientForSetup(.hermes)
+        await model.setUp()
+        let boundary = model.onboardingCompletedAt
+
+        let firstAttempt = await model.reconnectRecorder()
+        XCTAssertFalse(firstAttempt)
+        XCTAssertNil(model.reconnectCompletedAt)
+        guard case .failed = model.reconnectPhase else { return XCTFail("Expected an explicit reconnect failure") }
+        ready = true
+        let retry = await model.reconnectRecorder()
+
+        XCTAssertTrue(retry)
+        XCTAssertEqual(model.selectedClient, .hermes)
+        XCTAssertEqual(model.onboardingCompletedAt, boundary)
+        XCTAssertNotNil(model.reconnectCompletedAt)
+    }
+
+    @MainActor
+    func testReconnectDoesNotTakeOverInterruptedInstallTransaction() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        var commands: [[String]] = []
+        let model = fixture.model { _, arguments in
+            commands.append(arguments)
+            return SetupModelTests.stream(lines: [])
+        }
+        await model.setUp()
+        XCTAssertEqual(model.phase, .done)
+        try "retained recovery journal".write(to: fixture.runtimeTransactionFile, atomically: true, encoding: .utf8)
+        commands = []
+
+        let reconnected = await model.reconnectRecorder()
+
+        XCTAssertFalse(reconnected)
+        XCTAssertTrue(commands.isEmpty)
+        XCTAssertEqual(try String(contentsOf: fixture.runtimeTransactionFile), "retained recovery journal")
+    }
+
+    @MainActor
+    func testDevelopmentBuildCannotRunAnUnverifiedReconnectCommand() async {
+        var commands: [[String]] = []
+        let model = SetupModel(
+            processRunner: { _, arguments in
+                commands.append(arguments)
+                return SetupModelTests.stream(lines: [])
+            },
+            bundleResourceURL: nil,
+            bundleInfoDictionary: nil
+        )
+
+        XCTAssertFalse(model.canReconnectRecorder)
+        let reconnected = await model.reconnectRecorder()
+
+        XCTAssertFalse(reconnected)
+        XCTAssertTrue(commands.isEmpty)
+        XCTAssertNil(model.reconnectCompletedAt)
+    }
+}
+
+final class SetupContentPreviewModelTests: XCTestCase {
+    private let commit = "2222222222222222222222222222222222222222"
+
+    @MainActor
+    func testPreviewUsesOnlyValidatedBundleAndPreservesSetupStateWithoutCreatingLock() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        let payload = try previewJSON(store: fixture.store)
+        var commands: [[String]] = []
+        var executables: [URL] = []
+        let model = fixture.model { executable, arguments in
+            commands.append(arguments)
+            executables.append(executable)
+            return SetupModelTests.stream(lines: [payload])
+        }
+        model.selectClientForSetup(.hermes)
+
+        let result = await model.previewSetupContent(for: .codex)
+
+        guard case .available(let preview) = result else { return XCTFail("Expected a validated generated proposal: \(result)") }
+        XCTAssertEqual(preview.client, "codex")
+        XCTAssertEqual(executables, [fixture.resources.appendingPathComponent("cli/agentacct")])
+        XCTAssertEqual(commands, [["setup", "preview", "--agent", "codex", "--user", "--json", "--store-dir", fixture.store.standardizedFileURL.resolvingSymlinksInPath().path]])
+        XCTAssertEqual(model.selectedClient, .hermes)
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertNil(model.onboardingCompletedAt)
+        XCTAssertTrue(model.log.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.transactionLockFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.installedDirectory.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.store.path))
+    }
+
+    @MainActor
+    func testUnpackagedPreviewDoesNotUseInjectedInstallerOrRunAnyCommand() async {
+        var installed = false
+        var ran = false
+        let model = SetupModel(installer: { installed = true; return URL(fileURLWithPath: "/unverified") }, processRunner: { _, _ in
+            ran = true
+            return SetupModelTests.stream(lines: [])
+        }, bundleResourceURL: nil, bundleInfoDictionary: nil)
+
+        let result = await model.previewSetupContent(for: .codex)
+
+        guard case .unavailable = result else { return XCTFail("Unpackaged preview must be unavailable") }
+        XCTAssertFalse(installed)
+        XCTAssertFalse(ran)
+    }
+
+    @MainActor
+    func testPreviewRejectsPayloadChangeDuringRead() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        let payload = try previewJSON(store: fixture.store)
+        let model = fixture.model { _, _ in
+            try? "changed-payload".write(to: fixture.resources.appendingPathComponent("cli/_internal/side-file"), atomically: true, encoding: .utf8)
+            return SetupModelTests.stream(lines: [payload])
+        }
+
+        let result = await model.previewSetupContent(for: .codex)
+
+        guard case .failed = result else { return XCTFail("Changed bundle identity must reject its proposal") }
+        XCTAssertNil(model.onboardingCompletedAt)
+    }
+
+    @MainActor
+    func testPreviewRejectsStoreChangeDuringRead() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        let payload = try previewJSON(store: fixture.store)
+        var store = fixture.store
+        let model = fixture.model(processRunner: { _, _ in
+            store = fixture.root.appendingPathComponent("other-store")
+            return SetupModelTests.stream(lines: [payload])
+        }, storeDirectory: { store })
+
+        let result = await model.previewSetupContent(for: .codex)
+
+        guard case .failed = result else { return XCTFail("A changed store must reject the old proposal") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.path))
+    }
+
+    @MainActor
+    func testMalformedWrongClientAndWrongVersionPreviewsAreNotDisplayed() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        for payload in ["not-json PRIVATE-DETAIL", try previewJSON(store: fixture.store, client: "hermes"), try previewJSON(store: fixture.store, version: "9.0.0")] {
+            let model = fixture.model { _, _ in SetupModelTests.stream(lines: [payload]) }
+            let result = await model.previewSetupContent(for: .codex)
+            guard case .failed(let message) = result else { return XCTFail("Unsupported preview must be rejected") }
+            XCTAssertFalse(message.contains("PRIVATE-DETAIL"))
+        }
+    }
+
+    @MainActor
+    func testOlderPackagedCLIReportsUnavailableWithoutShowingRawDiagnostics() async throws {
+        let fixture = try UpgradeFixture(bundleCommit: commit, installedCommit: nil)
+        defer { fixture.remove() }
+        let model = fixture.model { _, _ in SetupModelTests.stream(lines: ["PRIVATE-CLI-OUTPUT"], failure: ProcessRunnerError.nonzeroExit(2)) }
+
+        let result = await model.previewSetupContent(for: .codex)
+
+        guard case .unavailable(let message) = result else { return XCTFail("Unsupported command should name preview unavailability") }
+        XCTAssertFalse(message.contains("PRIVATE-CLI-OUTPUT"))
+        XCTAssertEqual(model.phase, .idle)
+    }
+
+    private func previewJSON(store: URL, client: String = "codex", version: String = "0.11.0") throws -> String {
+        let object: [String: Any] = [
+            "schema_version": "agentacct.setup-preview.v1", "client": client, "scope": "user",
+            "cli_version": version, "generated_at": "2026-09-12T01:00:00Z", "store_dir": store.standardizedFileURL.resolvingSymlinksInPath().path,
+            "command": "/synthetic/agentacct", "python_executable": "/synthetic/python", "basis": "Generated test proposal", "limits": [],
+            "files": [["id": "instructions", "path": "/synthetic/AGENTS.md", "kind": "instructions", "title": "Instructions",
+                       "proposed_content": "Record work", "existing_status": "absent", "conditions": [], "registrations": []]]
+        ]
+        return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+    }
+}
+
 @MainActor
 private final class UpgradeFixture {
     private let fm = FileManager.default

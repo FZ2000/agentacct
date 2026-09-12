@@ -1092,6 +1092,8 @@ struct DispositionControls: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .disabled(dashboard.isOfflineSnapshot)
+        .help(dashboard.isOfflineSnapshot ? "Saved work is read-only. Reconnect to change a finding." : "")
     }
 
     private func actionButton(_ label: String, action: @escaping () -> Void) -> some View {

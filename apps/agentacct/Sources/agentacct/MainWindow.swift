@@ -15,7 +15,15 @@ struct MainWindow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var setup: SetupModel
     @State private var showSetup = false
+    @State private var setupRecoveryReason: String?
+    @State private var setupRecoveryKind: NativeRecoveryKind = .connection
+    @State private var activationClient: SetupClient?
+    @State private var savedWork = SavedWorkSnapshot.current()
+    @State private var offlineDashboard: DashboardStore?
+    @State private var openWorkAfterSetup = false
     @State private var recorderSynchronizationFinished = false
+    @State private var healthCoordinator = RecordingHealthCoordinator()
+    @State private var connectionHistory = RecordingConnectionHistory.load()
     /// Design-review renders cannot infer whether the executable was packaged
     /// with the recorder. Live windows leave this nil and use SetupModel.
     var canSetUpOverride: Bool?
@@ -35,14 +43,43 @@ struct MainWindow: View {
         canSetUpOverride ?? (setup.bundledCLIDir != nil)
     }
 
+    private var reconnectStoreExplanation: String? {
+        RecorderDisplayStoreGate.explanation(display: try? GlanceClient.storeDir(), managedPath: setup.recordingStorePath)
+    }
+
+    private var canViewSavedWork: Bool {
+        recorderSynchronizationFinished || SnapshotMode.enabled || savedWork?.hasWork == true
+    }
+
+    private var health: RecordingHealthSnapshot {
+        RecordingHealthSnapshot.project(
+            glancePhase: glance.phase,
+            setupPhase: setup.phase,
+            ingestion: dashboard.ingestion,
+            ingestionError: dashboard.ingestionError,
+            canSetUp: canSetUp,
+            needsSetup: setup.shouldOfferSetup,
+            configuredClientIDs: Array(connectionHistory.boundaries.keys).sorted(),
+            captures: connectionHistory.captures.values.map { RecordingCaptureObservation(clientID: $0.clientID, eventID: $0.eventID, observedAt: $0.observedAt, taskID: $0.taskID) },
+            requiredCaptureAfter: connectionHistory.boundaries
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             TopBar(
                 canSetUp: canSetUp,
+                health: health,
+                healthCoordinator: healthCoordinator,
+                onActivateClient: { openActivation($0) },
+                onSetupCause: { openRecordingSetup(cause: $0) },
                 awaitRecorderSynchronization: {
                     await waitForRecorderSynchronization()
                 }
-            ) { showSetup = true }
+            ) {
+                openRecordingSetup()
+            }
+                .disabled(showSetup || offlineDashboard != nil || activationClient != nil)
                 .fixedSize(horizontal: false, vertical: true)
             Rectangle().fill(Theme.rule).frame(height: 1)
             // Keep the window's content slot stable while old and new panes
@@ -50,7 +87,49 @@ struct MainWindow: View {
             // both heavy pane trees participate in parent layout mid-flight,
             // which reads as a vertical shove instead of a crossfade.
             ZStack(alignment: .top) {
-                if localDataPaneCanMount(
+                if let activationClient, let boundary = connectionHistory.boundaries[activationClient.rawValue] {
+                    NativeClientActivationView(
+                        client: activationClient, boundary: boundary,
+                        capture: connectionHistory.captures[activationClient.rawValue],
+                        savedSetupLog: connectionHistory.setupLogs[activationClient.rawValue],
+                        onClose: { self.activationClient = nil },
+                        onOpenWork: { openSavedOrLiveWork() },
+                        onOpenCapture: { taskID in
+                            self.activationClient = nil
+                            selection.taskId = taskID
+                            openSavedOrLiveWork()
+                        },
+                        canViewSavedWork: canViewSavedWork
+                    )
+                } else if showSetup {
+                    NativeSetupFlow(
+                        setup: setup,
+                        onClose: {
+                            showSetup = false
+                            if openWorkAfterSetup { selection.open(.work) }
+                            openWorkAfterSetup = false
+                        },
+                        runSetup: { await retrySetupAndRecorderSynchronization() },
+                        capture: setup.selectedClient.flatMap { connectionHistory.captures[$0.rawValue] },
+                        onOpenCapture: { taskID in
+                            showSetup = false
+                            selection.pane = .work
+                            selection.taskId = taskID
+                        },
+                        canViewSavedWork: canViewSavedWork,
+                        onOpenWork: { openSavedOrLiveWork() },
+                        recoveryReason: setupRecoveryReason,
+                        recoveryKind: setupRecoveryKind,
+                        recoveryUnavailableReasonOverride: setupRecoveryKind == .connection ? reconnectStoreExplanation : nil,
+                        onReconnect: { await recoverRecorder() }
+                    )
+                    .transition(.opacity)
+                } else if let offlineDashboard {
+                    SavedWorkView(store: offlineDashboard) {
+                        self.offlineDashboard = nil
+                        showSetup = true
+                    }
+                } else if localDataPaneCanMount(
                     selection.pane,
                     recorderSynchronizationFinished: recorderSynchronizationFinished,
                     snapshotMode: SnapshotMode.enabled
@@ -60,17 +139,31 @@ struct MainWindow: View {
                         case .dashboard: DashboardPane()
                         case .work: WorkPane()
                         case .usage: UsagePane()
-                        case .sources: SourcesPane()
+                        case .sources: SourcesPane(onSetup: { openRecordingSetup() })
                         }
                     }
                     .id(selection.pane)
                     .transition(.opacity)
                 } else {
-                    ProgressView("Preparing the local recorder…")
-                        .controlSize(.small)
-                        .foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityIdentifier("dashboard.recorder-synchronization")
+                    VStack(spacing: Space.m) {
+                        if case .failed = setup.phase {
+                            Label("The recorder needs recovery", systemImage: "exclamationmark.triangle")
+                                .font(Type.titleSection)
+                            Text("Reconnect the local recorder before loading work in this window.")
+                                .foregroundStyle(Theme.muted)
+                            if savedWork?.hasWork == true {
+                                Button("View saved work") { openSavedOrLiveWork() }.buttonStyle(.bordered)
+                            }
+                            Button("Open recording setup") { showSetup = true }
+                                .buttonStyle(.borderedProminent)
+                        } else {
+                            ProgressView("Preparing the local recorder…")
+                                .controlSize(.small)
+                                .foregroundStyle(Theme.muted)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("dashboard.recorder-synchronization")
                 }
             }
             .animation(
@@ -83,12 +176,21 @@ struct MainWindow: View {
         }
         .background(WindowSurfaceBackground(role: .canvas))
         .frame(minWidth: 960, minHeight: 560)
-        .sheet(isPresented: $showSetup) {
-            SetupSheet(
-                setup: setup,
-                onClose: { showSetup = false },
-                runSetup: { await retrySetupAndRecorderSynchronization() }
-            )
+        .overlay(alignment: .topTrailing) {
+            if !showSetup && offlineDashboard == nil && activationClient == nil {
+                RecordingHealthNoticeStack(
+                    coordinator: healthCoordinator,
+                    onSetup: { openRecordingSetup() },
+                    onSetupCause: { openRecordingSetup(cause: $0) },
+                    onSources: { selection.open(.sources) },
+                    onRefresh: { refreshHealthAndWork() }
+                )
+                .padding(.top, 58)
+                .padding(.trailing, Space.m)
+            }
+        }
+        .onChange(of: health, initial: true) { _, snapshot in
+            healthCoordinator.update(snapshot)
         }
         .task {
             // Fixture-backed design review must stay deterministic and must
@@ -98,9 +200,11 @@ struct MainWindow: View {
             // first local data request, update that CLI transactionally when
             // the new bundle carries different, matching source provenance.
             // If safe recovery still reports a failure, surface the existing
-            // setup sheet with its log instead of silently hiding the issue.
+            // in-window setup with its log instead of silently hiding the issue.
             let upgrade = await waitForRecorderSynchronization()
-            if case .failed = upgrade {
+            if case .failed(let message) = upgrade {
+                setupRecoveryReason = message
+                setupRecoveryKind = .synchronization
                 showSetup = true
                 return
             }
@@ -109,7 +213,47 @@ struct MainWindow: View {
             // offers setup once, automatically. A dev build (no embedded CLI)
             // never prompts.
             if setup.shouldOfferSetup {
+                openWorkAfterSetup = true
                 showSetup = true
+            }
+        }
+        .onChange(of: setup.onboardingCompletedAt, initial: true) { _, boundary in
+            guard !SnapshotMode.enabled, reconnectStoreExplanation == nil,
+                  let boundary, let target = setup.selectedClient else { return }
+            connectionHistory.configured(target, at: boundary, setupLog: setup.log)
+            connectionHistory.save()
+        }
+        .onChange(of: dashboard.setupCaptureTaskAssociations, initial: true) { _, _ in
+            if connectionHistory.enrichTaskAssociations(using: { dashboard.taskID(for: $0) }) {
+                connectionHistory.save()
+            }
+        }
+        .onChange(of: setup.reconnectCompletedAt) { _, boundary in
+            guard !SnapshotMode.enabled, reconnectStoreExplanation == nil, let boundary else { return }
+            for id in connectionHistory.boundaries.keys {
+                if let target = SetupClient(rawValue: id) { connectionHistory.configured(target, at: boundary) }
+            }
+            connectionHistory.save()
+        }
+        .task(id: "\(recorderSynchronizationFinished):\(connectionHistory.pendingKey)") {
+            guard !SnapshotMode.enabled, recorderSynchronizationFinished,
+                  !connectionHistory.pending.isEmpty else { return }
+            while !Task.isCancelled {
+                for (id, boundary) in connectionHistory.pending.sorted(by: { $0.key < $1.key }) {
+                    guard !Task.isCancelled, let target = SetupClient(rawValue: id) else { return }
+                    do {
+                        if let capture = try await dashboard.findSetupCapture(client: target, after: boundary) {
+                            guard !Task.isCancelled else { return }
+                            connectionHistory.observed(capture)
+                            connectionHistory.save()
+                        }
+                    } catch {
+                        if Task.isCancelled { return }
+                        // An unavailable source remains pending. Health reports
+                        // connectivity separately and never invents a capture.
+                    }
+                }
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
             }
         }
         .task(id: recorderSynchronizationFinished) {
@@ -138,6 +282,79 @@ struct MainWindow: View {
         .onDisappear {
             guard !SnapshotMode.enabled, let app = NSApp else { return }
             app.setActivationPolicy(.accessory)
+        }
+    }
+
+    private func openActivation(_ id: String) {
+        guard let target = SetupClient(rawValue: id), connectionHistory.boundaries[id] != nil else { return }
+        selection.prepareWorkReturnFocus()
+        savedWork = SavedWorkSnapshot.current()
+        showSetup = false
+        activationClient = target
+    }
+
+    private func openRecordingSetup(cause: RecordingHealthCause? = nil) {
+        selection.prepareWorkReturnFocus()
+        activationClient = nil
+        openWorkAfterSetup = false
+        savedWork = SavedWorkSnapshot.current()
+        switch RecordingSetupRoute.project(
+            selectedCause: cause,
+            currentCauses: health.causes,
+            setupPhase: setup.phase,
+            synchronizationFinished: recorderSynchronizationFinished || SnapshotMode.enabled
+        ) {
+        case .synchronization(let message):
+            setupRecoveryKind = .synchronization
+            setupRecoveryReason = message
+        case .connection(let reason):
+            setupRecoveryKind = .connection
+            setupRecoveryReason = reason
+        case .configuration:
+            setupRecoveryKind = .connection
+            setupRecoveryReason = nil
+        }
+        showSetup = true
+    }
+
+    private func openSavedOrLiveWork() {
+        activationClient = nil
+        selection.pane = .work
+        if !recorderSynchronizationFinished && !SnapshotMode.enabled, let savedWork, savedWork.hasWork {
+            offlineDashboard = DashboardStore(savedWork: savedWork, taskID: selection.taskId)
+        }
+        showSetup = false
+    }
+
+    private func recoverRecorder() async -> Bool {
+        if setupRecoveryKind == .synchronization {
+            await retrySetupAndRecorderSynchronization()
+            return recorderSynchronizationFinished
+        }
+        guard reconnectStoreExplanation == nil else { return false }
+        let succeeded = await setup.reconnectRecorder()
+        if succeeded {
+            // The route keeps its frozen reason so the success confirmation and
+            // diagnostics remain visible until the user leaves deliberately.
+            offlineDashboard = nil
+            refreshHealthAndWork()
+        }
+        return succeeded
+    }
+
+    private func refreshHealthAndWork() {
+        Task {
+            await performAfterRecorderSynchronization(
+                awaitReady: { await waitForRecorderSynchronization() },
+                operation: {
+                    glance.refreshNow()
+                    await refreshDashboardAndSelectedWork(
+                        dashboardRefresh: { await dashboard.refresh() },
+                        selectedTaskId: { selection.taskId },
+                        receiptRefresh: { await dashboard.fetchReceipt(taskId: $0) }
+                    )
+                }
+            )
         }
     }
 
@@ -220,6 +437,10 @@ struct TopBar: View {
     @Environment(AppSelection.self) var selection
     /// Packaged build → show the "Set up recording" entry point.
     var canSetUp: Bool = false
+    var health: RecordingHealthSnapshot? = nil
+    var healthCoordinator: RecordingHealthCoordinator? = nil
+    var onActivateClient: ((String) -> Void)? = nil
+    var onSetupCause: ((RecordingHealthCause) -> Void)? = nil
     var awaitRecorderSynchronization: () async -> SetupModel.AutomaticUpgradeOutcome = { .notNeeded }
     var onSetUp: () -> Void = {}
     @Namespace private var paneSelection
@@ -263,16 +484,48 @@ struct TopBar: View {
                 // window once the old Limits tab is removed.
                 .padding(.trailing, 8)
 
-            // Preserve full labels when four panes fit; icon-only remains the
-            // safety fallback for accessibility text or unusually narrow chrome.
+            // Destination names are functional content. Keep them available
+            // in a labeled picker when the full tab row cannot fit.
             ViewThatFits(in: .horizontal) {
                 paneTabs(iconOnly: false)
-                paneTabs(iconOnly: true)
+                Picker("Destination", selection: Binding(
+                    get: { selection.pane },
+                    set: { pane in
+                        if pane == .work { selection.open(.work) }
+                        else { selection.pane = pane }
+                    }
+                )) {
+                    ForEach(MainPane.allCases) { pane in Text(pane.rawValue).tag(pane) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .workFont(.body)
+                .accessibilityIdentifier("dashboard.destination-picker")
             }
 
             Spacer()
 
-            if canSetUp {
+            if let health {
+                RecordingHealthToolbarButton(
+                    snapshot: health,
+                    coordinator: healthCoordinator,
+                    onSetup: onSetUp,
+                    onSetupCause: onSetupCause,
+                    onActivateClient: onActivateClient,
+                    onSources: { selection.open(.sources) },
+                    onRefresh: {
+                        Task {
+                            await performAfterRecorderSynchronization(
+                                awaitReady: awaitRecorderSynchronization,
+                                operation: {
+                                    glance.refreshNow()
+                                    await dashboard.refresh()
+                                }
+                            )
+                        }
+                    }
+                )
+            } else if canSetUp {
                 Button(action: onSetUp) {
                     HStack(spacing: 4) {
                         Image(systemName: "record.circle")

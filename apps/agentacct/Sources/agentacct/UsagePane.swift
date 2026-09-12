@@ -27,12 +27,17 @@ struct UsagePane: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Usage & limits")
-                .font(Type.titlePage).tracking(Type.titlePageTracking)
-                .foregroundStyle(Theme.ink)
-            Text("Provider-reported capacity and locally recorded usage")
-                .font(Type.dataSmall).foregroundStyle(Theme.muted)
+        VStack(alignment: .leading, spacing: Space.m) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                Text("Usage & limits")
+                    .workFont(.titlePage).tracking(Type.titlePageTracking)
+                    .foregroundStyle(Theme.ink)
+                ContextHelp(title: "About usage and limits", message: "Provider-reported capacity and locally recorded usage have separate time windows. Changing the recorded usage range updates client totals, history and attribution; it does not change provider quota windows or today's summary.", identifier: "usage.range-help")
+            }
+            HStack(spacing: Space.m) {
+                Text("Recorded usage range").workFont(.caption).foregroundStyle(Theme.muted)
+                usageRangeControl
+            }
         }
     }
 
@@ -49,24 +54,22 @@ struct UsagePane: View {
             VStack(alignment: .leading, spacing: Space.m) {
                 HStack(alignment: .firstTextBaseline, spacing: Space.m) {
                     Text("Current capacity")
-                        .font(Type.titleSection).tracking(Type.titleSectionTracking)
+                        .workFont(.titleSection).tracking(Type.titleSectionTracking)
                         .foregroundStyle(Theme.ink)
+                    ContextHelp(title: "About current capacity", message: "Provider-reported usage allowance. agentacct does not enforce a spending budget or stop work.", identifier: "usage.capacity-help")
                     if let updated = glance.lastUpdated {
                         Text("capacity refreshed \(dashboardFreshnessText(updated))")
-                            .font(Type.dataSmall).foregroundStyle(Theme.muted)
+                            .workFont(.dataSmall).foregroundStyle(Theme.muted)
                     }
                     if dashboard.usage != nil {
                         Text(dashboard.usageLastUpdated.map {
                             "recorded use refreshed \(dashboardFreshnessText($0))"
                         } ?? "recorded use update time unavailable")
-                            .font(Type.dataSmall).foregroundStyle(Theme.muted)
+                            .workFont(.dataSmall).foregroundStyle(Theme.muted)
                     }
                     Spacer()
                     staleControl(count: snapshot.glance.limits.filter { $0.stale == true }.count)
                 }
-                Text("Provider-reported usage allowance. agentacct does not enforce a spending budget or stop work.")
-                    .font(Type.caption).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
 
                 if let today = snapshot.glance.usage.windows.first(where: { $0.label == "today" })?.totals {
                     todayStrip(today)
@@ -77,9 +80,9 @@ struct UsagePane: View {
                         Text(dashboard.usage == nil
                              ? "No live capacity reported yet"
                              : "No live capacity or recorded usage in this range")
-                            .font(Type.rowLabel).foregroundStyle(Theme.ink)
+                            .workFont(.rowLabel).foregroundStyle(Theme.ink)
                         Text(capacityEmptyDetail(presentation: presentation))
-                            .font(Type.caption).foregroundStyle(Theme.muted)
+                            .workFont(.caption).foregroundStyle(Theme.muted)
                     }
                     .padding(.vertical, Space.s)
                 } else {
@@ -115,7 +118,7 @@ struct UsagePane: View {
                 } else {
                     Toggle("Show \(count) stale capacity reading\(count == 1 ? "" : "s")", isOn: $showStale)
                         .toggleStyle(.checkbox)
-                        .font(Type.caption)
+                        .workFont(.caption)
                         .foregroundStyle(Theme.muted)
                         .accessibilityIdentifier("usage.capacity.show-stale")
                 }
@@ -136,14 +139,14 @@ struct UsagePane: View {
     private func scopedCapacityState(title: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: Space.m) {
             Text("Current capacity")
-                .font(Type.titleSection).tracking(Type.titleSectionTracking)
+                .workFont(.titleSection).tracking(Type.titleSectionTracking)
                 .foregroundStyle(Theme.ink)
             Text("Provider-reported usage allowance. agentacct does not enforce a spending budget or stop work.")
-                .font(Type.caption).foregroundStyle(Theme.muted)
+                .workFont(.caption).foregroundStyle(Theme.muted)
             Card {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(Type.rowLabel).foregroundStyle(Theme.ink)
-                    Text(detail).font(Type.caption).foregroundStyle(Theme.muted)
+                    Text(title).workFont(.rowLabel).foregroundStyle(Theme.ink)
+                    Text(detail).workFont(.caption).foregroundStyle(Theme.muted)
                 }
             }
         }
@@ -153,17 +156,17 @@ struct UsagePane: View {
         HStack(spacing: Space.l) {
             CapsLabel(text: "Today · all agents")
             Text(totals.freshTokens.map(UsageTotals.compact) ?? "Tokens not reported")
-                .font(Type.dataSmallSemibold)
+                .workFont(.dataSmallSemibold)
                 .foregroundStyle(totals.freshTokens == nil ? Theme.muted : Theme.ink)
             if totals.freshTokens != nil {
-                Text("fresh tokens").font(Type.caption).foregroundStyle(Theme.muted)
+                Text("fresh tokens").workFont(.caption).foregroundStyle(Theme.muted)
             }
             Rectangle().fill(Theme.hairline).frame(width: 1, height: 20)
             Text(totals.costText == "—" ? "Cost unpriced" : totals.costText)
-                .font(Type.dataSmallSemibold)
+                .workFont(.dataSmallSemibold)
                 .foregroundStyle(totals.costText == "—" ? Theme.muted : Theme.ink)
             Text(Fmt.costConfidenceLabel(totals.costConfidence) ?? "cost basis not reported")
-                .font(Type.caption).foregroundStyle(Theme.muted)
+                .workFont(.caption).foregroundStyle(Theme.muted)
             Spacer()
         }
         .padding(.horizontal, Space.l)
@@ -174,30 +177,22 @@ struct UsagePane: View {
     @ViewBuilder
     private var recordedUsageSection: some View {
         VStack(alignment: .leading, spacing: Space.m) {
-            HStack(alignment: .center, spacing: Space.m) {
-                VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Space.s) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.s) {
                     Text("Recorded usage")
-                        .font(Type.titleSection).tracking(Type.titleSectionTracking)
+                        .workFont(.titleSection).tracking(Type.titleSectionTracking)
                         .foregroundStyle(Theme.ink)
-                    HStack(spacing: 0) {
-                        Text("Range applies only to totals, history, and attribution")
-                            .font(Type.dataSmall).foregroundStyle(Theme.muted)
-                        if let updated = dashboard.usageLastUpdated {
-                            Text(" · usage refreshed \(dashboardFreshnessText(updated))")
-                                .font(Type.dataSmall).foregroundStyle(Theme.muted)
-                        }
-                    }
+                    ContextHelp(title: "About recorded cost", message: "Cost is usage reporting, not a provider invoice or balance due. Verify charges with your provider. Cost basis and completeness are shown beside each total.", identifier: "usage.cost-help")
                 }
-                Spacer()
-                usageRangeControl
+                if let updated = dashboard.usageLastUpdated {
+                    Text("Usage refreshed \(dashboardFreshnessText(updated))")
+                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
+                }
             }
-
-            Text("Cost is usage reporting, not a provider invoice or balance due. Verify charges with your provider.")
-                .font(Type.caption).foregroundStyle(Theme.muted)
 
             if let error = dashboard.errorText {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(Type.caption).foregroundStyle(Theme.coral)
+                    .workFont(.caption).foregroundStyle(Theme.coral)
             }
 
             if let usage = dashboard.usage {
@@ -225,9 +220,9 @@ struct UsagePane: View {
                 basisFooter(usage)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Recorded usage not loaded").font(Type.rowLabel).foregroundStyle(Theme.ink)
+                    Text("Recorded usage not loaded").workFont(.rowLabel).foregroundStyle(Theme.ink)
                     Text("Capacity may still be available above while the usage summary loads.")
-                        .font(Type.caption).foregroundStyle(Theme.muted)
+                        .workFont(.caption).foregroundStyle(Theme.muted)
                 }
                 .padding(.vertical, Space.s)
             }
@@ -243,7 +238,6 @@ struct UsagePane: View {
     private var usageRangeControl: some View {
         if SnapshotMode.enabled {
             HStack(spacing: Space.s) {
-                CapsLabel(text: "Usage range")
                 Chip(text: "\(dashboard.usageDays)d", tint: Theme.accent)
             }
         } else {
@@ -284,7 +278,8 @@ struct UsagePane: View {
                 id: "cost",
                 label: "Cost",
                 value: totals.flatMap { $0.costText == "—" ? nil : $0.costText },
-                qualifier: Fmt.costConfidenceLabel(totals?.costConfidence),
+                qualifier: totals?.costComplete == false ? "Partial subtotal · \(Fmt.costConfidenceLabel(totals?.costConfidence) ?? "basis not reported")"
+                    : (Fmt.costConfidenceLabel(totals?.costConfidence) ?? "Estimate · basis not reported"),
                 absent: "no priced usage"
             ),
             StripRow.Cell(
@@ -307,7 +302,7 @@ struct UsagePane: View {
             },
         ].compactMap { $0 }
         Text(parts.joined(separator: " · "))
-            .font(Type.dataSmall).foregroundStyle(Theme.muted)
+            .workFont(.dataSmall).foregroundStyle(Theme.muted)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -317,10 +312,10 @@ struct UsagePane: View {
             Card {
                 HStack {
                     Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
-                    Text("About these numbers").font(Type.rowLabel).foregroundStyle(Theme.ink)
+                    Text("About these numbers").workFont(.rowLabel).foregroundStyle(Theme.ink)
                     Spacer()
                     Text("cost, windows, and plan calibration")
-                        .font(Type.dataSmall).foregroundStyle(Theme.muted)
+                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
                 }
             }
         } else {
@@ -329,10 +324,10 @@ struct UsagePane: View {
                     aboutDetails.padding(.top, Space.l)
                 } label: {
                     HStack {
-                        Text("About these numbers").font(Type.rowLabel).foregroundStyle(Theme.ink)
+                        Text("About these numbers").workFont(.rowLabel).foregroundStyle(Theme.ink)
                         Spacer()
                         Text("cost, windows, and plan calibration")
-                            .font(Type.dataSmall).foregroundStyle(Theme.muted)
+                            .workFont(.dataSmall).foregroundStyle(Theme.muted)
                     }
                 }
                 .accessibilityIdentifier("usage.about")
@@ -345,20 +340,20 @@ struct UsagePane: View {
             VStack(alignment: .leading, spacing: 6) {
                 CapsLabel(text: "Cost grammar")
                 Text("$ complete reported or billed · ≈$ estimate · ~$ known partial subtotal · unpriced when no amount is available")
-                    .font(Type.caption).foregroundStyle(Theme.muted)
+                    .workFont(.caption).foregroundStyle(Theme.muted)
             }
             Rectangle().fill(Theme.hairline).frame(height: 1)
             VStack(alignment: .leading, spacing: 6) {
                 CapsLabel(text: "Provider windows")
                 Text("Rolling windows follow each client's activity; fixed windows reset at the provider's stated time. Attention markers sit at 75% and 90% used.")
-                    .font(Type.caption).foregroundStyle(Theme.muted)
+                    .workFont(.caption).foregroundStyle(Theme.muted)
             }
             if !dashboard.planClients.isEmpty {
                 Rectangle().fill(Theme.hairline).frame(height: 1)
                 VStack(alignment: .leading, spacing: Space.m) {
                     CapsLabel(text: "Weekly plan-share estimates")
                     Text("Today and 7d estimates stay fixed; the selected usage range applies only to each model accumulation below.")
-                        .font(Type.caption).foregroundStyle(Theme.muted)
+                        .workFont(.caption).foregroundStyle(Theme.muted)
                     ForEach(Array(dashboard.planClients.enumerated()), id: \.element.id) { index, client in
                         if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1) }
                         UsagePlanClientDetail(client: client, days: dashboard.usageDays)
@@ -432,25 +427,25 @@ private struct UsagePlanClientDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Space.m) {
-                Text(client.client).font(Type.rowLabel).foregroundStyle(Theme.ink)
+                Text(client.client).workFont(.rowLabel).foregroundStyle(Theme.ink)
                     .frame(width: 140, alignment: .leading)
                 Text(presentation.detailText)
-                    .font(Type.caption).foregroundStyle(Theme.muted)
+                    .workFont(.caption).foregroundStyle(Theme.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let daily = presentation.dailyText {
                 if presentation.dailyRows.isEmpty {
-                    Text(daily).font(Type.caption).foregroundStyle(Theme.muted)
+                    Text(daily).workFont(.caption).foregroundStyle(Theme.muted)
                 } else {
                     DisclosureGroup(isExpanded: $showDaily) {
                         LazyVStack(alignment: .leading, spacing: 5) {
                             ForEach(Array(presentation.dailyRows.enumerated()), id: \.offset) { _, row in
-                                Text(row).font(Type.caption).foregroundStyle(Theme.muted)
+                                Text(row).workFont(.caption).foregroundStyle(Theme.muted)
                             }
                         }
                         .padding(.top, Space.s)
                     } label: {
-                        Text(daily).font(Type.captionSemibold).foregroundStyle(Theme.ink)
+                        Text(daily).workFont(.captionSemibold).foregroundStyle(Theme.ink)
                     }
                     .accessibilityIdentifier("usage.plan.daily.\(client.client)")
                 }
@@ -459,7 +454,7 @@ private struct UsagePlanClientDetail: View {
                 CapsLabel(text: presentation.modelHeading)
                 ScrollContentStack(alignment: .leading, spacing: Space.s) {
                     ForEach(Array(presentation.modelRows.enumerated()), id: \.offset) { _, row in
-                        Text(row).font(Type.caption).foregroundStyle(Theme.muted)
+                        Text(row).workFont(.caption).foregroundStyle(Theme.muted)
                     }
                 }
             }
@@ -494,15 +489,15 @@ struct StripRow: View {
                         CapsLabel(text: cell.label)
                         if let value = cell.value {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(value).font(Type.kpi).foregroundStyle(Theme.ink)
+                                Text(value).workFont(.kpi).foregroundStyle(Theme.ink)
                                 if let qualifier = cell.qualifier {
-                                    Text(qualifier).font(Type.dataSmall).foregroundStyle(Theme.muted)
-                                        .lineLimit(1)
+                                    Text(qualifier).workFont(.dataSmall).foregroundStyle(Theme.muted)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                         } else {
                             Text(cell.absent ?? "not recorded")
-                                .font(Type.body).foregroundStyle(Theme.muted)
+                                .workFont(.body).foregroundStyle(Theme.muted)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -613,7 +608,7 @@ struct UsagePeriodChart: View {
                 Group {
                     if index == peakIndex, let peak = value(period), peak > 0 {
                         Text("peak \(valueText(period))")
-                            .font(Type.dataSmall)
+                            .workFont(.dataSmall)
                             .foregroundStyle(Theme.muted)
                             .fixedSize()
                     } else {
@@ -638,7 +633,7 @@ struct UsagePeriodChart: View {
         Card(padding: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: Space.m) {
-                    Text(chartTitle).font(Type.titleCard).foregroundStyle(Theme.ink)
+                    Text(chartTitle).workFont(.titleCard).foregroundStyle(Theme.ink)
                     Spacer()
                     if let selectedIndex, periods.indices.contains(selectedIndex), !SnapshotMode.enabled {
                         Button {
@@ -658,7 +653,7 @@ struct UsagePeriodChart: View {
                         .accessibilityLabel(presentation.previousAccessibilityLabel)
 
                         Text("\(periods[selectedIndex].shortLabel) · \(valueText(periods[selectedIndex]))")
-                            .font(Type.dataSmallSemibold)
+                            .workFont(.dataSmallSemibold)
                             .foregroundStyle(Theme.ink)
                             .frame(minWidth: 112)
 
@@ -713,7 +708,7 @@ struct UsagePeriodChart: View {
                             Text(axisText(0.5)).offset(y: -Self.plotHeight / 2 + 7)
                             Text("0")
                         }
-                        .font(Type.dataSmall)
+                        .workFont(.dataSmall)
                         .foregroundStyle(Theme.muted)
                         .frame(width: 44, height: Self.plotHeight, alignment: .bottomTrailing)
 
@@ -784,9 +779,9 @@ struct UsagePeriodChart: View {
                                 let hovered = periods[activeIndex]
                                 HStack(spacing: 6) {
                                     Text(hovered.shortLabel)
-                                        .font(Type.dataSmallSemibold).foregroundStyle(Theme.ink)
+                                        .workFont(.dataSmallSemibold).foregroundStyle(Theme.ink)
                                     Text(valueText(hovered))
-                                        .font(Type.dataSmall).foregroundStyle(Theme.muted)
+                                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
                                 }
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 5)
@@ -809,7 +804,7 @@ struct UsagePeriodChart: View {
                             Text(periods.last?.shortLabel ?? "")
                         }
                     }
-                    .font(Type.dataSmall)
+                    .workFont(.dataSmall)
                     .foregroundStyle(Theme.muted)
                 }
                 .padding(Space.xl)
@@ -856,8 +851,8 @@ struct UsageBreakdownTable: View {
         Card(padding: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: Space.s) {
-                    Text(title).font(Type.titleCard).foregroundStyle(Theme.ink)
-                    Text("last \(days) days").font(Type.dataSmall).foregroundStyle(Theme.muted)
+                    Text(title).workFont(.titleCard).foregroundStyle(Theme.ink)
+                    Text("last \(days) days").workFont(.dataSmall).foregroundStyle(Theme.muted)
                     Spacer()
                 }
                 .padding(.horizontal, Space.xl)
@@ -879,7 +874,7 @@ struct UsageBreakdownTable: View {
 
                 if sorted.isEmpty {
                     Text("No recorded usage in this window")
-                        .font(Type.body).foregroundStyle(Theme.muted)
+                        .workFont(.body).foregroundStyle(Theme.muted)
                         .padding(Space.xl)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -906,15 +901,15 @@ struct UsageBreakdownTable: View {
         }
         return HStack(spacing: Space.l) {
             Text(name)
-                .font(Type.rowLabel).foregroundStyle(Theme.ink)
+                .workFont(.rowLabel).foregroundStyle(Theme.ink)
                 .lineLimit(1).truncationMode(.middle)
                 .help(name)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(bucket.sessions.map(String.init) ?? "not reported")
-                .font(Type.dataSmall).foregroundStyle(bucket.sessions == nil ? Theme.muted : Theme.ink)
+                .workFont(.dataSmall).foregroundStyle(bucket.sessions == nil ? Theme.muted : Theme.ink)
                 .frame(width: 76, alignment: .trailing)
             Text(bucket.freshTokens.map(UsageTotals.compact) ?? "not reported")
-                .font(Type.dataSmall).foregroundStyle(bucket.freshTokens == nil ? Theme.muted : Theme.ink)
+                .workFont(.dataSmall).foregroundStyle(bucket.freshTokens == nil ? Theme.muted : Theme.ink)
                 .frame(width: 76, alignment: .trailing)
             Group {
                 if let share {
@@ -922,17 +917,17 @@ struct UsageBreakdownTable: View {
                         MeterBar(fraction: share, tint: Theme.chartBar, height: 6)
                             .frame(width: 80)
                         Text("\(Int((share * 100).rounded()))%")
-                            .font(Type.dataSmall).foregroundStyle(Theme.ink)
+                            .workFont(.dataSmall).foregroundStyle(Theme.ink)
                             .frame(width: 40, alignment: .leading)
                     }
                 } else {
                     Text("not reported")
-                        .font(Type.dataSmall).foregroundStyle(Theme.muted)
+                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
                 }
             }
             .frame(width: 140, alignment: .leading)
             Text(bucket.costText == "—" ? "unpriced" : bucket.costText)
-                .font(Type.dataSmall)
+                .workFont(.dataSmall)
                 .foregroundStyle(bucket.costText == "—" ? Theme.muted : Theme.ink)
                 .frame(width: 90, alignment: .trailing)
         }

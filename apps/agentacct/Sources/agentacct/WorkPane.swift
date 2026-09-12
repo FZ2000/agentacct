@@ -246,6 +246,7 @@ struct WorkReceiptRowPresentation {
     let clientText: String
     let costText: String
     let updatedText: String
+    let updatedAccessibilityText: String
     let attentionReason: String?
 
     init(task: ReceiptSummary, detail: Receipt? = nil) {
@@ -292,7 +293,8 @@ struct WorkReceiptRowPresentation {
             let compact = DashboardWorkItem(task: task).cost
             costText = compact == "—" ? "cost unknown" : compact
         }
-        updatedText = agoText(task.lastActivityAt) ?? "no activity"
+        updatedText = agoText(task.lastActivityAt) ?? "Activity time unavailable"
+        updatedAccessibilityText = task.lastActivityAt == nil ? "Activity time unavailable" : "updated \(updatedText)"
         // Only a STANDING blocker states the (coral) attention reason; a resolved
         // one is surfaced for reopen but must not read as needing attention.
         if let blocker = decision.blocker?.text, !blocker.isEmpty, blockerIsStanding {
@@ -314,7 +316,7 @@ struct WorkReceiptRowPresentation {
         parts.append(checkRunsText.replacingOccurrences(of: " · ", with: ", "))
         parts.append(clientText)
         parts.append(costText)
-        parts.append("updated \(updatedText)")
+        parts.append(updatedAccessibilityText)
         return parts.joined(separator: ". ")
     }
 
@@ -512,9 +514,15 @@ struct DecisionLegendButton: View {
 struct WorkPane: View {
     @Environment(DashboardStore.self) var dashboard
     @Environment(AppSelection.self) var selection
+    @Environment(\.savedWorkReconnect) private var reconnectSavedWork
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var unresolvedSessionId: String?
+    @State private var timelineFocused = false
+
+    init(timelineFocused: Bool = false) {
+        _timelineFocused = State(initialValue: timelineFocused)
+    }
 
     private var selectionKey: String {
         if let taskId = selection.taskId { return "task:\(taskId)" }
@@ -561,7 +569,7 @@ struct WorkPane: View {
                 hasSelection: selection.taskId != nil || unresolvedSessionId != nil
             )
             Group {
-                switch mode {
+                switch timelineFocused && selection.taskId != nil ? .pushDetail : mode {
                 case .table:
                     WorkTablePage(browse: selection.workBrowse)
                         .transition(listTransition)
@@ -574,6 +582,7 @@ struct WorkPane: View {
                         .transition(detailTransition)
                 }
             }
+            .environment(\.workCompactViewport, proxy.size.height < 720)
         }
         .animation(
             reduceMotion ? Motion.reducedCrossfade : Motion.detailNavigation,
@@ -585,6 +594,16 @@ struct WorkPane: View {
             // error and collapse error/loading snapshots into the same frame.
             guard !SnapshotMode.enabled else { return }
             await resolveSelection()
+        }
+        .task(id: selectionKey) {
+            guard !SnapshotMode.enabled, !dashboard.isOfflineSnapshot, let taskId = selection.taskId else { return }
+            // Refresh only this task while it is visible. The store rejects
+            // obsolete responses when navigation changes during a request.
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                guard !Task.isCancelled, selection.taskId == taskId else { return }
+                await dashboard.fetchReceipt(taskId: taskId)
+            }
         }
         .task(id: selection.workBrowse.group) {
             guard !SnapshotMode.enabled, selection.workBrowse.group == .attention else { return }
@@ -598,7 +617,7 @@ struct WorkPane: View {
         // split views become a warning placeholder in ImageRenderer. The fixed
         // SwiftUI sibling uses the same ideal width for deterministic review.
         Group {
-            if SnapshotMode.enabled {
+            if SnapshotMode.enabled && !SnapshotMode.interactiveFixture {
                 HStack(alignment: .top, spacing: 0) {
                     WorkMasterList(browse: selection.workBrowse)
                         .frame(width: 368)
@@ -658,7 +677,9 @@ struct WorkPane: View {
                             error: dashboard.receiptError
                         ),
                         isRefreshing: dashboard.receiptLoadingTaskId == receipt.taskId,
-                        autoFocusEntry: autoFocusEntry
+                        autoFocusEntry: autoFocusEntry,
+                        timelineFocused: timelineFocused,
+                        onToggleTimelineFocus: { timelineFocused.toggle() }
                     )
                 } else if let taskId = selection.taskId,
                           let error = workReceiptRefreshError(
@@ -670,11 +691,14 @@ struct WorkPane: View {
                         title: "Receipt unavailable",
                         message: error,
                         symbol: "exclamationmark.triangle",
-                        retryTitle: dashboard.receiptLoadingTaskId == taskId ? nil : "Retry",
+                        retryTitle: dashboard.isOfflineSnapshot
+                            ? (reconnectSavedWork == nil ? nil : "Back to recovery")
+                            : (dashboard.receiptLoadingTaskId == taskId ? nil : "Retry"),
                         showsProgress: dashboard.receiptLoadingTaskId == taskId,
                         autoFocusEntry: autoFocusEntry
                     ) {
-                        Task { await dashboard.fetchReceipt(taskId: taskId) }
+                        if dashboard.isOfflineSnapshot { reconnectSavedWork?() }
+                        else { Task { await dashboard.fetchReceipt(taskId: taskId) } }
                     }
                 } else if let unresolvedSessionId, selection.sessionId == unresolvedSessionId {
                     WorkRecordPlaceholder(
@@ -1900,36 +1924,64 @@ struct WorkRecordPage: View {
     let refreshError: String?
     let isRefreshing: Bool
     let autoFocusEntry: Bool
+    var timelineFocused = false
+    var onToggleTimelineFocus: (() -> Void)? = nil
     @Environment(AppSelection.self) var selection
     @Environment(DashboardStore.self) var dashboard
+    @Environment(\.workCompactViewport) private var compactViewport
     @FocusState private var backFocused: Bool
     @AccessibilityFocusState private var backAccessibilityFocused: Bool
 
     var body: some View {
-        ScrollBox {
-            VStack(alignment: .leading, spacing: 0) {
-                breadcrumb
-                titleBlock.padding(.top, Space.m)
-                if let refreshError {
-                    staleDetailBanner(refreshError).padding(.top, Space.m)
+        ScrollViewReader { proxy in
+            ScrollBox {
+                VStack(alignment: .leading, spacing: 0) {
+                    breadcrumb
+                    if timelineFocused || compactViewport {
+                        HStack(spacing: Space.s) {
+                            Text(receipt.title ?? receipt.taskId).workFont(.titleCard).lineLimit(1)
+                            DecisionBadge(key: receipt.axes.decisionStatus.key, label: receipt.axes.decisionStatus.label ?? receipt.axes.decisionStatus.key)
+                        }.padding(.top, Space.s)
+                    } else { titleBlock.padding(.top, Space.m) }
+                    if let refreshError {
+                        staleDetailBanner(refreshError).padding(.top, Space.m)
+                    }
+                    let decision = WorkReceiptDecisionPresentation(receipt: receipt)
+                    Text(decision.explanation)
+                        .workFont(.body)
+                        .foregroundStyle(decision.isAttention ? Theme.coral : Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, Space.s)
+                    if let blocker = receipt.axes.decisionStatus.blocker, blocker.text != nil {
+                        BlockerCallout(blocker: blocker, taskId: receipt.taskId)
+                            .padding(.top, Space.s)
+                    }
+                    WorkTimelineView(receipt: receipt,
+                        onRevealInspector: { proxy.scrollTo("work.timeline.inspector", anchor: .top) },
+                        onRevealRecords: { proxy.scrollTo("work.timeline.records", anchor: .top) },
+                        onRevealHeading: { proxy.scrollTo("work.timeline.heading", anchor: .top) })
+                        .padding(.top, compactViewport ? Space.s : Space.l)
+                    DisclosureGroup("Outcome, usage and all captured details") {
+                        RecordDecisionCard(receipt: receipt).padding(.top, Space.m)
+                        RecordSummaryStrip(receipt: receipt, summary: summary).padding(.top, Space.m)
+                        columns.padding(.top, Space.m)
+                        sessionsSection.padding(.top, Space.l)
+                    }
+                    .workFont(.caption)
+                    .padding(.top, Space.xl)
+                    .accessibilityIdentifier("work.all-captured-details")
                 }
-                RecordDecisionCard(receipt: receipt)
-                    .padding(.top, Space.l)
-                RecordSummaryStrip(receipt: receipt, summary: summary)
-                    .padding(.top, Space.l)
-                columns.padding(.top, Space.xl)
-                sessionsSection.padding(.top, Space.xl)
+                .padding(timelineFocused || compactViewport ? Space.m : Space.gutter)
+                .frame(maxWidth: timelineFocused ? .infinity : 1172 + Space.gutter * 2, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(Space.gutter)
-            .frame(maxWidth: 1172 + Space.gutter * 2, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .id(receipt.taskId)  // reset the drill-down's expansion state per Task
-        .onAppear {
-            guard autoFocusEntry, !SnapshotMode.enabled else { return }
-            DispatchQueue.main.async {
-                backFocused = true
-                backAccessibilityFocused = true
+            .id(receipt.taskId)  // reset the drill-down's expansion state per Task
+            .onAppear {
+                guard autoFocusEntry, !SnapshotMode.enabled else { return }
+                DispatchQueue.main.async {
+                    backFocused = true
+                    backAccessibilityFocused = true
+                }
             }
         }
     }
@@ -1942,6 +1994,13 @@ struct WorkRecordPage: View {
             HStack(spacing: 6) {
                 CapsLabel(text: "Work")
                 CapsLabel(text: "/ \(shortTaskRef)")
+            }
+            Spacer(minLength: 0)
+            if let onToggleTimelineFocus {
+                Button(action: onToggleTimelineFocus) {
+                    Label(timelineFocused ? "Show task list" : "Focus timeline", systemImage: timelineFocused ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
+                }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                .accessibilityIdentifier("work.focus-timeline")
             }
         }
     }
@@ -2026,6 +2085,7 @@ struct WorkRecordPage: View {
                     Task { await dashboard.fetchReceipt(taskId: receipt.taskId) }
                 }
                 .buttonStyle(QuietButtonStyle(tint: Theme.accent))
+                .workFont(.captionSemibold)
                 .accessibilityIdentifier("work.receipt.stale.retry")
             }
         }
@@ -2330,6 +2390,7 @@ struct SessionDrillRow: View {
     let member: ReceiptSessionMember
     let initiallyExpanded: Bool
     @Environment(DashboardStore.self) var dashboard
+    @Environment(\.savedWorkReconnect) private var reconnectSavedWork
     @State private var expanded: Bool
     @State private var detail: V1SessionDetail?
     @State private var loading = false
@@ -2470,6 +2531,10 @@ struct SessionDrillRow: View {
     private var expandedBody: some View {
         if let detail = effectiveDetail {
             VStack(alignment: .leading, spacing: 6) {
+                if let savedAt = dashboard.sessionSavedAt(client: member.client, sessionID: member.clientSessionId) {
+                    Text("Session copy saved: \(savedAt.ISO8601Format())")
+                        .workFont(.caption).foregroundStyle(Theme.muted).textSelection(.enabled)
+                }
                 if detail.steps.isEmpty {
                     Text("No recorded steps are linked to this session.")
                         .workFont(.caption)
@@ -2501,6 +2566,15 @@ struct SessionDrillRow: View {
                 // list. Re-listing this session's descendants here showed the
                 // same subagents a second time (a confusing "41 and 41"), so the
                 // member list is the single source of truth for the tree.
+            }
+        } else if dashboard.isOfflineSnapshot {
+            VStack(alignment: .leading, spacing: Space.s) {
+                Text("This session detail was not saved on this Mac. Reconnect the recorder to load it.")
+                    .workFont(.caption).foregroundStyle(Theme.amber)
+                if let reconnectSavedWork {
+                    Button("Back to recovery", action: reconnectSavedWork)
+                        .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                }
             }
         } else if failed {
             HStack(spacing: Space.s) {

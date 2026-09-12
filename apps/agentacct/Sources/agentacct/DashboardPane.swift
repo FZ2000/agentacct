@@ -834,7 +834,7 @@ struct DashboardPane: View {
         .overlay(alignment: .bottom) {
             if let error = presentedError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(Type.caption)
+                    .workFont(.caption)
                     .foregroundStyle(Theme.coral)
                     .padding(Space.s)
                     .background(Theme.card, in: RoundedRectangle(cornerRadius: Metrics.radius, style: .continuous))
@@ -926,18 +926,18 @@ private struct DashboardShiftBriefHeader: View {
         HStack(alignment: .lastTextBaseline, spacing: Space.xl) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("SHIFT BRIEF")
-                    .font(Type.labelCaps)
+                    .workFont(.labelCaps)
                     .tracking(Type.labelCapsTracking)
                     .foregroundStyle(Theme.accent)
                 Text(presentation.dashboardHeadline)
-                    .font(Type.titlePage)
+                    .workFont(.titlePage)
                     .tracking(Type.titlePageTracking)
                     .foregroundStyle(Theme.ink)
                     .lineLimit(2)
             }
             Spacer(minLength: Space.m)
             Text(presentation.dashboardStatus)
-                .font(Type.dataSmall)
+                .workFont(.dataSmall)
                 .foregroundStyle(presentation.dashboardStatusIsWarning ? Theme.amber : Theme.muted)
                 .multilineTextAlignment(.trailing)
         }
@@ -1003,10 +1003,10 @@ private struct DashboardAttentionBriefCard: View {
                 ProgressView().controlSize(.small).tint(Theme.muted)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Checking recorded work…")
-                        .font(Type.titleSection)
+                        .workFont(.titleSection)
                         .foregroundStyle(Theme.ink)
                     Text("Loading the complete review projection; no clear-state claim is shown yet.")
-                        .font(Type.body)
+                        .workFont(.body)
                         .foregroundStyle(Theme.muted)
                 }
             }
@@ -1021,11 +1021,11 @@ private struct DashboardAttentionBriefCard: View {
         return VStack(alignment: .leading, spacing: Space.l) {
             HStack(spacing: Space.s) {
                 Text("PRIMARY ATTENTION")
-                    .font(Type.labelCaps)
+                    .workFont(.labelCaps)
                     .tracking(Type.labelCapsTracking)
                     .foregroundStyle(tint)
                 Text("1 OF \(total)")
-                    .font(Type.dataSmallSemibold)
+                    .workFont(.dataSmallSemibold)
                     .foregroundStyle(Theme.muted)
                     .padding(.horizontal, 7)
                     .frame(minHeight: 21)
@@ -1033,7 +1033,7 @@ private struct DashboardAttentionBriefCard: View {
                 Spacer(minLength: Space.s)
                 if total > 1 {
                     Button("View queue") { open(.reviewQueue) }
-                        .font(Type.captionSemibold)
+                        .workFont(.captionSemibold)
                         .foregroundStyle(Theme.accent)
                         .buttonStyle(QuietButtonStyle())
                         .accessibilityIdentifier("dashboard.shift-brief.view-queue")
@@ -1044,11 +1044,11 @@ private struct DashboardAttentionBriefCard: View {
                 let context = [focus.project, focus.client].compactMap { $0 }
                 if !context.isEmpty {
                     Text(context.joined(separator: " · "))
-                        .font(Type.dataSmall)
+                        .workFont(.dataSmall)
                         .foregroundStyle(Theme.muted)
                 }
                 Text(focus.summary)
-                    .font(Type.body)
+                    .workFont(.body)
                     .foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1057,11 +1057,11 @@ private struct DashboardAttentionBriefCard: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Text("RECORDED NEXT STEP")
-                    .font(Type.labelCaps)
+                    .workFont(.labelCaps)
                     .tracking(Type.labelCapsTracking)
                     .foregroundStyle(Theme.muted)
                 Text(focus.nextStep ?? "No next step recorded.")
-                    .font(Type.body)
+                    .workFont(.body)
                     .foregroundStyle(focus.nextStep == nil ? Theme.muted : Theme.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1077,7 +1077,7 @@ private struct DashboardAttentionBriefCard: View {
                     open(.attentionTask(focus.id))
                 } label: {
                     Label("Review evidence", systemImage: "doc.text.magnifyingglass")
-                        .font(Type.captionSemibold)
+                        .workFont(.captionSemibold)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
@@ -1109,7 +1109,7 @@ private struct DashboardAttentionBriefCard: View {
                             systemImage: copySucceeded ? "checkmark" : "doc.on.doc"
                         )
                     }
-                    .font(Type.captionSemibold)
+                    .workFont(.captionSemibold)
                 }
                 .buttonStyle(.bordered)
                 .tint(copyFailed ? Theme.coral : Theme.accent)
@@ -1151,7 +1151,7 @@ private struct DashboardStaticBriefActions: View {
 
     private func pill(_ title: String, systemImage: String, foreground: Color, fill: Color) -> some View {
         Label(title, systemImage: systemImage)
-            .font(Type.captionSemibold)
+            .workFont(.captionSemibold)
             .foregroundStyle(foreground)
             .padding(.horizontal, 13)
             .padding(.vertical, 6)
@@ -1189,11 +1189,11 @@ private struct DashboardProofline: View {
     private func fact(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
-                .font(Type.labelCaps)
+                .workFont(.labelCaps)
                 .tracking(Type.labelCapsTracking)
                 .foregroundStyle(Theme.muted)
             Text(value)
-                .font(Type.dataSmallSemibold)
+                .workFont(.dataSmallSemibold)
                 .foregroundStyle(Theme.ink)
                 .lineLimit(1)
         }
@@ -1213,16 +1213,16 @@ private struct DashboardBriefEmptyState: View {
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.green)
                 Text("COMPLETE REVIEW PROJECTION")
-                    .font(Type.labelCaps)
+                    .workFont(.labelCaps)
                     .tracking(Type.labelCapsTracking)
                     .foregroundStyle(Theme.green)
             }
             Text("No recorded work needs review.")
-                .font(Type.titleSection)
+                .workFont(.titleSection)
                 .tracking(Type.titleSectionTracking)
                 .foregroundStyle(Theme.ink)
             Text("No current failed check, failed step, or unresolved blocker was found across the complete attention projection.")
-                .font(Type.body)
+                .workFont(.body)
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1240,11 +1240,11 @@ private struct DashboardBriefUnavailableState: View {
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(Theme.amber)
             Text(title)
-                .font(Type.titleSection)
+                .workFont(.titleSection)
                 .tracking(Type.titleSectionTracking)
                 .foregroundStyle(Theme.ink)
             Text(message)
-                .font(Type.body)
+                .workFont(.body)
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1451,15 +1451,15 @@ private struct DashboardSignalRow: View {
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(eyebrow)
-                        .font(Type.labelCaps)
+                        .workFont(.labelCaps)
                         .tracking(Type.labelCapsTracking)
                         .foregroundStyle(Theme.muted)
                     Text(title)
-                        .font(Type.rowLabel)
+                        .workFont(.rowLabel)
                         .foregroundStyle(Theme.ink)
                         .lineLimit(1)
                     Text(detail)
-                        .font(Type.caption)
+                        .workFont(.caption)
                         .foregroundStyle(Theme.muted)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1498,11 +1498,11 @@ private struct DashboardCardHeader<Action: View>: View {
     var body: some View {
         HStack(spacing: Space.s) {
             Text(title)
-                .font(Type.titleCard)
+                .workFont(.titleCard)
                 .foregroundStyle(Theme.muted)
             if let count {
                 Text(String(count))
-                    .font(Type.dataSmallSemibold)
+                    .workFont(.dataSmallSemibold)
                     .foregroundStyle(Theme.muted)
                     .padding(.horizontal, 6)
                     .frame(minWidth: 20, minHeight: 20)
@@ -1533,7 +1533,7 @@ private struct RecentWorkCard: View {
             VStack(spacing: 0) {
                 DashboardCardHeader("Recent work", count: totalCount) {
                     Button { open(.work) } label: {
-                        Text("View all").font(Type.captionSemibold)
+                        Text("View all").workFont(.captionSemibold)
                     }
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(QuietButtonStyle())
@@ -1586,11 +1586,11 @@ private struct RecentWorkRow: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.title)
-                        .font(Type.rowLabel)
+                        .workFont(.rowLabel)
                         .foregroundStyle(Theme.ink)
                         .lineLimit(2)
                     Text([item.client, item.recency].compactMap { $0 }.joined(separator: " · "))
-                        .font(Type.caption)
+                        .workFont(.caption)
                         .foregroundStyle(Theme.muted)
                         .lineLimit(1)
                 }
@@ -1615,7 +1615,7 @@ private struct RecentWorkRow: View {
                         EvidencePip(shape: .hollow, tint: Theme.muted)
                     }
                     Text(item.evidence)
-                        .font(Type.dataSmall)
+                        .workFont(.dataSmall)
                         .foregroundStyle(item.evidenceIsInconsistent ? Theme.amber : Theme.muted)
                         .lineLimit(1)
                 }
@@ -1623,7 +1623,7 @@ private struct RecentWorkRow: View {
                 .help(item.evidenceQualifier)
 
                 Text(item.cost == "—" ? "unpriced" : item.cost)
-                    .font(Type.dataSmall)
+                    .workFont(.dataSmall)
                     .foregroundStyle(Theme.muted)
                     .frame(width: 68, alignment: .trailing)
 
@@ -1822,7 +1822,7 @@ private struct DashboardUsageChart: View {
                 HStack(spacing: Space.m) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Usage history")
-                            .font(Type.titleCard)
+                            .workFont(.titleCard)
                             .foregroundStyle(Theme.muted)
                         Text(
                             series.subtitle(
@@ -1830,12 +1830,12 @@ private struct DashboardUsageChart: View {
                                 periodPresentation: periodPresentation
                             )
                         )
-                            .font(Type.caption)
+                            .workFont(.caption)
                             .foregroundStyle(Theme.muted)
                     }
                     Spacer(minLength: Space.s)
                     Text(series.totalText(for: periods))
-                        .font(Type.dataSmall)
+                        .workFont(.dataSmall)
                         .foregroundStyle(Theme.muted)
                     HStack(spacing: 2) {
                         ForEach(DashboardUsageSeries.allCases) { choice in
@@ -1844,7 +1844,7 @@ private struct DashboardUsageChart: View {
                                 hoveredIndex = nil
                                 pinnedIndex = nil
                             } label: {
-                                Text(choice.rawValue).font(Type.captionSemibold)
+                                Text(choice.rawValue).workFont(.captionSemibold)
                                     .padding(.horizontal, 9)
                                     .frame(height: 24)
                             }
@@ -1882,7 +1882,7 @@ private struct DashboardUsageChart: View {
                 Spacer()
                 Text("0")
             }
-            .font(Type.dataSmall)
+            .workFont(.dataSmall)
             .foregroundStyle(Theme.muted)
             .frame(width: 38, height: 130)
 
@@ -1938,7 +1938,7 @@ private struct DashboardUsageChart: View {
                                 .accessibilityIdentifier("dashboard.usage.day.\(index)")
 
                                 Text(period.shortLabel)
-                                    .font(Type.dataSmall)
+                                    .workFont(.dataSmall)
                                     .foregroundStyle(Theme.muted)
                                     .lineLimit(1)
                             }
@@ -1998,8 +1998,8 @@ private struct DashboardChartTooltip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(date).font(Type.dataSmall).foregroundStyle(Theme.muted)
-            Text(value).font(Type.dataSmallSemibold).foregroundStyle(Theme.ink)
+            Text(date).workFont(.dataSmall).foregroundStyle(Theme.muted)
+            Text(value).workFont(.dataSmallSemibold).foregroundStyle(Theme.ink)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -2130,8 +2130,8 @@ private struct DashboardEmptyState: View {
                 .foregroundStyle(Theme.muted)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(Type.rowLabel).foregroundStyle(Theme.ink)
-                Text(message).font(Type.caption).foregroundStyle(Theme.muted)
+                Text(title).workFont(.rowLabel).foregroundStyle(Theme.ink)
+                Text(message).workFont(.caption).foregroundStyle(Theme.muted)
             }
         }
         .padding(Space.l)

@@ -1,0 +1,63 @@
+import Foundation
+
+enum WorkTimelineExport {
+    static func text(taskID: String, title: String?, records: [WorkTimelineRecord],
+                     projection: WorkTimelineProjection, following: Bool,
+                     query: String, file: String?, generatedAt: Date,
+                     snapshotAt: Date? = nil, failuresOnly: Bool = false,
+                     interval: WorkTimelineInterval? = nil, offlineReceiptAt: Date? = nil, outcome: String? = nil, handoff: String? = nil,
+                     comparisonIDs: [String] = []) -> String {
+        var lines = [
+            title ?? "Work review", "Task: \(taskID)",
+            "Exported: \(generatedAt.ISO8601Format())",
+            "Last successful session snapshot: \(snapshotAt?.ISO8601Format() ?? "not observed in this view")",
+            "Task outcome: \(outcome ?? "not supplied")", "Handoff: \(handoff ?? "not supplied")",
+            "View: \(following ? "following latest observed snapshot" : "held for review")",
+            "Scope: \(records.count) displayed records of \(projection.records.count) loaded records.",
+            "These are displayed records, not deduplicated check runs. Unloaded evidence is excluded.",
+            "Search: \(query.isEmpty ? "none" : query)", "Exact file filter: \(file ?? "none")",
+            "Current failures filter: \(failuresOnly ? "on" : "off")",
+            "Time range: \(interval.map { Date(timeIntervalSince1970: $0.lower).ISO8601Format() + " to " + Date(timeIntervalSince1970: $0.upper).ISO8601Format() } ?? "all available source times")",
+            "Undated records remain included when they match the other filters.",
+            "Offline receipt copy: \(offlineReceiptAt?.ISO8601Format() ?? "not an offline receipt")",
+            "No token or cost total is calculated by this export.", ""
+        ]
+        for notice in projection.notices { lines.append("Coverage: \(notice)") }
+        for lane in projection.lanes { lines.append("Session coverage — \(lane.title) [\(lane.id)]: \(lane.availability)") }
+        let comparison = comparisonIDs.prefix(2).compactMap { id in projection.records.first { $0.id == id } }
+        if !comparisonIDs.isEmpty {
+            lines.append("\nSelected comparison:")
+            for (slot, id) in comparisonIDs.prefix(2).enumerated() {
+                let record = projection.records.first { $0.id == id }
+                lines.append("Slot \(slot == 0 ? "A" : "B"): \(id.isEmpty ? "not selected" : id)\(record == nil && !id.isEmpty ? " (unavailable in this snapshot)" : "")")
+            }
+            if comparison.count == 2 { lines.append("Relationship: \(projection.relationship(comparison[0], comparison[1]))") }
+        }
+        let displayedIDs = Set(records.map(\.id))
+        let comparisonOnly = comparison.filter { !displayedIDs.contains($0.id) }
+        if !comparisonOnly.isEmpty {
+            lines.append("\(comparisonOnly.count) selected comparison records fall outside the displayed filters; included separately below.")
+        }
+        for record in records + comparisonOnly {
+            lines += ["", "---", record.title, "\(displayedIDs.contains(record.id) ? "Displayed record" : "Comparison-only record"): \(record.id)",
+                "Event identity: \(record.eventID ?? "not supplied")",
+                "Evidence lane identity: \(record.laneID)",
+                "Session: \(record.laneTitle)", record.lineage,
+                "Result: \(record.resultLabel)\(record.superseded ? " (superseded history)" : "")",
+                "Source: \(record.source)", "Scope: \(record.scope ?? "not supplied")",
+                "Recorded at: \(record.start.map { Date(timeIntervalSince1970: $0).ISO8601Format() } ?? "unknown")",
+                record.timeNote]
+            if let start = record.start { lines.append("Precise source time: \(WorkTimelineTimeAxis.preciseLabel(start))") }
+            if let end = record.end { lines.append("Last section update: \(WorkTimelineTimeAxis.preciseLabel(end))") }
+            if let summary = record.summary { lines.append("Summary: \(summary)") }
+            if let code = record.exitCode { lines.append("Recorded exit code: \(code)") }
+            if let disposition = record.disposition { lines.append("Human disposition: \(disposition); recorded result unchanged.") }
+            if let note = record.identityNote { lines.append("Identity limitation: \(note)") }
+            if let resolution = record.resolutionDescription { lines.append(resolution) }
+            lines += record.artifactDescriptions
+            if record.commandRedacted { lines.append("Command text was deliberately not captured.") }
+            lines.append(record.files.isEmpty ? "Files: not supplied" : "Files:\n" + record.files.joined(separator: "\n"))
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+}

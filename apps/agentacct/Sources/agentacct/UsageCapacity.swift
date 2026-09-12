@@ -181,9 +181,8 @@ struct UsageCapacityRow: Identifiable {
             parts.append(usage.freshTokens.map { "\($0) fresh tokens" } ?? "tokens not reported")
             parts.append(usage.sessions.map { "\($0) sessions" } ?? "sessions not reported")
             parts.append(usage.costText == "—" ? "cost unpriced" : usage.costText)
-            if let confidence = Fmt.costConfidenceLabel(usage.costConfidence) {
-                parts.append(confidence)
-            }
+            parts.append(usage.costComplete == false ? "Partial subtotal" : "")
+            parts.append(Fmt.costConfidenceLabel(usage.costConfidence) ?? "cost basis not reported")
         } else {
             parts.append(usageLoaded
                 ? "no recorded usage in this range"
@@ -361,6 +360,7 @@ struct UsagePlanPresentation {
 }
 
 struct UsageCapacityLedger: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let rows: [UsageCapacityRow]
     let days: Int
     let usageLoaded: Bool
@@ -368,16 +368,19 @@ struct UsageCapacityLedger: View {
     var body: some View {
         Card(padding: 0) {
             VStack(spacing: 0) {
-                HStack(spacing: Space.l) {
-                    CapsLabel(text: "Client").frame(width: 160, alignment: .leading)
-                    CapsLabel(text: "Provider window").frame(maxWidth: .infinity, alignment: .leading)
-                    CapsLabel(text: "Recorded use · \(days)d").frame(width: 230, alignment: .leading)
-                }
-                .padding(.horizontal, Space.xl)
-                .frame(height: Metrics.rowHeader)
-                .accessibilityHidden(true)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    HStack(spacing: Space.l) {
+                        CapsLabel(text: "Client").frame(width: 160, alignment: .leading)
+                        CapsLabel(text: "Provider window").frame(maxWidth: .infinity, alignment: .leading)
+                        CapsLabel(text: "Recorded use · \(days)d").frame(width: 230, alignment: .leading)
+                    }
+                    .padding(.horizontal, Space.xl)
+                    .frame(height: Metrics.rowHeader)
+                    .accessibilityHidden(true)
 
-                Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, Space.xl)
+                    Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, Space.xl)
+
+                }
 
                 if SnapshotMode.enabled {
                     VStack(spacing: 0) { ledgerRows }
@@ -410,8 +413,10 @@ private struct UsageCapacityLedgerRow: View {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: Space.l) {
                     clientLane
+                    Text("Provider windows").workFont(.captionSemibold).foregroundStyle(Theme.muted)
                     capacityLane
                     Rectangle().fill(Theme.hairline).frame(height: 1)
+                    Text("Recorded use · \(days)d").workFont(.captionSemibold).foregroundStyle(Theme.muted)
                     usageLane
                 }
             } else {
@@ -432,14 +437,14 @@ private struct UsageCapacityLedgerRow: View {
     private var clientLane: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(row.client)
-                .font(Type.rowLabel)
+                .workFont(.rowLabel)
                 .foregroundStyle(Theme.ink)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .help(row.client)
             if !row.planTypes.isEmpty {
                 Text(row.planTypes.joined(separator: " · "))
-                    .font(Type.dataSmall)
+                    .workFont(.dataSmall)
                     .foregroundStyle(Theme.muted)
             }
             if let state = row.plan?.calibrationState {
@@ -453,11 +458,11 @@ private struct UsageCapacityLedgerRow: View {
         if row.readings.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text(row.hasHiddenStaleReading ? "No live provider limit" : "Provider limit not reported")
-                    .font(Type.captionSemibold)
+                    .workFont(.captionSemibold)
                     .foregroundStyle(Theme.muted)
                 if row.hasHiddenStaleReading {
                     Text("A stale reading is hidden")
-                        .font(Type.caption)
+                        .workFont(.caption)
                         .foregroundStyle(Theme.muted)
                 }
             }
@@ -467,7 +472,7 @@ private struct UsageCapacityLedgerRow: View {
                     if (reading.entry.windows ?? []).isEmpty {
                         HStack(spacing: Space.s) {
                             Text("Reading contained no quota windows")
-                                .font(Type.captionSemibold).foregroundStyle(Theme.muted)
+                                .workFont(.captionSemibold).foregroundStyle(Theme.muted)
                             if reading.isStale { Chip(text: "stale", tint: Theme.amber) }
                         }
                     } else {
@@ -488,24 +493,24 @@ private struct UsageCapacityLedgerRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: Space.s) {
                     Text(usage.freshTokens.map(UsageTotals.compact) ?? "Tokens not reported")
-                        .font(Type.dataSmallSemibold)
+                        .workFont(.dataSmallSemibold)
                         .foregroundStyle(usage.freshTokens == nil ? Theme.muted : Theme.ink)
-                    Text("fresh tokens").font(Type.caption).foregroundStyle(Theme.muted)
+                    Text("fresh tokens").workFont(.caption).foregroundStyle(Theme.muted)
                 }
                 Text(usage.sessions.map { "\($0) sessions" } ?? "Sessions not reported")
-                    .font(Type.dataSmall).foregroundStyle(Theme.muted)
-                HStack(spacing: 6) {
+                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
+                VStack(alignment: .leading, spacing: 4) {
                     Text(usage.costText == "—" ? "Cost unpriced" : usage.costText)
-                        .font(Type.dataSmallSemibold)
+                        .workFont(.dataSmallSemibold)
                         .foregroundStyle(usage.costText == "—" ? Theme.muted : Theme.ink)
-                    if let confidence = Fmt.costConfidenceLabel(usage.costConfidence) {
-                        Text(confidence).font(Type.caption).foregroundStyle(Theme.muted)
-                    }
+                    Text((usage.costComplete == false ? "Partial subtotal · " : "") + (Fmt.costConfidenceLabel(usage.costConfidence) ?? "cost basis not reported"))
+                        .workFont(.caption).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         } else {
             Text(usageLoaded ? "No recorded usage in this range" : "Recorded usage not loaded")
-                .font(Type.captionSemibold)
+                .workFont(.captionSemibold)
                 .foregroundStyle(Theme.muted)
         }
     }
@@ -534,9 +539,9 @@ private struct UsageCapacityWindowRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: Space.s) {
-                Text(presentation.name).font(Type.captionSemibold).foregroundStyle(Theme.ink)
+                Text(presentation.name).workFont(.captionSemibold).foregroundStyle(Theme.ink)
                 if let span = presentation.spanText {
-                    Text(span).font(Type.dataSmall).foregroundStyle(Theme.muted)
+                    Text(span).workFont(.dataSmall).foregroundStyle(Theme.muted)
                 }
                 if presentation.stale { Chip(text: "stale", tint: Theme.amber) }
             }
@@ -547,13 +552,13 @@ private struct UsageCapacityWindowRow: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: Space.s) {
                 Text(presentation.statusText)
-                    .font(Type.dataSmallSemibold)
+                    .workFont(.dataSmallSemibold)
                     .foregroundStyle(
                         presentation.validUsedPercent.map { Theme.limitColor(usedPercent: $0) }
                             ?? Theme.amber
                     )
                 Spacer(minLength: Space.s)
-                Text(presentation.resetText).font(Type.dataSmall).foregroundStyle(Theme.muted)
+                Text(presentation.resetText).workFont(.dataSmall).foregroundStyle(Theme.muted)
             }
         }
     }

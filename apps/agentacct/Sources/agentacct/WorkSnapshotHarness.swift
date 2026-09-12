@@ -225,8 +225,9 @@ struct SessionStepsSnapshotConfiguration {
         (.retrying, 760, 240),
         (.compactChecks, 360, 1_600),
         (.rtlStress, 760, 1_250),
-        (.compactAccessibility, 360, 4_000),
-        (.rtlAccessibility, 360, 4_000),
+        // Full-content exports, not window viewports: allow the explicit large-text ramp.
+        (.compactAccessibility, 360, 5_400),
+        (.rtlAccessibility, 360, 5_400),
     ].flatMap { kind, width, height in
         [
             Self(kind: kind, width: width, height: height, colorScheme: .light),
@@ -919,8 +920,8 @@ struct ReceiptCheckSnapshotConfiguration {
         (.allPassed, 760, 460, .medium, .leftToRight),
         (.expanded, 760, 1_140, .medium, .leftToRight),
         (.compact, 360, 720, .medium, .leftToRight),
-        (.compactAccessibility, 360, 320, .accessibility5, .leftToRight),
-        (.accessibilityRTL, 760, 700, .accessibility5, .rightToLeft),
+        (.compactAccessibility, 360, 600, .accessibility5, .leftToRight),
+        (.accessibilityRTL, 760, 1_400, .accessibility5, .rightToLeft),
     ].flatMap { kind, width, height, dynamicTypeSize, layoutDirection in
         [
             Self(

@@ -137,12 +137,14 @@ struct V1Step: Decodable, Identifiable {
     let evidenceGradeReason: String?
     let models: [V1ModelLane]?
     let checks: [V1Check]?
+    var latestEventId: String? = nil
     private let fallbackId = UUID().uuidString
 
     var id: String { workId ?? sectionId ?? fallbackId }
 
     enum CodingKeys: String, CodingKey {
         case title, kind, phase, summary, files, blocker, usage, models, checks
+        case latestEventId = "latest_event_id"
         case workId = "work_id"
         case sectionId = "section_id"
         case latestStatus = "latest_status"

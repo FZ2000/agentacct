@@ -176,6 +176,26 @@ enum CLIPayloadInspector {
 // target file. Old directories (and a legacy top-level `_internal`) are kept so
 // already-running MCP/hook processes never see their side files replaced.
 
+/// Global onboarding accepts one named client. An explicit choice never expands
+/// to whatever other clients the CLI happens to discover on this machine.
+enum SetupClient: String, CaseIterable, Identifiable {
+    case codex
+    case claudeCode = "claude-code"
+    case openCode = "opencode"
+    case hermes
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .codex: return "Codex"
+        case .claudeCode: return "Claude Code"
+        case .openCode: return "OpenCode"
+        case .hermes: return "Hermes"
+        }
+    }
+}
+
 @MainActor
 final class SetupModel: ObservableObject {
     enum Phase: Equatable {
@@ -187,6 +207,22 @@ final class SetupModel: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var log: [String] = []
+    /// nil retains the legacy automatic selection used by SetupSheet.
+    @Published private(set) var selectedClient: SetupClient?
+    /// Completion of the command is an activation boundary, never capture proof.
+    @Published private(set) var onboardingCompletedAt: Date?
+    @Published private(set) var isRunningOnboard = false
+    enum ReconnectPhase: Equatable {
+        case idle
+        case working
+        case done
+        case failed(String)
+    }
+    @Published private(set) var reconnectPhase: ReconnectPhase = .idle
+    @Published private(set) var reconnectLog: [String] = []
+    /// Endpoint readiness after reconnect, separate from original onboarding and
+    /// never evidence that the selected client has captured any new work.
+    @Published private(set) var reconnectCompletedAt: Date?
     private var pendingRuntimeRecovery = false
 
     private let fm = FileManager.default
@@ -232,9 +268,16 @@ final class SetupModel: ObservableObject {
     /// Deterministic state injection for offscreen review renders. Live setup
     /// still uses the production initializer above and reaches these states
     /// only through `setUp()`.
-    init(preloaded phase: Phase, log: [String]) {
+    init(
+        preloaded phase: Phase,
+        log: [String],
+        selectedClient: SetupClient? = nil,
+        onboardingCompletedAt: Date? = nil
+    ) {
         self.phase = phase
         self.log = Array(log.suffix(200))
+        self.selectedClient = selectedClient
+        self.onboardingCompletedAt = onboardingCompletedAt
         installer = nil
         processRunner = ProcessRunner.run
         home = FileManager.default.homeDirectoryForCurrentUser
@@ -257,6 +300,81 @@ final class SetupModel: ObservableObject {
     /// a packaged build. nil for a dev app built without the frozen CLI.
     var bundledCLIDir: URL? {
         packagedCLI?.directory
+    }
+
+    var canRunInteractiveSetup: Bool { installer != nil || bundledCLIDir != nil }
+    var recordingStorePath: String? { try? storeDirectory().path }
+
+    /// Inspect the verified bundle without installing it, creating a lock,
+    /// changing selected client, or touching runtime state.
+    func previewSetupContent(for client: SetupClient) async -> SetupContentPreviewState {
+        guard !SnapshotMode.enabled else {
+            return .unavailable("Native review mode uses a supplied fixture. It does not inspect this Mac's client configuration.")
+        }
+        guard let packaged = packagedCLI else {
+            return .unavailable("This build has no validated packaged recorder to generate managed content. File summaries remain available; use a packaged app with setup preview support to inspect its proposal.")
+        }
+        do {
+            let store = try storeDirectory().standardizedFileURL.resolvingSymlinksInPath()
+            let executable = packaged.directory.appendingPathComponent("agentacct")
+            func verifyIdentity() throws {
+                guard let current = packagedCLI,
+                      current.provenance == packaged.provenance,
+                      current.payloadIdentity == packaged.payloadIdentity,
+                      try storeDirectory().standardizedFileURL.resolvingSymlinksInPath() == store else {
+                    throw SetupError.stableInstallChanged
+                }
+            }
+            try verifyIdentity()
+            var lines: [String] = []
+            var byteCount = 0
+            for try await line in processRunner(executable, ["setup", "preview", "--agent", client.rawValue, "--user", "--json", "--store-dir", store.path]) {
+                try Task.checkCancellation()
+                byteCount += line.utf8.count + 1
+                guard byteCount <= 1_000_000 else {
+                    return .failed("The recorder returned a preview larger than this window can display.")
+                }
+                lines.append(line)
+            }
+            try Task.checkCancellation()
+            try verifyIdentity()
+            guard let preview = try? JSONDecoder().decode(SetupContentPreview.self, from: Data(lines.joined(separator: "\n").utf8)),
+                  preview.validates(client: client, store: store),
+                  ReleaseVersion(preview.cliVersion) == packaged.releaseVersion else {
+                return .failed("The packaged recorder did not return a supported preview for this client, store, and app version. Existing file contents were not displayed.")
+            }
+            return .available(preview)
+        } catch is CancellationError {
+            return .idle
+        } catch ProcessRunnerError.nonzeroExit(2) {
+            return .unavailable("This packaged recorder could not provide the setup preview command. Use a matching app release with preview support; no setup command was requested.")
+        } catch {
+            return .failed("The read-only preview could not complete. The recorder payload or recording store may have changed; refresh the preview before continuing.")
+        }
+    }
+
+    var canReconnectRecorder: Bool { reconnectUnavailableReason == nil }
+
+    var reconnectUnavailableReason: String? {
+        guard let packaged = packagedCLI else {
+            return "This build cannot verify a packaged recorder for reconnect. Open the matching packaged agentacct app, or start your development backend separately."
+        }
+        guard let installed = installedCLIState,
+              installed.provenance == packaged.provenance,
+              installed.payloadIdentity == packaged.payloadIdentity else {
+            return "Recorder-only reconnect requires the app-owned recorder that matches this app. Open the packaged app and complete its recorder update first."
+        }
+        guard !pendingRuntimeRecovery, !pathExists(runtimeTransactionJournal),
+              !onboardingPendingForCurrentInstall else {
+            return "An interrupted recorder setup still needs recovery. Reopen the packaged app to finish that protected setup before reconnecting."
+        }
+        return nil
+    }
+
+    func selectClientForSetup(_ client: SetupClient) {
+        if case .working = phase { return }
+        if reconnectPhase == .working { return }
+        selectedClient = client
     }
 
     private var installedCLIDir: URL { home.appendingPathComponent(".local/share/agentacct/cli", isDirectory: true) }
@@ -310,9 +428,11 @@ final class SetupModel: ObservableObject {
 
     func setUp() async {
         guard case .idle = phase else { return }
+        guard reconnectPhase != .working else { return }
         if pendingRuntimeRecovery {
             await retryRuntimeAfterFailedUpgrade()
-            return
+            guard phase == .done, selectedClient != nil else { return }
+            phase = .idle
         }
         // A setup-sheet retry after an automatic upgrade failure must use the
         // same stop/swap/start transaction, never the first-run installer path
@@ -321,13 +441,17 @@ final class SetupModel: ObservableObject {
             let outcome = await upgradeInstalledCLIIfNeeded()
             switch outcome {
             case .upgraded, .notNeeded:
-                phase = .done
+                if selectedClient == nil {
+                    phase = .done
+                    return
+                }
+                phase = .idle
             case .failed:
-                break
+                return
             }
-            return
         }
         log = []
+        onboardingCompletedAt = nil
         do {
             let transactionLock: CLITransactionLock?
             if installer == nil {
@@ -343,8 +467,10 @@ final class SetupModel: ObservableObject {
                 if case .failed = outcome {
                     return
                 }
-                phase = .done
-                return
+                if selectedClient == nil {
+                    phase = .done
+                    return
+                }
             }
 
             try Task.checkCancellation()
@@ -360,6 +486,11 @@ final class SetupModel: ObservableObject {
                 // installed successfully. Retry onboarding through that same
                 // verified stable launcher instead of treating it as a fresh
                 // install and colliding with our own files.
+                executable = installedBinary
+            } else if selectedClient != nil, installedCLIState != nil {
+                // The safe upgrade/recovery above can keep a newer validated
+                // recorder. Configure the requested client through that owned
+                // launcher; do not attempt a first-install replacement.
                 executable = installedBinary
             } else {
                 executable = try await installCLI()
@@ -379,7 +510,101 @@ final class SetupModel: ObservableObject {
         }
     }
 
-    func reset() { phase = .idle }
+    func reset() {
+        guard reconnectPhase != .working else { return }
+        phase = .idle
+    }
+
+    /// Start only the verified app-owned recorder. This operation cannot update
+    /// the CLI, recover an install transaction, or rerun client onboarding. The
+    /// explicit CLI flag also suppresses version-triggered integration resync.
+    @discardableResult
+    func reconnectRecorder() async -> Bool {
+        guard reconnectPhase != .working else { return false }
+        if case .working = phase { return false }
+        reconnectLog = []
+        reconnectPhase = .working
+        do {
+            if let reason = reconnectUnavailableReason {
+                throw RecorderReconnectError.unavailable(reason)
+            }
+            guard let expected = installedCLIState, let packaged = packagedCLI else {
+                throw SetupError.stableInstallChanged
+            }
+            let store = try storeDirectory().standardizedFileURL
+            let transactionLock = try acquireTransactionLock()
+            defer { withExtendedLifetime(transactionLock) {} }
+            transactionLockObserver?()
+
+            func verify() throws {
+                guard installedCLIMatches(expected),
+                      let currentPackage = packagedCLI,
+                      currentPackage.provenance == packaged.provenance,
+                      currentPackage.payloadIdentity == packaged.payloadIdentity,
+                      expected.provenance == packaged.provenance,
+                      expected.payloadIdentity == packaged.payloadIdentity else {
+                    throw SetupError.stableInstallChanged
+                }
+                guard try storeDirectory().standardizedFileURL == store else {
+                    throw SetupError.runtimeJournalStoreChanged
+                }
+                guard !pendingRuntimeRecovery, !pathExists(runtimeTransactionJournal),
+                      !onboardingPendingForCurrentInstall else {
+                    throw RecorderReconnectError.unavailable("A recorder setup transaction appeared before reconnect. Finish its recovery before trying again.")
+                }
+            }
+            try verify()
+            let autostart = pathExists(managedAutostartFile)
+                ? try managedAutostart(installed: expected, store: store) : nil
+            if let autostart { _ = try await verifiedLaunchdJob(autostart) }
+            try verify()
+            guard autostartMatches(autostart) else { throw SetupError.unsafeAutostart }
+            try Task.checkCancellation()
+
+            reconnectLog.append("Starting the verified recorder without refreshing client configuration")
+            let arguments = ["start", "--no-sync-clients", "--store-dir", store.path, "--json"]
+            for try await line in processRunner(installedBinary, arguments) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { reconnectLog.append(trimmed) }
+                if reconnectLog.count > 200 { reconnectLog.removeFirst(reconnectLog.count - 200) }
+            }
+            try verify()
+            guard autostartMatches(autostart) else { throw SetupError.unsafeAutostart }
+            try Task.checkCancellation()
+
+            reconnectLog.append("Checking recorder endpoint and watcher readiness")
+            let output = try await runCommand(executable: installedBinary, arguments: runtimeArguments(command: "status", store: store))
+            try verify()
+            guard autostartMatches(autostart) else { throw SetupError.unsafeAutostart }
+            guard let data = output.data(using: .utf8),
+                  let status = try? JSONDecoder().decode(RuntimeStatus.self, from: data),
+                  status.isReady(store: store) else {
+                throw RecorderReconnectError.notReady
+            }
+            try Task.checkCancellation()
+            reconnectCompletedAt = Date()
+            reconnectLog.append("Recorder endpoint is ready. Fresh client capture is still unconfirmed.")
+            reconnectPhase = .done
+            return true
+        } catch {
+            let message = error.localizedDescription
+            reconnectLog.append("Reconnect stopped: \(message)")
+            reconnectPhase = .failed(message)
+            return false
+        }
+    }
+
+    private enum RecorderReconnectError: LocalizedError {
+        case unavailable(String)
+        case notReady
+
+        var errorDescription: String? {
+            switch self {
+            case .unavailable(let reason): return reason
+            case .notReady: return "The recorder start command finished, but the endpoint and watcher are not ready. Review the reconnect output and try again."
+            }
+        }
+    }
 
     enum AutomaticUpgradeOutcome: Equatable {
         case notNeeded
@@ -393,6 +618,7 @@ final class SetupModel: ObservableObject {
     /// its version changes. First-run `setUp()` remains install + onboard.
     @discardableResult
     func upgradeInstalledCLIIfNeeded() async -> AutomaticUpgradeOutcome {
+        guard reconnectPhase != .working else { return .notNeeded }
         guard case .idle = phase else {
             return .notNeeded
         }
@@ -974,8 +1200,12 @@ final class SetupModel: ObservableObject {
     }
 
     private func runOnboard(executable: URL) async throws {
-        phase = .working("Configuring your coding agents…")
-        append("Running: agentacct onboard --agent auto --yes")
+        let target = selectedClient?.rawValue ?? "auto"
+        phase = .working(selectedClient.map { "Configuring \($0.title) and starting the recorder…" }
+            ?? "Configuring your coding agents…")
+        isRunningOnboard = true
+        defer { isRunningOnboard = false }
+        append("Running: agentacct onboard --agent \(target) --yes")
         // Run from the INSTALLED binary so onboard stamps the stable installed
         // path into every hook/MCP config (verified end-to-end).
         let expectedInstall = executable.standardizedFileURL == installedBinary.standardizedFileURL
@@ -985,13 +1215,14 @@ final class SetupModel: ObservableObject {
            expectedInstall == nil {
             throw SetupError.stableInstallChanged
         }
-        let stream = processRunner(executable, ["onboard", "--agent", "auto", "--yes"])
+        let stream = processRunner(executable, ["onboard", "--agent", target, "--yes"])
         for try await line in stream {
             append(line)
         }
         if let expectedInstall, !installedCLIMatches(expectedInstall) {
             throw SetupError.stableInstallChanged
         }
+        onboardingCompletedAt = Date()
     }
 
     private func append(_ line: String) {

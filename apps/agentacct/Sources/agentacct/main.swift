@@ -5,7 +5,11 @@ import SwiftUI
 // or menu review surfaces without network or account data. Anything else
 // launches the app.
 
-if let flagIndex = CommandLine.arguments.firstIndex(of: "--snapshot-about") {
+if let index = CommandLine.arguments.firstIndex(of: "--snapshot-native-fixture"), CommandLine.arguments.count > index + 2 {
+    NativeReviewRunner.run(fixturePath: CommandLine.arguments[index + 1], outputDirectory: CommandLine.arguments[index + 2])
+} else if let index = CommandLine.arguments.firstIndex(of: "--native-review"), CommandLine.arguments.count > index + 1 {
+    NativeReviewRunner.run(fixturePath: CommandLine.arguments[index + 1], outputDirectory: nil)
+} else if let flagIndex = CommandLine.arguments.firstIndex(of: "--snapshot-about") {
     if CommandLine.arguments.count > flagIndex + 2 {
         SnapshotRunner.runAbout(
             applicationIconPath: CommandLine.arguments[flagIndex + 1],
