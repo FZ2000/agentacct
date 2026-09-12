@@ -6,15 +6,19 @@ activation guidance until a fresh event confirms capture. Existing work remains
 reachable during recovery. Recording notices identify actionable causes without
 treating a running daemon as proof of complete capture or usage attribution.
 
-Work adds a live evidence timeline with a held history view, range navigation,
-record inspection, file references and a scoped text export. Comparison has been
+Work now places activity above and below one horizontal time axis. The visible
+window determines which recorded events appear. A compact overview supports
+horizontal scrolling, dragging and edge resizing; pinch changes the time scale.
+Selecting an event opens its details beside that event, without moving the
+canvas. Dense groups offer a chooser so overlapping timestamps remain reachable. Comparison has been
 removed from the current interface, including its drag targets and saved slots.
 New snapshots accumulate while someone investigates. Reviewing arrivals preserves
 the original records, filters, disclosure choices and native scroll positions.
 
-| Earlier baseline | Earlier information refinement (before the current simplification) |
-|---|---|
-| ![Previous native timeline](images/native-timeline-before.png) | ![Refined native timeline](images/native-timeline-after.png) |
+![Central native time canvas](images/native-central-timeline.png)
+
+The prior row-based screenshots and their evaluation remain historical artifacts;
+they do not describe this implementation.
 
 [Setup at 185% text in a compact window](images/native-setup-large.png) keeps
 the install scope and manual-merge qualification beside the action.
@@ -24,13 +28,15 @@ the install scope and manual-merge qualification beside the action.
 Work answers: which task needs attention, what is happening, and what evidence
 supports a selected record? Its hierarchy is **task → activity → selected record
 → supporting details**. The default task view has no comparison placeholder,
-empty detail sidebar, range editor or zero-failure announcement. Search and view
-mode remain close to activity. Current failures and data-quality limitations
+empty detail sidebar, view-mode switch, button row for panning/zooming or
+zero-failure announcement. Search remains close to activity. Current failures and data-quality limitations
 remain visible when they occur.
 
-The navigator is subordinate to the activity surface. Selecting a record opens
-a dismissible inspector; Files, Artifacts and Record details disclose supporting
-data on request. Task details has separate categories instead of expanding every
+The overview is subordinate to the activity surface. Selecting a record opens
+a native popover with its actual title, result, source and content. Files,
+Artifacts and Record details disclose supporting data on request. Group chooser
+and record detail share one popover, with a way back to the group. Supporting
+records can be inspected even when their timestamps are outside the current window. Task details has separate categories instead of expanding every
 ledger at once. Full identifiers remain available, and real parent-section or
 later-result links remain contextual to the selected record.
 
@@ -45,6 +51,24 @@ inventory, independent collection/receipt audits and direct validation record.
 The earlier 100-agent scores do not rate this revision. No human-usability or
 mathematical-optimum claim is made.
 
+## Pointer and keyboard behavior
+
+| Input | Behavior |
+| --- | --- |
+| Horizontal trackpad or supported mouse scrolling | Pan time, including over an event card |
+| Shift + mouse wheel | Pan time |
+| Ordinary vertical wheel on the canvas | Scroll the page; vertical gesture drift does not become a time pan |
+| Wheel over the overview | Pan the visible window |
+| Blank-canvas drag | Pan time without editing timestamps |
+| Pinch | Zoom around the pointer while keeping reading size unchanged |
+| Overview body / edges | Move the window / resize one boundary |
+| Event click | Hold live movement and open the event's details |
+| Canvas Left/Right, Home/End, +/− | Pan, reach history bounds, or change time scale |
+
+System-reserved modified wheel gestures remain available to macOS. Geometry and
+native input have separate tests; real interaction checks are recorded separately
+from simulated events. No measured FPS or full VoiceOver certification is claimed.
+
 ## Review the change in this order
 
 | Area | Main files | Invariant to inspect |
@@ -55,7 +79,9 @@ mathematical-optimum claim is made.
 | Health | `RecordingHealth.swift`, `RecordingHealthViews.swift`, `RecordingConnectionHistory.swift`, `SourcesPane.swift` | Reachability, capture, importer health and historical coverage remain distinct. Current causes precede routine diagnostics. |
 | Saved work | `SavedWorkSnapshot.swift`, `SavedWorkView.swift`, `GlanceClient.swift` | Saved responses belong to the same store, retain their own timestamps and cannot fall through to network writes. |
 | Timeline data and navigation | `WorkTimelineModel.swift`, `WorkTimelineMemory.swift`, `WorkTimelineViewport.swift`, `WorkTimelineFocus.swift` | Event identity, chronology, source and held snapshots remain authoritative. Selection is independent of the reading position. |
-| Timeline presentation and export | `WorkTimelineView.swift`, `WorkTimelineOverview.swift`, `WorkTimelineExport.swift` | No inferred causality or execution duration; export retains full identities and qualifications and includes only visible records. |
+| Time canvas geometry | `WorkTimeCanvasLayout.swift` and tests | Every visible dated record is retained exactly once; cards do not overlap; large text reserves time-label space; a long task follows actual latest activity. |
+| Native input | `WorkTimeCanvasInput.swift` and tests | Horizontal/Shift scrolling and pinch work over cards; vertical scrolling stays with the page; reserved OS modifiers pass through; input remains scoped to the canvas. |
+| Timeline presentation and export | `WorkTimeCanvas.swift`, `WorkTimelineView.swift`, `WorkTimelineExport.swift` | Details appear at selection; clusters stay inspectable; no inferred causality or execution duration; export retains identities and qualifications. |
 | Information hierarchy | `ContextHelp.swift`, `ReadingSize.swift`, `Theme.swift`, `UsagePane.swift`, `UsageCapacity.swift` | Optional explanation is available by hover and keyboard; failures, cost basis, incomplete capture and install scope stay visible. |
 | Distributable recorder | `packaging/materialize-cli.py`, `freeze-cli.sh`, `build-app.sh` | Framework aliases become independent files only after all targets are proven inside the frozen output. External or cyclic aliases fail; the installer's no-link contract is preserved. |
 
@@ -74,8 +100,9 @@ are local study artifacts, not production resources.
   possible manual merge steps remain beside Install. Usage keeps cost basis and
   partial subtotals beside monetary values.
 - Display no comparison workspace or empty inspector. A selected record opens
-  optional details; closing restores the activity space. Time-range editing and
-  export are available from Activity actions.
+  a native detail popover without changing the timeline's width or position.
+  The overview pans and resizes the visible window; export and show-all time
+  are available from Activity actions.
 - Task status and activity take priority. The task navigator carries titles,
   outcomes, source and recency; usage, check history, sessions and coverage open
   as distinct categories in Task details.
@@ -122,8 +149,12 @@ including a 960×640 content window. A separate
 
 ## Verification and remaining limits
 
-- The latest Swift release suite counts and native interaction checks are in
-  the draft description. New regressions cover retired comparison bookmark
+- The central timeline suite reports461 tests, six guarded visual skips and
+  zero failures. Three consecutive repeat-render checks passed after replacing
+  unsupported ImageRenderer native-host placeholders with the same static
+  SwiftUI content. A captured failure and amber-only negative control guard
+  against those placeholders returning. Native interaction evidence is separate
+  from these renderer checks. New regressions cover retired comparison bookmark
   keys, filtered export, clock warnings and authoritative Attention navigation.
   Existing cases retain partial-resolution, artifact-redaction, saved-timestamp,
   file-filter restoration and native scroll-position coverage.
@@ -133,7 +164,9 @@ including a 960×640 content window. A separate
   78.63% of branches. The earlier native LLVM line coverage was 66.34%; this is not a coverage
   measurement of the later UI refinement. Standalone renders
   and native interaction checks are not merged into that unit-test profile.
-- Seventy-eight local PNGs cover the baseline counterparts plus enlarged
+- Fourteen new native renders cover the central timeline, selected detail,
+  compact Work, enlarged text, offline and focused task views in light/dark.
+  Seventy-eight earlier local PNGs cover the baseline counterparts plus enlarged
   Dashboard and Usage. Native interaction checks separately verify history
   restoration, keyboard setup, help access and export. Earlier comparison checks
   remain historical evidence for the removed feature.

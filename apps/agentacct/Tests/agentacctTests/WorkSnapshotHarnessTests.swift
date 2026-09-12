@@ -188,6 +188,20 @@ final class WorkSnapshotHarnessTests: XCTestCase {
         XCTAssertEqual(listError.attention?.items.map(\.taskId), fixture.attention.items.map(\.taskId))
     }
 
+    func testRecognizesCapturedUnsupportedNativeControlWarningWithoutRejectingAmber() throws {
+        // Retain the actual failed render as a positive control: two identical
+        // unsupported-view placeholders must not count as valid UI coverage.
+        let warningURL = try XCTUnwrap(Bundle.module.url(
+            forResource: "image-renderer-unrendered-receipt", withExtension: "png"
+        ))
+        XCTAssertTrue(hasBroadUnsupportedNativeControlWarning(try VisualSnapshotImage(contentsOf: warningURL)))
+
+        // Yellow alone is legitimate content, even at the warning's exact hue.
+        let amber = VisualSnapshotImage(width: 120, height: 20,
+            rgba: Data((0 ..< 120 * 20).flatMap { _ in [UInt8(255), 204, 0, 255] }))
+        XCTAssertFalse(hasBroadUnsupportedNativeControlWarning(amber))
+    }
+
     @MainActor
     func testRendersEveryWorkReviewConfigurationDeterministically() throws {
         let fixture = try DashboardSnapshotFixture.load(from: fixtureURL())
@@ -195,6 +209,10 @@ final class WorkSnapshotHarnessTests: XCTestCase {
             .appendingPathComponent("agentacct-work-snapshots-\(UUID().uuidString)")
         let secondDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("agentacct-work-snapshots-\(UUID().uuidString)")
+        let failureRoot = ProcessInfo.processInfo.environment["AGENTACCT_SNAPSHOT_FAILURE_DIR"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("agentacct-work-snapshot-failures")
+        let failureDirectory = failureRoot.appendingPathComponent(UUID().uuidString)
         defer {
             try? FileManager.default.removeItem(at: firstDirectory)
             try? FileManager.default.removeItem(at: secondDirectory)
@@ -279,20 +297,43 @@ final class WorkSnapshotHarnessTests: XCTestCase {
             let imageURL = firstDirectory.appendingPathComponent(artifact.filename)
             let image = try XCTUnwrap(NSImage(contentsOf: imageURL), artifact.filename)
             let representation = try XCTUnwrap(image.representations.first, artifact.filename)
-            XCTAssertEqual(representation.pixelsWide, artifact.pixelsWide)
-            XCTAssertEqual(representation.pixelsHigh, artifact.pixelsHigh)
+            XCTAssertEqual(representation.pixelsWide, artifact.pixelsWide, artifact.filename)
+            XCTAssertEqual(representation.pixelsHigh, artifact.pixelsHigh, artifact.filename)
+            if artifact.filename == "work-receipt-accessibility-light.png"
+                || artifact.filename == "work-receipt-accessibility-dark.png" {
+                XCTAssertFalse(
+                    hasBroadUnsupportedNativeControlWarning(try VisualSnapshotImage(contentsOf: imageURL)),
+                    "\(artifact.filename) contains ImageRenderer's unsupported native-control warning instead of rendered activity."
+                )
+            }
 
             let difference = try VisualSnapshotHarness.compare(
                 expectedURL: imageURL,
                 actualURL: secondDirectory.appendingPathComponent(artifact.filename)
             )
+            if !difference.isWithin(.renderingNoise) {
+                // The render directories are temporary, but retain a failed
+                // pair and pixel diff so the specific state can be diagnosed.
+                do {
+                    try VisualSnapshotHarness.verify(
+                        name: imageURL.deletingPathExtension().lastPathComponent,
+                        expectedURL: imageURL,
+                        actualURL: secondDirectory.appendingPathComponent(artifact.filename),
+                        artifactDirectory: failureDirectory
+                    )
+                } catch {
+                    print("\(artifact.filename): \(error.localizedDescription)")
+                }
+            }
             XCTAssertLessThanOrEqual(
                 difference.maximumChannelDelta,
-                VisualSnapshotTolerance.renderingNoise.maximumChannelDelta
+                VisualSnapshotTolerance.renderingNoise.maximumChannelDelta,
+                artifact.filename
             )
             XCTAssertLessThanOrEqual(
                 difference.changedChannelFraction,
-                VisualSnapshotTolerance.renderingNoise.maximumChangedChannelFraction
+                VisualSnapshotTolerance.renderingNoise.maximumChangedChannelFraction,
+                artifact.filename
             )
         }
 
@@ -536,6 +577,29 @@ final class WorkSnapshotHarnessTests: XCTestCase {
             guard case SnapshotError.missingWorkFixture = error else {
                 return XCTFail("Expected missing Work fixture error; got \(error)")
             }
+        }
+    }
+
+    private func hasBroadUnsupportedNativeControlWarning(_ image: VisualSnapshotImage) -> Bool {
+        // This fixed receipt fixture has no broad yellow panel with a red
+        // prohibition glyph. Match that captured renderer warning, not general
+        // amber status colors or the small placeholders in unrelated controls.
+        image.rgba.withUnsafeBytes { (pixels: UnsafeRawBufferPointer) in
+            var consecutiveWarningRows = 0
+            for y in 0 ..< image.height {
+                var yellow = 0
+                var prohibitionRed = 0
+                for x in 0 ..< image.width {
+                    let offset = (y * image.width + x) * 4
+                    guard pixels[offset] == 255 else { continue }
+                    if pixels[offset + 1] == 204 && pixels[offset + 2] == 0 { yellow += 1 }
+                    if pixels[offset + 1] == 56 && pixels[offset + 2] == 60 { prohibitionRed += 1 }
+                }
+                consecutiveWarningRows = yellow >= image.width / 2 && prohibitionRed >= 3
+                    ? consecutiveWarningRows + 1 : 0
+                if consecutiveWarningRows >= 4 { return true }
+            }
+            return false
         }
     }
 

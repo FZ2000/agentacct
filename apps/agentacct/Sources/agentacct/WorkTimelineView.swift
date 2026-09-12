@@ -47,9 +47,9 @@ struct WorkTimelineView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workCompactViewport) private var compactViewport
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var showingOverview = false
     @State private var navigation = WorkTimelineNavigation()
     @State private var feed = WorkTimelineFeed()
+    @State private var followWindowSpan: Double = 30 * 60
     @State private var sessions: [String: V1SessionDetail] = [:]
     @State private var sessionErrors: [String: String] = [:]
     @State private var activeTaskID: String?
@@ -58,12 +58,12 @@ struct WorkTimelineView: View {
     @State private var lastObserved: Date?
     @State private var scrollTarget: String?
     @State private var showingArrivals = false
+    @State private var showingUndatedDetail = false
     @State private var exportError: String?
     @FocusState private var focusedEvidence: String?
     @AccessibilityFocusState private var accessibleEvidence: String?
     @State private var requestedRowFocus: String?
     @State private var scrollRequest = 0
-    @State private var stackedInspector = true
     @State private var viewIsVisible = false
     @State private var focusGeneration = 0
     @State private var viewport = WorkTimelineViewport()
@@ -81,17 +81,26 @@ struct WorkTimelineView: View {
         let available = SnapshotMode.enabled ? dashboard.preloadedSessions : sessions
         return (receipt.sessions ?? []).flatMap(\.members).filter { available[$0.id] != nil }.count
     }
-    private var filtered: [WorkTimelineRecord] {
+    private var matchingRecords: [WorkTimelineRecord] {
         displayProjection.records.filter { record in
             (!showingArrivals || feed.arrivalIDs.contains(record.id))
                 && (navigation.view.query.isEmpty || record.searchableText.localizedCaseInsensitiveContains(navigation.view.query))
                 && (navigation.view.file == nil || record.files.contains(navigation.view.file!))
                 && (!navigation.view.failuresOnly || record.isCurrentFailure)
-                && (navigation.view.interval?.contains(record) ?? true)
         }
     }
+    private var filtered: [WorkTimelineRecord] { matchingRecords.filter { interval?.contains($0) ?? true } }
     private var selected: WorkTimelineRecord? { displayProjection.records.first { $0.id == navigation.view.selectedID } }
-    private var interval: WorkTimelineInterval? { navigation.view.interval ?? displayProjection.interval }
+    private var interval: WorkTimelineInterval? {
+        guard let full = displayProjection.interval else { return nil }
+        return navigation.view.interval.map { WorkTimeCanvasLayout.clampedWindow($0, to: full) }
+            ?? initialWindow(full)
+    }
+    private func initialWindow(_ full: WorkTimelineInterval?) -> WorkTimelineInterval? {
+        guard let full else { return nil }
+        return WorkTimeCanvasLayout.latestWindow(within: full,
+            latest: displayProjection.newestRecord?.latestTime, span: 30 * 60)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -116,19 +125,6 @@ struct WorkTimelineView: View {
                         hold(); navigation.leaveFile()
                     }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
                 }
-            }
-            if showingOverview {
-                VStack(alignment: .leading, spacing: Space.s) {
-                    HStack {
-                        Text("Time range").workFont(.captionSemibold)
-                        Spacer()
-                        Button("Done") { showingOverview = false; navigation.view.overviewExpanded = false }
-                            .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
-                    }
-                    overview
-                    rangeControls
-                }
-                .accessibilityIdentifier("work.timeline.time-range")
             }
             if showingArrivals {
                 let arrivals = feed.arrivalIDs.count - feed.removedArrivalCount
@@ -181,46 +177,53 @@ struct WorkTimelineView: View {
         }
         .onAppear { viewIsVisible = true }
         .onDisappear { viewIsVisible = false; focusGeneration += 1; saveMemory() }
-        .background {
-            GeometryReader { geometry in
-                Color.clear
-                    .onAppear { stackedInspector = geometry.size.width - Space.m * 2 < 1072 }
-                    .onChange(of: geometry.size.width) { _, width in stackedInspector = width - Space.m * 2 < 1072 }
-            }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("work.timeline")
     }
 
-    /// The record column keeps one identity as the optional inspector opens or
-    /// the window changes width. An unused inspector reserves no space.
+    /// Selected details open at their event without changing canvas geometry.
+    /// Static review images include the detail inline because popovers have
+    /// their own native window and are captured separately during interaction.
     private var evidenceAndInspector: some View {
-        let layout = stackedInspector
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: Space.m))
-            : AnyLayout(HStackLayout(alignment: .top, spacing: Space.m))
-        return layout {
-            evidenceColumn.frame(maxWidth: .infinity)
-            if navigation.view.selectedID != nil {
-                if stackedInspector {
-                    inspector
-                } else {
-                    ScrollView { inspector }.frame(width: 320, height: 550)
-                }
-            }
+        VStack(alignment: .leading, spacing: Space.m) {
+            recordsSurface.id("work.timeline.records")
+                .background(WorkTimelineScrollObserver(viewport: viewport) { hold() })
+            if navigation.view.selectedID != nil,
+               SnapshotMode.boundsScrollContentToViewport { inspector }
         }
     }
 
-    private var overview: some View {
-        WorkTimelineOverview(projection: displayProjection, window: interval, selectedID: navigation.view.selectedID,
-            onRange: { hold(); navigation.view.interval = $0 },
-            onSelect: { record in inspect(record, focusInspector: false); focusSelectedRange(); returnToRecord(record) })
-    }
-
-    private var evidenceColumn: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            recordsSurface
-                .id("work.timeline.records")
-                .animation(reduceMotion || !navigation.following ? nil : .easeInOut(duration: 0.22), value: displayProjection.records)
+    @ViewBuilder private var recordsSurface: some View {
+        if let full = displayProjection.interval, let interval {
+            WorkTimeCanvas(records: matchingRecords, full: full, window: interval,
+                selectedRecord: selected,
+                onWindow: { value in hold(); navigation.view.interval = value },
+                onSelect: { inspect($0, focusInspector: false) },
+                onDismiss: { navigation.view.selectedID = nil },
+                onHold: hold, focusRecordID: requestedRowFocus, focusRequest: scrollRequest, compact: compactViewport,
+                detail: { _ in inspector })
+        } else {
+            Text(displayProjection.records.isEmpty ? "No activity recorded yet." : "Recorded times are unavailable.")
+                .workFont(.body).foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, minHeight: 180)
+        }
+        let undated = matchingRecords.filter { $0.start == nil }
+        if !undated.isEmpty {
+            Menu {
+                ForEach(undated) { record in
+                    Button("\(record.title) · \(record.laneTitle) · \(record.resultLabel)") { showingUndatedDetail = true; inspect(record, focusInspector: false) }.buttonStyle(QuietButtonStyle())
+                }
+            } label: {
+                Label("Time unavailable · \(undated.count)", systemImage: "clock.badge.questionmark")
+            }
+            .menuStyle(.borderlessButton).buttonStyle(QuietButtonStyle())
+            .fixedSize().accessibilityIdentifier("work.timeline.undated")
+            .help("These records have no usable timestamp and cannot be placed on the timeline.")
+            .popover(isPresented: Binding(get: {
+                !SnapshotMode.boundsScrollContentToViewport && showingUndatedDetail && selected != nil
+            }, set: { if !$0 { showingUndatedDetail = false; navigation.view.selectedID = nil } })) {
+                ScrollView { inspector }.frame(width: 480, height: 420)
+            }
         }
     }
 
@@ -248,7 +251,7 @@ struct WorkTimelineView: View {
                 .accessibilityFocused($accessibleEvidence, equals: "timeline-heading")
                 .accessibilityAddTraits(.isHeader)
                 ContextHelp(title: "About activity",
-                    message: "Bars show a section's recorded start through its latest update; dots show checks. These are recorded timestamps, not measured execution duration. Select a record to inspect its source, scope and files. Live snapshots refresh every 3 seconds; changes between snapshots may not be available.",
+                    message: "Scroll horizontally or drag the background to explore time. Pinch to zoom. Drag the overview window or resize its edges to change the period shown. Select a record for details; dense groups open a record chooser. Stems mark recorded times, not causal links. Section spans end at the latest reported update, not a measured execution finish. Snapshots refresh every 3 seconds.",
                     identifier: "work.timeline.help")
             }
             HStack(spacing: 5) {
@@ -264,10 +267,8 @@ struct WorkTimelineView: View {
 
     private var activityMenu: some View {
         Menu {
-            Button(showingOverview ? "Hide time range" : "Adjust time range…") {
-                hold(); showingOverview.toggle(); navigation.view.overviewExpanded = showingOverview
-            }.buttonStyle(QuietButtonStyle())
-            Divider()
+            Button("Show all time") { hold(); navigation.view.interval = displayProjection.interval }
+                .buttonStyle(QuietButtonStyle())
             Button("Export visible records…", action: exportReview)
                 .disabled(filtered.isEmpty)
                 .buttonStyle(QuietButtonStyle())
@@ -310,21 +311,22 @@ struct WorkTimelineView: View {
         Button {
             cancelDeferredFocus()
             if navigation.following { hold() } else {
+                followWindowSpan = interval?.span ?? 30 * 60
                 navigation.following = true
                 showingArrivals = false
                 feed.reveal()
-                navigation.view.interval = displayProjection.interval
+                navigation.view.interval = trailingWindow(displayProjection.interval, span: interval?.span)
                 scrollTarget = displayProjection.newestRecord?.id
             }
         } label: {
-            Label(navigation.following ? "Following live" : "Resume live", systemImage: navigation.following ? "pause.circle" : "play.circle")
+            Label(navigation.following ? "Live" : "Resume live", systemImage: navigation.following ? "pause.circle" : "play.circle")
         }
         .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
         .accessibilityLabel(navigation.following ? "Pause live updates" : "Resume live updates")
         .disabled(dashboard.isOfflineSnapshot)
         .help("Pause to keep this history still. Resume reveals the latest snapshot and moves to its newest record; search and file filters stay in place.")
         .accessibilityIdentifier("work.timeline.follow")
-        Button("\(pendingCount) \(pendingCount == 1 ? "update" : "updates") · Review") {
+        Button("\(pendingCount) new") {
             if navigation.history == nil { navigation.view.scrollOffsets = viewport.capture() }
             navigation.beginArrivals()
             feed.reviewArrivals()
@@ -336,13 +338,13 @@ struct WorkTimelineView: View {
         // Empty counts do not need to compete with the live state label.
         .opacity(pendingCount == 0 ? 0 : 1)
         .accessibilityHidden(pendingCount == 0)
+        .accessibilityLabel("Review \(pendingCount) new or changed records")
         .accessibilityIdentifier("work.timeline.arrivals")
         if navigation.history != nil {
             Button("Back to history") {
                 navigation.returnToHistory()
                 feed.restoreHistory()
                 showingArrivals = false
-                showingOverview = navigation.view.overviewExpanded ?? false
                 restoreHistoryPosition()
             }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
             .accessibilityIdentifier("work.timeline.history")
@@ -357,7 +359,6 @@ struct WorkTimelineView: View {
         return VStack(alignment: .leading, spacing: 8) {
             layout {
                 recordSearch
-                viewModeSelector
             }
             let failureCount = displayProjection.records.filter(\.isCurrentFailure).count
             if failureCount > 0 || navigation.view.failuresOnly || hasActiveFilters {
@@ -385,7 +386,6 @@ struct WorkTimelineView: View {
     private var hasActiveFilters: Bool {
         !navigation.view.query.isEmpty || navigation.view.file != nil
             || navigation.view.failuresOnly
-            || (navigation.view.interval != nil && navigation.view.interval != displayProjection.interval)
     }
 
     private func clearFilters() {
@@ -394,226 +394,34 @@ struct WorkTimelineView: View {
         navigation.view.file = nil
         navigation.view.previousFileFilters = nil
         navigation.view.failuresOnly = false
-        navigation.view.interval = displayProjection.interval
     }
 
     private var recordSearch: some View {
         HStack(spacing: Space.s) {
             Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted)
                 .accessibilityHidden(true)
-            TextField("Search activity", text: Binding(
-                get: { navigation.view.query },
-                set: { hold(); navigation.view.query = $0 }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .workFont(.body)
-            .accessibilityLabel("Search loaded activity, sessions and files")
-            .accessibilityIdentifier("work.timeline.search")
+            if SnapshotMode.enabled && !SnapshotMode.interactiveFixture {
+                // ImageRenderer cannot draw AppKit text fields, and their
+                // placeholder height varies between accessibility renders.
+                Text(navigation.view.query.isEmpty ? "Search activity" : navigation.view.query)
+                    .workFont(.body)
+                    .foregroundStyle(navigation.view.query.isEmpty ? Theme.muted : Theme.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 4))
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.cardLine))
+            } else {
+                TextField("Search activity", text: Binding(
+                    get: { navigation.view.query },
+                    set: { hold(); navigation.view.query = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .workFont(.body)
+                .accessibilityLabel("Search loaded activity, sessions and files")
+                .accessibilityIdentifier("work.timeline.search")
+            }
         }
         .frame(minWidth: 240, maxWidth: .infinity)
-    }
-
-    private var viewModeSelector: some View {
-        HStack(spacing: Space.s) {
-            ForEach(["timeline", "list"], id: \.self) { mode in
-                Button(mode == "timeline" ? "Timeline" : "List") {
-                    guard navigation.view.mode != mode else { return }
-                    hold()
-                    navigation.view.mode = mode
-                }
-                .buttonStyle(NativeSetupActionStyle(prominent: navigation.view.mode == mode))
-                .accessibilityLabel(mode == "timeline" ? "Timeline view" : "List view")
-                .accessibilityAddTraits(navigation.view.mode == mode ? .isSelected : [])
-                .accessibilityIdentifier("work.timeline.mode.\(mode)")
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Recorded work view")
-    }
-
-    private var rangeControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Button { shiftRange(-0.5) } label: { Label("Earlier", systemImage: "chevron.left") }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
-                Button { shiftRange(0.5) } label: { Label("Later", systemImage: "chevron.right") }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
-                Button("−") { zoomRange(2) }.buttonStyle(QuietButtonStyle(horizontalPadding: 8)).accessibilityLabel("Zoom out")
-                Button("+") { zoomRange(0.5) }.buttonStyle(QuietButtonStyle(horizontalPadding: 8)).accessibilityLabel("Zoom in")
-                Button("Fit") { hold(); navigation.view.interval = displayProjection.interval }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
-                Button("Focus selected") { focusSelectedRange() }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
-                    .disabled(selected?.start == nil)
-                    .opacity(selected?.start == nil ? 0 : 1)
-                    .accessibilityHidden(selected?.start == nil)
-                    .help("Show the selected record's recorded span with at least one minute of context on each side")
-                    .accessibilityIdentifier("work.timeline.focus-range")
-                Spacer(minLength: 0)
-            }.disabled(interval == nil)
-            if let interval {
-                Text("\(Self.dateText(interval.lower)) → \(Self.dateText(interval.upper))")
-                    .workFont(.dataSmall).foregroundStyle(Theme.muted).textSelection(.enabled)
-            } else {
-                Text("No dated records; undated evidence is listed below.").workFont(.caption).foregroundStyle(Theme.muted)
-            }
-        }
-    }
-
-    @ViewBuilder private var recordsSurface: some View {
-        if SnapshotMode.enabled && !SnapshotMode.interactiveFixture {
-            GeometryReader { geometry in
-                recordsContent.frame(width: max(geometry.size.width, 760), alignment: .topLeading)
-            }
-            .frame(height: 390).clipped().background(Theme.canvas)
-        } else {
-            GeometryReader { geometry in
-                let contentWidth = max(geometry.size.width, navigation.view.mode == "timeline" ? 760 : 460)
-                ScrollView(.horizontal) {
-                    VStack(spacing: 0) {
-                        if navigation.view.mode == "timeline", interval != nil { timeAxis }
-                        ScrollViewReader { proxy in
-                            ScrollView(.vertical) {
-                                recordsContent
-                                    .frame(width: contentWidth, alignment: .topLeading)
-                                    .background(WorkTimelineScrollObserver(viewport: viewport) { hold() })
-                            }
-                            .frame(height: navigation.view.mode == "timeline" && interval != nil ? 350 : 390)
-                            .focusable().focused($focusedEvidence, equals: "records")
-                            .accessibilityFocused($accessibleEvidence, equals: "records")
-                            .accessibilityLabel("Recorded evidence")
-                            .task(id: "\(scrollTarget ?? ""):\(scrollRequest)") {
-                                guard let id = scrollTarget else { return }
-                                // The target can arrive in the same transaction
-                                // as a new lazy-list body. Wait for that layout.
-                                do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
-                                guard !Task.isCancelled, scrollTarget == id else { return }
-                                proxy.scrollTo(id, anchor: .center)
-                                if requestedRowFocus == id {
-                                    do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
-                                    guard !Task.isCancelled, requestedRowFocus == id else { return }
-                                    focusedEvidence = id; accessibleEvidence = id; requestedRowFocus = nil
-                                }
-                            }
-                            .onMoveCommand { direction in moveSelection(direction) }
-                        }
-                    }
-                    .frame(width: contentWidth, alignment: .topLeading)
-                }
-            }
-            .frame(height: 390)
-            .background(Theme.canvas)
-            .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Theme.hairline))
-        }
-    }
-
-    @ViewBuilder private var timeAxis: some View {
-        if let interval {
-            HStack {
-                Text("Recorded time").frame(width: 285, alignment: .leading)
-                HStack {
-                    Text(WorkTimelineTimeAxis.label(interval.lower, range: interval))
-                    Spacer()
-                    Text(WorkTimelineTimeAxis.label((interval.lower + interval.upper) / 2, range: interval))
-                    Spacer()
-                    Text(WorkTimelineTimeAxis.label(interval.upper, range: interval))
-                }
-            }
-            .workFont(.dataSmall).foregroundStyle(Theme.muted).padding(10)
-            .frame(height: 40).background(Theme.canvas)
-        }
-    }
-
-    private var recordsContent: some View {
-        ScrollContentStack(alignment: .leading, spacing: 0) {
-            if filtered.isEmpty {
-                Text(displayProjection.records.isEmpty ? "No activity recorded yet." : "No loaded records match these filters.")
-                    .workFont(.body).foregroundStyle(Theme.muted).padding(Space.l)
-            } else if navigation.view.mode == "list" {
-                ForEach(filtered) { record in recordRow(record, showRail: false) }
-            } else {
-                timelineRows
-            }
-        }
-        .frame(minWidth: navigation.view.mode == "timeline" ? 760 : 460, maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder private var timelineRows: some View {
-        if SnapshotMode.enabled && !SnapshotMode.interactiveFixture { timeAxis }
-        let datedByLane = Dictionary(grouping: filtered.filter { $0.start != nil }, by: \.laneID)
-        ForEach(displayProjection.lanes) { lane in
-            let records = datedByLane[lane.id] ?? []
-            if !records.isEmpty {
-                HStack(spacing: 6) {
-                    Text(lane.title).workFont(.rowLabel)
-                    ContextHelp(title: "Session details", message: "\(lane.title)\n\(lane.lineage)\n\(lane.id)\n\(lane.availability)")
-                    if lane.id.hasPrefix("task:") {
-                        Text("Session unknown").workFont(.caption).foregroundStyle(Theme.muted)
-                    }
-                    Spacer(minLength: 0)
-                }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(Theme.tintNeutral)
-                ForEach(records) { record in recordRow(record, showRail: true) }
-            }
-        }
-        let undated = filtered.filter { $0.start == nil }
-        if !undated.isEmpty {
-            Text("Time unavailable")
-                .workFont(.rowLabel).padding(10).frame(maxWidth: .infinity, alignment: .leading).background(Theme.tintNeutral)
-            ForEach(undated) { record in recordRow(record, showRail: false) }
-        }
-    }
-
-    private func recordRow(_ record: WorkTimelineRecord, showRail: Bool) -> some View {
-        Button { inspect(record) } label: {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: symbol(record)).foregroundStyle(color(record)).frame(width: 18)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(record.title).workFont(.rowLabel).lineLimit(2)
-                    Text("\(record.resultLabel)\(record.superseded ? " · Superseded" : "")")
-                        .workFont(.caption).foregroundStyle(color(record))
-                    Text(showRail ? record.source : "\(record.laneTitle) · \(record.source)")
-                        .workFont(.caption).foregroundStyle(Theme.muted).lineLimit(2)
-                }
-                .frame(width: showRail ? 245 : nil, alignment: .leading)
-                if showRail, let interval, let start = record.start {
-                    rail(record, start: start, interval: interval)
-                } else {
-                    Spacer(minLength: 10)
-                    Text(record.start.map(Self.shortTime) ?? "Undated").workFont(.dataSmall).foregroundStyle(Theme.muted)
-                }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-            .background(navigation.view.selectedID == record.id ? Theme.selected : Theme.card)
-            .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(SurfaceButtonStyle(focusInset: 2))
-        .help("Inspect this record's source, scope, identity and files")
-        .id(record.id)
-        .focusable()
-        .focused($focusedEvidence, equals: record.id)
-        .accessibilityFocused($accessibleEvidence, equals: record.id)
-        .accessibilityIdentifier("work.timeline.record.\(record.id)")
-        .accessibilityLabel("\(record.title), \(record.resultLabel), \(record.laneTitle), \(record.source), \(record.start.map(Self.dateText) ?? "time unavailable")\(record.superseded ? ", superseded" : "")")
-        .accessibilityHint("Open record details")
-    }
-
-    private func rail(_ record: WorkTimelineRecord, start: Double, interval: WorkTimelineInterval) -> some View {
-        GeometryReader { geometry in
-            let width = max(geometry.size.width - 12, 1)
-            let x = interval.fraction(start) * width
-            let endX = interval.fraction(record.end ?? start) * width
-            ZStack(alignment: .leading) {
-                Rectangle().fill(Theme.hairline).frame(height: 1)
-                if record.isDuration {
-                    RoundedRectangle(cornerRadius: 2).fill(Theme.accent.opacity(0.3))
-                        .frame(width: max(endX - x, 3), height: 10).offset(x: x)
-                    Rectangle().fill(Theme.accent).frame(width: 2, height: 14).offset(x: endX)
-                }
-                Circle().fill(color(record)).frame(width: 8, height: 8).offset(x: x)
-            }
-            .frame(height: geometry.size.height)
-        }
-        .frame(minWidth: 300).frame(height: 36)
-        .accessibilityHidden(true)
     }
 
     private func evidenceIdentity(_ record: WorkTimelineRecord) -> String {
@@ -655,7 +463,7 @@ struct WorkTimelineView: View {
                 if let note = record.identityNote { Text(note).workFont(.caption).foregroundStyle(Theme.amber) }
                 if !filtered.contains(where: { $0.id == record.id }) {
                     Text("Outside the current filters").workFont(.caption).foregroundStyle(Theme.amber)
-                    Button("Show this record") { clearFilters(); returnToRecord(record) }
+                    Button("Show this record") { clearFilters(); focusSelectedRange(); returnToRecord(record) }
                         .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
                 }
                 let associatedChecks = displayProjection.records.filter { $0.sectionRecordID == record.id }
@@ -690,7 +498,7 @@ struct WorkTimelineView: View {
                                 HStack(alignment: .top, spacing: 8) {
                                     Text(file).workFont(.caption).textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                    Button { hold(); navigation.showFile(file) } label: {
+                                    Button { hold(); navigation.view.selectedID = nil; showingUndatedDetail = false; navigation.showFile(file) } label: {
                                         Image(systemName: "line.3.horizontal.decrease.circle")
                                     }
                                     .buttonStyle(QuietButtonStyle(horizontalPadding: 6))
@@ -698,8 +506,10 @@ struct WorkTimelineView: View {
                                     .accessibilityLabel("Find loaded activity referencing \(file)")
                                 }
                             }
-                            ContextHelp(title: "About file references",
-                                message: "These paths are recorded associations. File contents and diffs are not captured here. Filtering by a file temporarily replaces the other filters; Back to previous filters restores them.")
+                            DisclosureGroup("About file references") {
+                                Text("These paths are recorded associations. File contents and diffs are not captured here. Filtering by a file temporarily replaces the other filters; Back to previous filters restores them.")
+                                    .workFont(.caption).foregroundStyle(Theme.muted)
+                            }
                         }.padding(.top, 6)
                     }.workFont(.caption)
                 }
@@ -743,7 +553,8 @@ struct WorkTimelineView: View {
 
     private func dismissInspector(_ record: WorkTimelineRecord) {
         navigation.view.selectedID = nil
-        returnToRecord(record)
+        requestedRowFocus = record.id
+        scrollRequest += 1
     }
 
     private func inspect(_ record: WorkTimelineRecord, focusInspector: Bool = true) {
@@ -756,8 +567,8 @@ struct WorkTimelineView: View {
             Task { @MainActor in
                 await Task.yield()
                 guard viewIsVisible, navigation.view.selectedID == record.id, generation == focusGeneration else { return }
-                if stackedInspector { onRevealInspector?() }
-                try? await Task.sleep(for: .milliseconds(180))
+                if SnapshotMode.boundsScrollContentToViewport { onRevealInspector?() }
+                await Task.yield()
                 guard viewIsVisible, navigation.view.selectedID == record.id, generation == focusGeneration else { return }
                 focusedEvidence = "inspector"; accessibleEvidence = "inspector"
             }
@@ -765,7 +576,7 @@ struct WorkTimelineView: View {
     }
     private func returnToRecord(_ record: WorkTimelineRecord) {
         cancelDeferredFocus()
-        if stackedInspector { onRevealRecords?() }
+        onRevealRecords?()
         scrollTarget = record.id
         requestedRowFocus = record.id
         scrollRequest += 1
@@ -802,7 +613,7 @@ struct WorkTimelineView: View {
             hold()
             navigation.view.selectedID = id
             navigation.view.anchorID = id
-            if stackedInspector { onRevealRecords?() }
+            onRevealRecords?()
             scrollTarget = id
             requestedRowFocus = id
             scrollRequest += 1
@@ -839,33 +650,15 @@ struct WorkTimelineView: View {
         loadingInitialSnapshot = false
         navigation.following = false
     }
-    private func moveSelection(_ direction: MoveCommandDirection) {
-        let rows = displayProjection.displayedOrder(filtered, mode: navigation.view.mode)
-        guard direction == .up || direction == .down, !rows.isEmpty else { return }
-        let index = rows.firstIndex { $0.id == navigation.view.selectedID } ?? (direction == .down ? -1 : rows.count)
-        let next = min(max(index + (direction == .down ? 1 : -1), 0), rows.count - 1)
-        inspect(rows[next], focusInspector: false); returnToRecord(rows[next])
-    }
-    private func shiftRange(_ amount: Double) {
-        guard let current = interval else { return }
-        hold()
-        navigation.view.interval = WorkTimelineInterval(lower: current.lower + current.span * amount, upper: current.upper + current.span * amount)
-    }
-    private func zoomRange(_ scale: Double) {
-        guard let current = interval else { return }
-        hold()
-        let selectedTime = selected?.start
-        let center = selectedTime.flatMap { current.lower...current.upper ~= $0 ? $0 : nil } ?? (current.lower + current.upper) / 2
-        let half = max(current.span * scale / 2, 0.5)
-        navigation.view.interval = WorkTimelineInterval(lower: center - half, upper: center + half)
+    private func trailingWindow(_ full: WorkTimelineInterval?, span: Double?) -> WorkTimelineInterval? {
+        guard let full else { return nil }
+        return WorkTimeCanvasLayout.latestWindow(within: full,
+            latest: displayProjection.newestRecord?.latestTime, span: span ?? 30 * 60)
     }
     private func receive(_ projection: WorkTimelineProjection) {
-        let previousLatest = displayProjection.newestRecord?.id
         feed.ingest(projection, following: navigation.following || loadingInitialSnapshot)
         if navigation.following {
-            navigation.view.interval = displayProjection.interval
-            let latestID = displayProjection.newestRecord?.id
-            if latestID != previousLatest { scrollTarget = latestID }
+            navigation.view.interval = trailingWindow(displayProjection.interval, span: followWindowSpan)
         }
     }
     private func saveMemory() {
@@ -879,7 +672,7 @@ struct WorkTimelineView: View {
         saveMemory()
         activeTaskID = taskID
         navigation = WorkTimelinePreferences.load(taskID: taskID)
-        showingOverview = navigation.view.overviewExpanded ?? false
+        followWindowSpan = max(navigation.view.interval?.span ?? 0, 30 * 60)
         let cached = dashboard.isOfflineSnapshot || SnapshotMode.enabled ? nil : WorkTimelineMemory.cache.load(taskID)
         feed = cached?.feed ?? WorkTimelineFeed()
         sessions = cached?.sessions ?? [:]
