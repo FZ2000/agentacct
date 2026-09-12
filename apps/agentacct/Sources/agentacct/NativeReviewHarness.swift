@@ -274,7 +274,10 @@ enum NativeReviewRunner {
 
     @MainActor static func captureCurrentReview() {
         guard SnapshotMode.enabled,
-              let window = NSApp.keyWindow ?? reviewWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+              let window = NSApp.windows.first(where: {
+                  $0.isVisible && $0.title != "agentacct — Native design review (synthetic)"
+                    && $0.contentView != nil && $0.frame.width > 100
+              }) ?? NSApp.keyWindow ?? reviewWindow,
               let view = window.contentView,
               let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -293,6 +296,12 @@ enum NativeReviewRunner {
             let state: [String: Any] = ["active": NSApp.isActive,
                 "processID": ProcessInfo.processInfo.processIdentifier,
                 "capturedAt": Date().ISO8601Format(), "keyWindow": window.title,
+                "capturedWindowNumber": window.windowNumber,
+                "windowWidth": window.frame.width, "windowHeight": window.frame.height,
+                "visibleWindows": NSApp.windows.filter(\.isVisible).map {
+                    ["number": $0.windowNumber, "title": $0.title,
+                     "width": $0.frame.width, "height": $0.frame.height] as [String: Any]
+                },
                 "firstResponder": String(describing: window.firstResponder),
                 "scrollViews": scrollState(view)]
             try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])

@@ -13,6 +13,7 @@ struct WorkTimeCanvas<Detail: View>: View {
     let onSelect: (WorkTimelineRecord) -> Void
     let onDismiss: () -> Void
     let onHold: () -> Void
+    var dismissRequest = 0
     var focusRecordID: String? = nil
     var focusRequest = 0
     var compact = false
@@ -59,8 +60,19 @@ struct WorkTimeCanvas<Detail: View>: View {
                     }
                     }
                 }.clipped()
-                .onAppear { focus(in: layout) }
-                .onChange(of: focusRequest) { _, _ in focus(in: layout) }
+                .task(id: FocusTarget(request: focusRequest, recordID: focusRecordID, ownerID: detailOwnerID)) {
+                    guard focusRecordID != nil, detailOwnerID == nil else { return }
+                    // Native popover dismissal restores its window's responder
+                    // first. Restore the event after that transition completes.
+                    focusedItem = nil
+                    try? await Task.sleep(for: .milliseconds(200))
+                    guard !Task.isCancelled, detailOwnerID == nil else { return }
+                    focus(in: layout)
+                }
+                .onChange(of: dismissRequest) { _, _ in
+                    expandedCluster = nil
+                    detailOwnerID = nil
+                }
             }
             .frame(height: canvasHeight)
             .accessibilityElement(children: .contain)
@@ -177,12 +189,7 @@ struct WorkTimeCanvas<Detail: View>: View {
     private func itemButton(_ item: WorkTimeCanvasLayout.Item, indexedRecords: [String: WorkTimelineRecord]) -> some View {
         let members = item.recordIDs.compactMap { indexedRecords[$0] }
         let selected = selectedID.map(item.recordIDs.contains) ?? false
-        return Button {
-            detailOwnerID = item.id
-            lastTriggerID = item.id
-            if item.isCluster { onHold(); onDismiss(); expandedCluster = item.id }
-            else if let record = members.first { expandedCluster = nil; onSelect(record) }
-        } label: {
+        return Button { activate(item, members: members) } label: {
             VStack(alignment: .leading, spacing: 2) {
                 if item.isCluster {
                     Text("\(members.count) records").workFont(.rowLabel).foregroundStyle(Theme.ink)
@@ -210,7 +217,10 @@ struct WorkTimeCanvas<Detail: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(SurfaceButtonStyle(focusInset: 2))
+        .focusable()
         .focused($focusedItem, equals: item.id)
+        .onKeyPress(.space) { activate(item, members: members); return .handled }
+        .onKeyPress(.return) { activate(item, members: members); return .handled }
         .onHover { hoveredID = $0 ? item.id : nil }
         .help(members.count == 1 ? "\(members[0].title)\n\(members[0].laneTitle)\n\(members[0].source)" : "Inspect these \(members.count) records or zoom into their time range")
         .accessibilityIdentifier(item.isCluster ? "work.timeline.cluster.\(item.id)" : "work.timeline.record.\(item.recordIDs[0])")
@@ -226,16 +236,18 @@ struct WorkTimeCanvas<Detail: View>: View {
                 }
             })) {
             if detailOwnerID == item.id, let record = selectedRecord {
-                VStack(alignment: .leading, spacing: 0) {
-                    if item.isCluster {
-                        Button { onDismiss() } label: {
-                            Label("Back to \(members.count) records", systemImage: "chevron.left")
-                        }.buttonStyle(QuietButtonStyle(horizontalPadding: 8)).padding(8)
-                        .accessibilityIdentifier("work.timeline.cluster.back")
+                WorkRecordPopover(width: CGFloat(min(600, 420 * scale)), maximumHeight: 560) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if item.isCluster {
+                            Button { onDismiss() } label: {
+                                Label("Back to \(members.count) records", systemImage: "chevron.left")
+                            }.buttonStyle(QuietButtonStyle(horizontalPadding: 8)).padding(8)
+                            .accessibilityIdentifier("work.timeline.cluster.back")
+                            Divider().overlay(Theme.hairline)
+                        }
+                        detail(record)
                     }
-                    ScrollView { detail(record) }
                 }
-                .frame(width: min(600, 400 * scale), height: min(560, 420 * scale))
             } else {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -268,6 +280,19 @@ struct WorkTimeCanvas<Detail: View>: View {
             }.padding(16).frame(width: min(560, 340 * scale))
             }
         }
+    }
+
+    private func activate(_ item: WorkTimeCanvasLayout.Item, members: [WorkTimelineRecord]) {
+        detailOwnerID = item.id
+        lastTriggerID = item.id
+        if item.isCluster { onHold(); onDismiss(); expandedCluster = item.id }
+        else if let record = members.first { expandedCluster = nil; onSelect(record) }
+    }
+
+    private struct FocusTarget: Equatable {
+        let request: Int
+        let recordID: String?
+        let ownerID: String?
     }
 
     private func focus(in layout: WorkTimeCanvasLayout) {

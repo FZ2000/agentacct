@@ -35,7 +35,9 @@ remain visible when they occur.
 The overview is subordinate to the activity surface. Selecting a record opens
 a native popover with its actual title, result, source and content. Files,
 Artifacts and Record details disclose supporting data on request. Group chooser
-and record detail share one popover, with a way back to the group. Supporting
+and record detail share one popover, with a way back to the group. Short records
+fit their content; long or expanded details scroll within a height limit. Close
+dismisses the whole popover. Supporting
 records can be inspected even when their timestamps are outside the current window. Task details has separate categories instead of expanding every
 ledger at once. Full identifiers remain available, and real parent-section or
 later-result links remain contextual to the selected record.
@@ -81,7 +83,7 @@ from simulated events. No measured FPS or full VoiceOver certification is claime
 | Timeline data and navigation | `WorkTimelineModel.swift`, `WorkTimelineMemory.swift`, `WorkTimelineViewport.swift`, `WorkTimelineFocus.swift` | Event identity, chronology, source and held snapshots remain authoritative. Selection is independent of the reading position. |
 | Time canvas geometry | `WorkTimeCanvasLayout.swift` and tests | Every visible dated record is retained exactly once; cards do not overlap; large text reserves time-label space; a long task follows actual latest activity. |
 | Native input | `WorkTimeCanvasInput.swift` and tests | Horizontal/Shift scrolling and pinch work over cards; vertical scrolling stays with the page; reserved OS modifiers pass through; input remains scoped to the canvas. |
-| Timeline presentation and export | `WorkTimeCanvas.swift`, `WorkTimelineView.swift`, `WorkTimelineExport.swift` | Details appear at selection; clusters stay inspectable; no inferred causality or execution duration; export retains identities and qualifications. |
+| Timeline presentation and export | `WorkTimeCanvas.swift`, `WorkTimelineView.swift`, `WorkRecordPopover.swift`, `WorkTimelineExport.swift` | Details appear at selection; clusters stay inspectable; no inferred causality or execution duration; export retains identities and qualifications. |
 | Information hierarchy | `ContextHelp.swift`, `ReadingSize.swift`, `Theme.swift`, `UsagePane.swift`, `UsageCapacity.swift` | Optional explanation is available by hover and keyboard; failures, cost basis, incomplete capture and install scope stay visible. |
 | Distributable recorder | `packaging/materialize-cli.py`, `freeze-cli.sh`, `build-app.sh` | Framework aliases become independent files only after all targets are proven inside the frozen output. External or cyclic aliases fail; the installer's no-link contract is preserved. |
 
@@ -91,8 +93,8 @@ are local study artifacts, not production resources.
 
 ## Information placement
 
-- Remove redundant labels and empty update counts. Keep space reserved for
-  arrivals so a new count does not move held history.
+- Remove redundant labels and empty update counts. Show the arrivals action
+  only when updates exist, keeping the live control and actions grouped at the right.
 - Put supplemental explanation in an information icon with native hover help
   and a selectable popover reachable by keyboard. Use named disclosures for
   structured detail such as exact identities, capture proof and diagnostics.
@@ -149,7 +151,7 @@ including a 960×640 content window. A separate
 
 ## Verification and remaining limits
 
-- The central timeline suite reports461 tests, six guarded visual skips and
+- The central timeline and fitted-popover suite reports465 tests, six guarded visual skips and
   zero failures. Three consecutive repeat-render checks passed after replacing
   unsupported ImageRenderer native-host placeholders with the same static
   SwiftUI content. A captured failure and amber-only negative control guard

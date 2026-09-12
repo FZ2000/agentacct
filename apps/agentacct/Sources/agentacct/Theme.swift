@@ -980,12 +980,10 @@ struct SurfaceButtonStyle: ButtonStyle {
 
     @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        if SnapshotMode.enabled {
-            // Stateful styles inside an offscreen ScrollView alter its
-            // unbounded size proposal. Snapshots verify resting endpoints, so
-            // render the identical resting label and reserve stateful feedback
-            // for the live app where hover, press, and focus can occur.
-            configuration.label
+        if SnapshotMode.enabled && !SnapshotMode.interactiveFixture {
+            // Static ImageRenderer output needs only the resting label. Native
+            // review retains the same full hit area and feedback as the app.
+            configuration.label.contentShape(Rectangle())
         } else {
             SurfaceButtonBody(
                 configuration: configuration,

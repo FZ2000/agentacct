@@ -58,6 +58,7 @@ struct WorkTimelineView: View {
     @State private var lastObserved: Date?
     @State private var scrollTarget: String?
     @State private var showingArrivals = false
+    @State private var popoverDismissRequest = 0
     @State private var showingUndatedDetail = false
     @State private var exportError: String?
     @FocusState private var focusedEvidence: String?
@@ -200,7 +201,7 @@ struct WorkTimelineView: View {
                 onWindow: { value in hold(); navigation.view.interval = value },
                 onSelect: { inspect($0, focusInspector: false) },
                 onDismiss: { navigation.view.selectedID = nil },
-                onHold: hold, focusRecordID: requestedRowFocus, focusRequest: scrollRequest, compact: compactViewport,
+                onHold: hold, dismissRequest: popoverDismissRequest, focusRecordID: requestedRowFocus, focusRequest: scrollRequest, compact: compactViewport,
                 detail: { _ in inspector })
         } else {
             Text(displayProjection.records.isEmpty ? "No activity recorded yet." : "Recorded times are unavailable.")
@@ -222,7 +223,7 @@ struct WorkTimelineView: View {
             .popover(isPresented: Binding(get: {
                 !SnapshotMode.boundsScrollContentToViewport && showingUndatedDetail && selected != nil
             }, set: { if !$0 { showingUndatedDetail = false; navigation.view.selectedID = nil } })) {
-                ScrollView { inspector }.frame(width: 480, height: 420)
+                WorkRecordPopover(width: 480, maximumHeight: 560) { inspector }
             }
         }
     }
@@ -238,7 +239,7 @@ struct WorkTimelineView: View {
             HStack(spacing: 12) { headingLabel; Spacer(minLength: 0); liveControls; activityMenu }
             VStack(alignment: .leading, spacing: 8) {
                 headingLabel
-                HStack(spacing: 8) { liveControls; Spacer(); activityMenu }
+                HStack(spacing: 8) { Spacer(minLength: 0); liveControls; activityMenu }
             }
         }
     }
@@ -326,6 +327,7 @@ struct WorkTimelineView: View {
         .disabled(dashboard.isOfflineSnapshot)
         .help("Pause to keep this history still. Resume reveals the latest snapshot and moves to its newest record; search and file filters stay in place.")
         .accessibilityIdentifier("work.timeline.follow")
+        if pendingCount > 0 {
         Button("\(pendingCount) new") {
             if navigation.history == nil { navigation.view.scrollOffsets = viewport.capture() }
             navigation.beginArrivals()
@@ -333,13 +335,9 @@ struct WorkTimelineView: View {
             navigation.view.interval = displayProjection.interval
             showingArrivals = true
         }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
-        .disabled(pendingCount == 0)
-        // Keep the control's space so arrivals never push held history down.
-        // Empty counts do not need to compete with the live state label.
-        .opacity(pendingCount == 0 ? 0 : 1)
-        .accessibilityHidden(pendingCount == 0)
         .accessibilityLabel("Review \(pendingCount) new or changed records")
         .accessibilityIdentifier("work.timeline.arrivals")
+        }
         if navigation.history != nil {
             Button("Back to history") {
                 navigation.returnToHistory()
@@ -433,24 +431,34 @@ struct WorkTimelineView: View {
     @ViewBuilder private var inspector: some View {
         if let record = selected {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 8) {
-                    Text(record.title).workFont(.titleCard)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .focusable().focused($focusedEvidence, equals: "inspector")
-                        .accessibilityFocused($accessibleEvidence, equals: "inspector")
-                        .accessibilityAddTraits(.isHeader)
-                        .onKeyPress(.escape) { dismissInspector(record); return .handled }
-                    Spacer(minLength: 0)
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(record.title).workFont(.titleCard)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityFocused($accessibleEvidence, equals: "inspector")
+                            .accessibilityAddTraits(.isHeader)
+                        HStack(spacing: 6) {
+                            Text(record.resultLabel + (record.superseded ? " · Superseded" : ""))
+                                .foregroundStyle(color(record))
+                            Text(record.source).foregroundStyle(Theme.muted)
+                            if let note = record.identityNote {
+                                Image(systemName: "info.circle")
+                                    .foregroundStyle(Theme.muted).help(note)
+                                    .accessibilityLabel(note)
+                            }
+                        }.workFont(.caption)
+                        Text(record.start.map(Self.dateText) ?? "Source time unavailable")
+                            .workFont(.caption).foregroundStyle(Theme.muted)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                     Button { dismissInspector(record) } label: { Image(systemName: "xmark") }
-                        .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                        .buttonStyle(QuietButtonStyle(horizontalPadding: 7))
+                        .focused($focusedEvidence, equals: "inspector")
+                        .onKeyPress(.escape) { dismissInspector(record); return .handled }
                         .accessibilityLabel("Close record details")
                         .accessibilityIdentifier("work.timeline.inspector.close")
                         .help("Close record details")
                 }
-                Text("\(record.resultLabel) · \(record.source)\(record.superseded ? " · Superseded" : "")")
-                    .workFont(.body).foregroundStyle(color(record))
-                Text(record.start.map(Self.dateText) ?? "Source time unavailable")
-                    .workFont(.caption).foregroundStyle(Theme.muted)
+                Divider().overlay(Theme.hairline)
                 if let summary = record.summary, summary != record.title {
                     Text(summary).workFont(.body).textSelection(.enabled)
                 }
@@ -460,7 +468,6 @@ struct WorkTimelineView: View {
                 }
                 if let resolution = record.resolutionDescription { Text(resolution).workFont(.caption).textSelection(.enabled) }
                 if let code = record.exitCode, code != 0 { Text("Exit code: \(code)").workFont(.caption) }
-                if let note = record.identityNote { Text(note).workFont(.caption).foregroundStyle(Theme.amber) }
                 if !filtered.contains(where: { $0.id == record.id }) {
                     Text("Outside the current filters").workFont(.caption).foregroundStyle(Theme.amber)
                     Button("Show this record") { clearFilters(); focusSelectedRange(); returnToRecord(record) }
@@ -520,6 +527,7 @@ struct WorkTimelineView: View {
                 }
                 DisclosureGroup("Record details") {
                     VStack(alignment: .leading, spacing: 6) {
+                        if let note = record.identityNote { Text(note).foregroundStyle(Theme.muted) }
                         Text("Scope: \(record.scope ?? "unavailable")")
                         if let exitCode = record.exitCode { Text("Recorded exit code: \(exitCode)") }
                         Text(record.timeNote)
@@ -552,6 +560,8 @@ struct WorkTimelineView: View {
     }
 
     private func dismissInspector(_ record: WorkTimelineRecord) {
+        popoverDismissRequest += 1
+        showingUndatedDetail = false
         navigation.view.selectedID = nil
         requestedRowFocus = record.id
         scrollRequest += 1
