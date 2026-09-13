@@ -73,7 +73,7 @@ agentacct recording-fix verification
 
 7. The rules do not refuse records the real store already accepted
   [PASS] replaying every stored record through the rules refuses < 1%
-         9 of 1521 refused (0.59%); by type: {'section_completed': 5, 'machine_check': 3, 'section_checkpoint': 1}
+         9 of 1526 refused (0.59%); by type: {'section_completed': 5, 'machine_check': 3, 'section_checkpoint': 1}
   [PASS] the historian's own sections already carry resolved session ids
          at least one recorded section is session-linked in the live store
 

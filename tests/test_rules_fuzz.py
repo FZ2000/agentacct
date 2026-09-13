@@ -35,8 +35,8 @@ from agentacct.mcp import (
     _collapse_narrative_text,
     _display_title,
     _narrative_text,
-    _require_terminal_outcome,
 )
+from agentacct.semantic_rules import SemanticRecordError, require_terminal_outcome
 
 # --- deterministic corpus ---------------------------------------------------
 
@@ -171,11 +171,11 @@ def test_terminal_outcome_gate_is_total(status: str, summary, blocker) -> None:
     A gate with an unhandled branch is how a rule becomes an outage.
     """
     try:
-        _require_terminal_outcome(
-            status, summary, blocker, None,
+        require_terminal_outcome(
+            status, summary=summary, blocker=blocker,
             section_id="s", source="codex", title="T",
         )
-    except InvalidParams:
+    except (InvalidParams, SemanticRecordError):
         return
 
 
@@ -184,9 +184,7 @@ def test_terminal_outcome_gate_is_total(status: str, summary, blocker) -> None:
 
 @pytest.mark.parametrize("value", _corpus(seed=7, size=40)[:120])
 def test_record_section_never_returns_a_transport_error(tmp_path, value: str) -> None:
-    """Any text through the real tool is either recorded or refused with a
-    message. A crash here is the failure mode that teaches an agent to stop
-    recording."""
+    """Any text is recorded or refused -- never a crash."""
     server = SentinelMCPServer(store_dir=tmp_path / "state")
     response = server.handle_message(
         {

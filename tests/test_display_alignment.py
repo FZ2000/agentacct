@@ -31,11 +31,15 @@ from agentacct.display_budget import (
     MARKDOWN_CELL_CHARACTERS,
     TERMINAL_LINE_CHARACTERS,
     display_label_from_text,
-    over_budget,
     truncate_for_display,
 )
 
 LEDGER = "~/.local/state/agentacct/state/events.sqlite3"
+
+
+def over_budget(value: object, *, limit: int) -> bool:
+    """Local to the assertions below: `len` plus a comparison, nothing more."""
+    return len(str(value or "")) > limit
 
 
 # --- 1. internal consistency ------------------------------------------------

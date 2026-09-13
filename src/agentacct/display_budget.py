@@ -98,7 +98,3 @@ def display_label_from_text(value: Any) -> str:
             first_line = first_line[: index + 1]
             break
     return truncate_for_display(first_line, limit=CARD_FALLBACK_TITLE_CHARACTERS)
-
-
-def over_budget(value: Any, *, limit: int) -> bool:
-    return len(str(value or "")) > limit

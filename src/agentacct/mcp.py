@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import unicodedata
 import os
 import re
 import sys
@@ -25,10 +24,8 @@ from .install_guide import MCP_SERVER_INSTRUCTIONS
 from .service import RESERVED_CLIENT_CONTEXT_PROVENANCE_KEYS, SentinelService
 from .semantic_rules import (
     SemanticRecordError,
-    collapse_display_text as _shared_collapse_display_text,
-    collapse_narrative_text as _shared_collapse_narrative_text,
-    is_control_character as _shared_is_control_character,
-    strip_control_characters as _shared_strip_control_characters,
+    collapse_display_text,
+    collapse_narrative_text,
     validate_semantic_record,
 )
 from .storage import METADATA_MAX_BYTES, json_utf8_size, validate_run_id
@@ -496,7 +493,6 @@ def _optional_nullable_str(args: dict[str, Any], key: str) -> str | None:
     return value
 
 
-
 def _optional_nonnegative_int(args: dict[str, Any], key: str) -> int | None:
     value = args.get(key)
     if value is None:
@@ -579,23 +575,6 @@ _DISPLAY_LINE_BREAKS = str.maketrans({"\t": " ", "\n": " ", "\r": " ", "\v": " "
 _DISPLAY_MEANINGFUL_WHITESPACE = frozenset("\t\n\v\f\r")
 
 
-def _is_control_character(character: str) -> bool:  # noqa: D103 - delegates
-    """C0 and C1 controls plus DEL, by Unicode category rather than by range.
-
-    The first version of this rule enumerated the code points it knew about and
-    the fuzzer found the hole immediately: U+0080-U+009F (C1 controls) slipped
-    through and reached the stored title, where a renderer shows them as nothing
-    or as a replacement glyph. Asking Unicode for the category cannot miss a
-    code point the way a hand-written list can -- and the cost is that the
-    meaningful whitespace above must be named back in.
-    """
-    return _shared_is_control_character(character)
-
-
-def _strip_control_characters(value: str) -> str:
-    return _shared_strip_control_characters(value)
-
-
 def _validate_context(context: dict[str, Any], status: str) -> None:
     """Apply the shared semantic rules to a record this lane is about to store.
 
@@ -609,11 +588,7 @@ def _validate_context(context: dict[str, Any], status: str) -> None:
         validate_semantic_record(
             semantic_kind=context.get("sentinel_semantic_kind"),
             status=status,
-            fields={
-                **context,
-                "files": context.get("files"),
-            },
-            transport="mcp",
+            fields=context,
         )
     except SemanticRecordError as exc:
         raise InvalidParams(str(exc)) from exc
@@ -622,27 +597,13 @@ def _validate_context(context: dict[str, Any], status: str) -> None:
     context[SEMANTIC_RULES_VALIDATED_KEY] = True
 
 
-def _collapse_display_text(value: str) -> str:
-    """One line, one space between words, no control characters, no outer space.
-
-    Whitespace is normalized on both display fields and identity fields on
-    purpose: "pytest  tests/x.py" and "pytest tests/x.py" name the same check,
-    so collapsing them is what keeps supersession — which keys on the name —
-    from treating one check as two.
-    """
-    return _shared_collapse_display_text(value)
+# The MCP lane's names for the shared normalizers. Tests reach the exact function
+# this lane uses through these; the implementation and rationale live in
+# agentacct.semantic_rules.
+_collapse_display_text = collapse_display_text
 
 
-def _collapse_narrative_text(value: str) -> str:
-    """Narrative prose: keep real line structure, drop other control characters.
-
-    Line breaks are preserved on purpose. They are how an agent separates a
-    summary from the structured text it accidentally absorbed -- a mangled tool
-    call arrives as ``...text.</summary>\n<files>...</files>`` -- and the
-    mangled-call detector reads exactly that structure. Collapsing the newline
-    would hide the signal the detector exists to find.
-    """
-    return _shared_collapse_narrative_text(value)
+_collapse_narrative_text = collapse_narrative_text
 
 
 def _display_title(args: dict[str, Any], key: str, *, max_length: int) -> str | None:
@@ -686,117 +647,6 @@ def _limit_display_value(key: str, value: str, *, max_length: int) -> str:
     if len(value) > max_length:
         raise _limit_error(key, limit=max_length, received=len(value))
     return value
-
-
-def _require_terminal_outcome(
-    status: str, summary: str | None, blocker: str | None, next_step: str | None,
-    *, section_id: str, source: str, title: str | None,
-) -> None:
-    """A terminal section must carry the outcome a reader came for.
-
-    A completed chapter with nothing to read is the most visible hole in the
-    timeline: the canvas card shows its title plus a status word and nothing
-    else. The refusal names the missing field and shows the corrected call, so a
-    single retry is enough (see RULES.md R4).
-    """
-    example_args = [f'source="{source}"', f'section_id="{section_id}"', f'section_status="{status}"']
-    if title:
-        example_args.append(f'section_title="{title[:60]}"')
-    requirement = {
-        "completed": ("summary", 40, "describe what actually changed and what was verified"),
-        "handed_off": ("summary", 40, "say what is complete and what remains"),
-        "blocked": ("blocker", 20, "state the concrete blocker"),
-    }.get(status)
-    if requirement is None:
-        return
-    key, minimum, advice = requirement
-    supplied = summary if key == "summary" else blocker
-    if supplied is not None and len(supplied) >= minimum:
-        return
-    # The example shows the SHAPE the reader will see: an outcome sentence first.
-    # A one-line placeholder would teach the agent to write a one-line summary,
-    # which is the format the canvas and the inspector cannot use.
-    example_args.append(
-        f'{key}="<what changed, then what was verified>"'
-        if key == "summary"
-        else f'{key}="<the concrete blocker>"'
-    )
-    raise InvalidParams(
-        f"section_status={status} requires `{key}` (at least {minimum} characters): {advice}. "
-        f"Received: {'no ' + key if supplied is None else f'{key} of {len(supplied)} characters'}. "
-        "Re-send the same section_id with that field, for example: "
-        f"agentacct_record_section({', '.join(example_args)})."
-    )
-
-
-def _require_reproducible_check(
-    *, name: str, result: str, command: str | None, files: Any, exit_code: int | None,
-    artifact_ref: str | None, artifact_path: str | None, artifact_url: str | None,
-    has_outcome_evidence: bool = False,
-) -> None:
-    """A machine check must be re-runnable or at least objectively anchored.
-
-    Three shapes satisfy this, in descending order of auditability:
-
-    * a pointer -- `command`, `files`, or an artifact reference/path/url;
-    * the before/after outcome lane, where a pair of recorded exit codes with
-      their summaries is itself the evidence (the CLI and HTTP lanes record a
-      repair this way and never name a command);
-    * a specific check name plus an exit code, which records what ran and what it
-      returned even when the exact invocation is not spelled out. Eleven of the
-      336 checks in the real ledger have exactly this shape -- an integration
-      suite named precisely, with its exit status and no verbatim command -- and
-      refusing them would discard genuine evidence (see RULES.md R5).
-
-    What is refused is the record that says nothing: a generic name (`check`),
-    no pointer, and no exit code.
-    """
-    if has_outcome_evidence or command or files or artifact_ref or artifact_path or artifact_url:
-        return
-    if exit_code is not None:
-        stripped = name.strip()
-        if len(stripped) >= 4 and stripped.lower() not in _GENERIC_CHECK_NAMES:
-            return
-    raise InvalidParams(
-        f"machine check `{name}` (result={result}) records nothing a reviewer can re-run or inspect: "
-        "pass `command` (the exact command), `files` (the files it covered), or `artifact_ref`/"
-        "`artifact_path`/`artifact_url` (what it produced). A specific `name` with an `exit_code` also "
-        "counts. If this was a manual observation, record it with agentacct_record_event instead."
-    )
-
-
-# Names that carry no identity: supersession keys on `name`, so two unrelated
-# checks sharing one of these would supersede each other (mcp.py:105-108).
-_GENERIC_CHECK_NAMES = frozenset({"check", "test", "tests", "verify", "build", "run", "lint"})
-
-
-def _require_check_identity(name: str, *, artifact_ref: str | None = None, artifact_path: str | None = None) -> None:
-    """A check must be identifiable, because supersession keys on its name.
-
-    A specific name identifies it by itself. A generic name ("check", "tests")
-    is tolerated only when something else already identifies the check -- a
-    command, a file list, or an artifact pointer. Both refusals name the field
-    and show an example, so one retry fixes it.
-    """
-    stripped = name.strip()
-    if len(stripped) >= 4 and stripped.lower() not in _GENERIC_CHECK_NAMES:
-        return
-    raise InvalidParams(
-        f"machine check name {name!r} is too generic to identify the check; a later check with the "
-        "same name would supersede this one. Use the exact check you ran, for example "
-        'name="pytest tests/test_mcp.py" or name="pnpm build:web".'
-    )
-
-
-def _check_has_identity(*, name: str, command: str | None, files: Any,
-                        artifact_ref: str | None = None, artifact_path: str | None = None,
-                        artifact_url: str | None = None) -> bool:
-    """Whether anything about this check identifies what it was."""
-    if command or files or artifact_ref or artifact_path or artifact_url:
-        return True
-    stripped = name.strip()
-    return len(stripped) >= 4 and stripped.lower() not in _GENERIC_CHECK_NAMES
-
 
 
 def _optional_metadata(args: dict[str, Any]) -> dict[str, Any]:

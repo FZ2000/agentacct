@@ -322,7 +322,7 @@ def main() -> int:
             try:
                 validate_semantic_record(
                     semantic_kind=kind, status=status or "unknown",
-                    fields={**metadata, "source": event.get("source")}, transport="cli",
+                    fields={**metadata, "source": event.get("source")},
                 )
             except SemanticRecordError:
                 refused += 1

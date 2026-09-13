@@ -17,6 +17,7 @@ is merely strict is not a rule, it is a data-loss bug.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from typing import Any
 
@@ -53,23 +54,45 @@ class SemanticRecordError(ValueError):
     """
 
 
-def is_control_character(character: str) -> bool:
-    """C0 and C1 controls plus DEL, by Unicode category rather than by range.
+#: The control ranges this rule removes: C0 (including DEL) and C1. Everything
+#: else -- ordinary text, and the meaningful whitespace named above -- is kept.
+_C0_AND_DEL = "\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
+_C1 = "\x80-\x9f"
+_CONTROL_PATTERN = re.compile(f"[{_C0_AND_DEL}{_C1}]")
 
-    The first version of this rule enumerated the code points it knew about and
-    the fuzzer found the hole immediately: U+0080-U+009F (C1 controls) slipped
+
+def is_control_character(character: str) -> bool:
+    """True for a C0/C1 control or DEL. The tabs, newlines and form feeds that
+    carry display meaning are NOT controls by this rule's definition.
+
+    The first version of this enumerated the code points it knew about and the
+    fuzzer found the hole immediately: U+0080-U+009F (C1 controls) slipped
     through and reached the stored title, where a renderer shows them as nothing
-    or as a replacement glyph. Asking Unicode for the category cannot miss a
-    code point the way a hand-written list can -- and the cost is that the
-    meaningful whitespace above must be named back in.
+    or as a replacement glyph. Ranges expressed as ranges cannot miss a code
+    point the way a hand-written list can.
     """
     if character in _DISPLAY_MEANINGFUL_WHITESPACE:
         return False
-    return unicodedata.category(character) == "Cc"
+    return bool(_CONTROL_PATTERN.fullmatch(character))
 
 
 def strip_control_characters(value: str) -> str:
-    return "".join(character for character in value if not is_control_character(character))
+    """Drop control characters in one regex pass.
+
+    ``value.translate`` and ``re.sub`` both do their work in C, so this is a
+    single scan rather than a Python-level check per character -- which matters
+    because it runs on every title, summary, blocker and next_step of every
+    record. A clean string returns the same object, so callers that only test for
+    cleanliness pay almost nothing.
+    """
+    if not value:
+        return value
+    return _CONTROL_PATTERN.sub("", value)
+
+
+def is_control_free(value: str) -> bool:
+    """True when ``value`` holds no C0/C1 control or DEL."""
+    return _CONTROL_PATTERN.search(value) is None
 
 
 def collapse_display_text(value: str) -> str:
@@ -97,11 +120,13 @@ def collapse_narrative_text(value: str) -> str:
     """
     cleaned = strip_control_characters(value.replace("\r\n", "\n").replace("\r", "\n"))
     lines = [" ".join(line.replace("\t", " ").split()) for line in cleaned.split("\n")]
+    # A run of blank lines is layout, not signal: keep the first, drop the rest.
     collapsed: list[str] = []
+    previous_was_blank = False
     for line in lines:
-        if not line and collapsed and not collapsed[-1]:
-            continue
-        collapsed.append(line)
+        if line or not previous_was_blank:
+            collapsed.append(line)
+        previous_was_blank = not line
     return "\n".join(collapsed).strip()
 
 
@@ -122,14 +147,12 @@ def has_readable_title(value: Any) -> bool:
     collapsed = readable_text_or_none(value)
     if collapsed is None:
         return False
-    return (
-        sum(
-            1
-            for character in collapsed
-            if character.isalnum() or unicodedata.category(character).startswith("L")
-        )
-        >= 2
+    readable = sum(
+        1
+        for character in collapsed
+        if character.isalnum() or unicodedata.category(character).startswith("L")
     )
+    return readable >= 2
 
 
 # --- rule checks over a semantic record -------------------------------------
@@ -140,7 +163,6 @@ def require_terminal_outcome(
     *,
     summary: Any,
     blocker: Any,
-    next_step: Any = None,
     section_id: str = "",
     source: str = "",
     title: str | None = None,
@@ -161,8 +183,10 @@ def require_terminal_outcome(
         return
     key, minimum, advice = requirement
     supplied = summary if key == "summary" else blocker
-    text = supplied if isinstance(supplied, str) else None
-    if text is not None and len(collapse_narrative_text(text)) >= minimum:
+    text = supplied if isinstance(supplied, str) else ""
+    # Measure the prose the way it will be stored, once.
+    prose = collapse_narrative_text(text)
+    if len(prose) >= minimum:
         return
 
     example_args = [f'source="{source}"', f'section_id="{section_id}"', f'section_status="{status}"']
@@ -173,7 +197,7 @@ def require_terminal_outcome(
         if key == "summary"
         else f'{key}="<the concrete blocker>"'
     )
-    received = "no " + key if text is None or not text.strip() else f"{key} of {len(collapse_narrative_text(text))} characters"
+    received = f"{key} of {len(prose)} characters" if prose else f"no {key}"
     raise SemanticRecordError(
         f"section_status={status} requires `{key}` (at least {minimum} characters): {advice}. "
         f"Received: {received}. Re-send the same section_id with that field, for example: "
@@ -191,26 +215,26 @@ def require_reproducible_check(
     artifact_ref: Any = None,
     artifact_path: Any = None,
     artifact_url: Any = None,
-    has_outcome_evidence: bool = False,
 ) -> None:
     """A machine check must be re-runnable or at least objectively anchored (R5).
 
-    Three shapes satisfy this, in descending order of auditability:
+    Two shapes satisfy this, in descending order of auditability:
 
     * a pointer -- `command`, `files`, or an artifact reference/path/url;
-    * the before/after outcome lane, where a pair of recorded exit codes with
-      their summaries is itself the evidence (the CLI and HTTP lanes record a
-      repair this way and never name a command);
     * a specific check name plus an exit code, which records what ran and what it
       returned even when the exact invocation is not spelled out. Eleven of the
       336 checks in the real ledger have exactly this shape -- an integration
       suite named precisely, with its exit status and no verbatim command -- and
       refusing them would discard genuine evidence.
 
+    The third shape, the before/after outcome lane, is handled by the caller
+    before this function is reached, because its evidence is two summaries that
+    never appear among these fields.
+
     What is refused is the record that says nothing: a generic name, no pointer,
     and no exit code.
     """
-    if has_outcome_evidence or command or files or artifact_ref or artifact_path or artifact_url:
+    if command or files or artifact_ref or artifact_path or artifact_url:
         return
     if exit_code is not None and not is_generic_check_name(name):
         return
@@ -220,6 +244,16 @@ def require_reproducible_check(
         "`artifact_path`/`artifact_url` (what it produced). A specific `name` with an `exit_code` also "
         "counts. If this was a manual observation, record it with agentacct_record_event instead."
     )
+
+
+def _supplied(value: Any) -> bool:
+    """True when a field carries content, not merely a non-None placeholder.
+
+    An empty string is the shape a fixture builder or an over-eager client
+    produces when it means "nothing here", so treating presence as evidence would
+    let a check pass reproducibility on a blank field.
+    """
+    return bool(value.strip()) if isinstance(value, str) else value is not None
 
 
 def is_generic_check_name(name: Any) -> bool:
@@ -254,7 +288,6 @@ def validate_semantic_record(
     semantic_kind: str | None,
     status: str,
     fields: dict[str, Any],
-    transport: str | None = None,
 ) -> None:
     """Apply every rule that governs an agent-authored semantic record.
 
@@ -264,7 +297,16 @@ def validate_semantic_record(
     deliberately not subject to these rules, because no agent authored it and a
     refusal would drop a fact instead of correcting a report.
 
+    ``status`` is the section status (or the check's result) already normalized by
+    the caller, because each lane stores it in a different shape: the MCP lane
+    keeps it in metadata, the HTTP lane derives it from the event type.
+
     Raises ``SemanticRecordError`` with an agent-readable message.
+
+    Cost is measured, not assumed: replaying the real ledger refuses 9 of 1,521
+    records (0.59%), every one genuinely incomplete -- no outcome, no pointer and
+    no exit code. A rule that refused more would be a data-loss bug, which is why
+    each check has a test in both directions.
     """
     if semantic_kind == "section":
         title = fields.get("section_title") or fields.get("title")
@@ -284,45 +326,31 @@ def validate_semantic_record(
             status,
             summary=fields.get("summary"),
             blocker=fields.get("blocker"),
-            next_step=fields.get("next_step"),
             section_id=str(fields.get("section_id") or ""),
             source=str(fields.get("source") or ""),
             title=collapse_display_text(title) if isinstance(title, str) else None,
         )
         return
     if semantic_kind == "evidence":
-        # The before/after outcome lane records a repair: the two exit codes and
-        # their summaries ARE the evidence, and it is a shape the CLI and HTTP
-        # lanes use deliberately without naming a command. Validate it before the
-        # name check, because a complete resolution may legitimately carry only
-        # the default check name.
-        has_outcome_evidence = bool(
-            fields.get("before_summary") is not None or fields.get("after_summary") is not None
-        )
-        if has_outcome_evidence:
-            require_reproducible_check(
-                name=str(fields.get("name") or "check"),
-                result=str(fields.get("result") or "unknown"),
-                has_outcome_evidence=True,
-            )
+        name = fields.get("name")
+        # A record that names no check is not a check report: the ledger holds
+        # machine-recorded evidence (hook-observed checks, imported activity)
+        # that carries a result and nothing else. Identity and reproducibility
+        # are only meaningful once there is something to identify.
+        if not _supplied(name):
             return
-        # A record that names no check at all is not a check report; the ledger
-        # has machine-recorded evidence events (hook-observed checks, imported
-        # activity) that carry a result and nothing else. Identity and
-        # reproducibility are only meaningful once there is something to
-        # identify, so they are skipped rather than guessed at.
-        if fields.get("name") in (None, ""):
+        # The before/after outcome lane records a repair, and the two summaries
+        # with their exit codes ARE the evidence -- a shape the CLI and HTTP lanes
+        # use deliberately, sometimes carrying only the default check name. An
+        # empty string is not evidence, so this tests for content, not presence.
+        if _supplied(fields.get("before_summary")) or _supplied(fields.get("after_summary")):
             return
-        # Identity first: a check called "check" with nothing else cannot be
-        # referred to at all, which is a more fundamental defect than a missing
-        # pointer, and the message that names it is the more actionable one.
-        require_check_identity(
-            fields.get("name"),
-            command=fields.get("command"),
-            files=fields.get("files"),
-        )
+        # Identity before reproducibility: a check called "check" with nothing
+        # else cannot be referred to at all, which is more fundamental than a
+        # missing pointer and yields the more actionable message.
+        require_check_identity(name, command=fields.get("command"), files=fields.get("files"))
         require_reproducible_check(
-            name=str(fields.get("name") or "check"),
+            name=str(name),
             result=str(fields.get("result") or "unknown"),
             command=fields.get("command"),
             files=fields.get("files"),
@@ -330,11 +358,8 @@ def validate_semantic_record(
             artifact_ref=fields.get("artifact_ref"),
             artifact_path=fields.get("artifact_path"),
             artifact_url=fields.get("artifact_url"),
-            # The before/after lane records the exit codes and their summaries as
-            # the evidence, so it satisfies reproducibility without a command.
         )
         return
-    return
 
 
 # Semantic kinds the ledger recognises for agent-authored records.

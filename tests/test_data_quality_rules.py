@@ -303,3 +303,48 @@ def test_real_ledger_shapes_are_accepted(tmp_path) -> None:
     ]
     for response in accepted:
         assert "error" not in response, response.get("error")
+
+
+def _server_with_a_run(tmp_path) -> tuple[SentinelMCPServer, str]:
+    """A store with one real run.
+
+    The before/after summaries put a call on the run-scoped OUTCOME lane, which
+    resolves run_id="latest" against the store. That lane is not what these two
+    tests are about -- they are about whether a blank summary counts as evidence
+    -- so the run exists purely to let the call reach the rule.
+    """
+    from agentacct.runner import RunOptions, start_guarded_run
+
+    dummy = tmp_path / "mcp_dummy.py"
+    dummy.write_text("print('ok')\n", encoding="utf-8")
+    store_root = tmp_path / "state"
+    result = start_guarded_run(["python", str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
+    return SentinelMCPServer(store_dir=store_root), result.run_id
+
+
+def test_a_blank_outcome_summary_is_not_evidence(tmp_path) -> None:
+    """An empty before/after summary must not satisfy the evidence rule.
+
+    A client sending `before_summary=""` means "nothing here". Treating the key's
+    mere presence as evidence would let a check pass reproducibility on a blank
+    field -- the silent hole this rule exists to close.
+    """
+    server, run_id = _server_with_a_run(tmp_path)
+    message = _error(_call(server, "agentacct_record_machine_check", {
+        "source": "codex", "run_id": run_id, "name": "smoke", "result": "passed",
+        "evidence_type": "smoke", "section_id": "blank-outcome",
+        "before_summary": "", "after_summary": "   ",
+    }))
+    assert message is not None, "a blank outcome pair must not be accepted as evidence"
+    assert "command" in message and "files" in message
+
+
+def test_a_real_outcome_summary_is_evidence(tmp_path) -> None:
+    """The other direction: a repair recorded with real summaries still lands."""
+    server, run_id = _server_with_a_run(tmp_path)
+    stored = _stored(_call(server, "agentacct_record_machine_check", {
+        "source": "codex", "run_id": run_id, "name": "smoke", "result": "passed",
+        "evidence_type": "smoke", "section_id": "real-outcome",
+        "before_summary": "failed before", "after_summary": "passed after",
+    }))
+    assert stored["event"]["metadata"]["result"] == "passed"

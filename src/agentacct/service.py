@@ -992,12 +992,7 @@ def _enforce_semantic_rules(event: dict[str, Any], *, transport: str | None) -> 
         validate_semantic_record(
             semantic_kind=semantic_kind,
             status=status,
-            fields={
-                **metadata,
-                "source": event.get("source"),
-                "files": metadata.get("files"),
-            },
-            transport=transport,
+            fields={**metadata, "source": event.get("source")},
         )
     except SemanticRecordError as exc:
         raise ValueError(str(exc)) from exc
