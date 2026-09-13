@@ -5,11 +5,17 @@ This is the evidence behind the PR claims. It does not run the test suite; it
 drives the real code paths a client drives and prints what happened, so a
 reviewer can see the fix rather than infer it.
 
-    python3 design-plans/data-quality/tools/verify-fixes.py
+    .venv/bin/python design-plans/data-quality/tools/verify-fixes.py
 
 Exit code 0 means every claim held. Each check prints PASS/FAIL with the value it
 observed, and the script never touches a real store, the installed app, or any
 client configuration.
+
+It imports agentacct, so it needs the project environment rather than a bare
+system interpreter:
+``python3 -m venv .venv && .venv/bin/python -m pip install -e . pytest``
+(see CONTRIBUTING.md). Set PYTHONPATH=src to run it against an uninstalled
+checkout; this script already puts that checkout's src/ first.
 """
 
 from __future__ import annotations

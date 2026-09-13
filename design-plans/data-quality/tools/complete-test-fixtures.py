@@ -12,7 +12,10 @@ corrupted multi-line dictionaries, because `"section_status": status,` appears i
 contexts where the next line is another key, a closing brace, or a call argument.
 
 Usage:
-    python3 tools/complete-test-fixtures.py [--dry-run] [tests/...]
+    python3 design-plans/data-quality/tools/complete-test-fixtures.py [--dry-run] [tests/...]
+
+Standard library only, so a bare system ``python3`` runs it; that is deliberate,
+because it is the tool you reach for when the suite will not even import.
 
 Safe to re-run: every insertion is keyed on the field being ABSENT, so a second
 run is a no-op.

@@ -1,102 +1,137 @@
 # Review guide
 
-The PR diff is large for a structural reason, not because the change is large.
-This file says exactly where to look, in what order, and what to skip.
+Read this first. It says where to look, in what order, and what to skip.
 
-## Why the diff looks huge
+## Shape of the change
 
-This branch is **stacked** on `design/native-recording-experience` (draft PR
-#190), because the work depends on files that exist only there —
-`task_timeline.py` and the Codex hook bridge among them.
+**74 files, 3 commits**, against `main`:
 
-Stacking has a cost GitHub cannot hide here: **stacked pull requests require all
-branches in the same repository, and cross-fork stacks are not supported**
-([GitHub docs](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs)),
-so the base cannot be set to the branch this actually builds on. The diff
-therefore shows the stack's whole history alongside this work.
-
-| What a reviewer sees | What this PR actually contributes |
+| Commit | What it is |
 | --- | --- |
-| 167 files, ~28,650 insertions | **70 files, 5,218 insertions** |
-| (includes 302 commits from the branch below) | 10 product files, ~1,100 lines |
+| `0a03525` | The rules, the enforcement point, the Codex session-link fix, extraction, display alignment — and the test/fixture updates they require |
+| `dabb93c` | The design record and three measurement tools |
+| the last commit | This guide, plus the one unfilled placeholder the receipt copy still carried |
 
-Two commands show the real contribution:
+The **eleven product files are 1,127 insertions**. Everything else is tests, docs
+and tooling. The two code commits pass the full suite on their own — 4,348 tests
+each, verified in a clean worktree — and the head runs **4,349** after the
+placeholder guard.
 
-```sh
-git diff --stat ac233b9..HEAD          # 70 files
-git log --oneline ac233b9..HEAD        # this work only
-```
+This PR replaced #193, which was stacked on the branch that #190 later merged.
+The stacking was the only reason that one showed 168 files; nothing was lost in
+the move.
 
 ## Read these, in this order
 
-**1. The rules themselves — `src/agentacct/semantic_rules.py` (new, 367 lines)**
+**1. `src/agentacct/semantic_rules.py` (new, 367 lines)**
 
-This is the whole change in one file. Read it first and decide whether the rules
-are right; everything else is plumbing to make them apply. Each rule states the
-measurement that justifies it.
+The whole change in one file. Read it first and decide whether the rules are
+right; everything else is plumbing to make them apply. Each rule states the
+measurement that justifies it and the false-positive budget it must meet.
 
-**2. The enforcement point — `src/agentacct/service.py` (+48 lines)**
+**2. `src/agentacct/service.py` (+48)**
 
 One function, `_enforce_semantic_rules`, called from `record_event`. Every write
-lane funnels through it, which is why the rules cannot be bypassed. The `if`
-guards are the interesting part: what is deliberately *out* of scope.
+lane funnels through it, which is why no surface can store what another refuses.
+The guards are the interesting part: what is deliberately *out* of scope, and why
+a refusal there would drop a fact instead of correcting a report.
 
-**3. The bug fix — `src/agentacct/hooks.py` (+120 lines)**
+**3. `src/agentacct/hooks.py` (+94/−26)**
 
-The Codex `SessionStart` hook and the client-aware context validator. This is
-where the headline defect lived: a validator hardcoded to `claude-code` discarded
-every Codex context, so 1,161 sections recorded without a session id.
+Where the headline defect lived: no Codex `SessionStart` hook, and a context
+validator hardcoded to `claude-code` that discarded every Codex context anyway.
+Measured consequence — 1,161 sections with zero session ids, and 61% of work never
+joining to usage.
 
-**4. The rest of the product code — four small files**
+**4. The rest of the product code**
 
 | File | Lines | What to check |
 | --- | --- | --- |
-| `mcp.py` | +405 | Mostly schema descriptions. Skim: the descriptors are prose, the logic is ~40 lines |
-| `client_usage.py` | +56 | Codex revision watermark; Claude identity budget 256 KiB → 2 MiB |
-| `display_budget.py` | +100 (new) | Surface budgets and their derivation; check the arithmetic |
-| `install_guide.py` | +39 | The recording contract, rewritten; note the line budget it must respect |
-| `api.py`, `task_timeline.py`, `receipt_markdown.py` | +52 | Display fallbacks: a sentence instead of a clipped paragraph |
+| `mcp.py` | +377/−28 | Mostly schema text. The two substantive blocks are the client-context validator and the `agentacct_work_status` implementation — both near the end of the diff |
+| `client_usage.py` | +54 | Codex revision watermark; Claude identity budget 256 KiB → 2 MiB |
+| `display_budget.py` | +100 (new) | One budget per surface, each with its derivation. Check the arithmetic |
+| `install_guide.py` | +34 | The recording contract, rewritten. Note the line budget it must respect |
+| `api.py`, `task_timeline.py`, `receipt_markdown.py` | +48 | Display fallbacks: a sentence instead of a clipped paragraph |
+| `receipt.py` | +5/−2 | The coverage definition said `X of Y checkable steps`. Now it says what it means, and a rendered receipt is tested for placeholder-shaped tokens |
 
 ## Skip these
 
-**44 test files, 1,503 added lines against 85 removed** — mechanical fixture
-completion. The new rules require fields most fixtures never carried, so a tool
-inserted them (`design-plans/data-quality/tools/complete-test-fixtures.py`, 274
-lines, worth reading once because it is the thing that touched 44 files). The
-churn is `"summary": ...` and `"section_title": ...` lines. Diffing it as a whole
-is not a good use of review time.
+**40 existing test files, +305/−86.** The rules require fields most fixtures never
+carried, so a tool inserted them — about seven lines per file, mechanical
+throughout. Read `complete-test-fixtures.py` once instead of diffing the 40 files.
 
-**10 design and evidence files** under `design-plans/data-quality/`. The
-one to read is `RULES.md`; the rest is measurement.
+**The design record** under `design-plans/data-quality/`. `RULES.md` is the one to
+read if you want the full rule catalogue; the rest is measurement you can
+regenerate.
 
-## The four test suites worth reading
+**Seven `docs/` files: five one-liners, plus two regenerated examples.** The five
+add the new tool's name to the live-tool inventory the docs-drift test enforces;
+the two worked examples are re-rendered from the receipt engine, which is also
+why they are not hand-edited.
+
+## The four new test suites — 1,218 lines, 1,467 tests
+
+These are where the test diff's weight actually is. Everything else is fixtures.
 
 | Suite | Tests | What it proves |
 | --- | --- | --- |
 | `test_data_quality_rules.py` | 22 | Every rule in both directions: refuses the incomplete record AND accepts the complete one |
-| `test_rules_fuzz.py` | 11 (1,417 cases) | Validators never crash; normalization is deterministic and idempotent; all three lanes agree |
+| `test_rules_fuzz.py` | 1,417 | Validators never crash; normalization is deterministic and idempotent; all three lanes agree |
 | `test_text_hygiene.py` | 10 | Source-level guards: placeholder-copy and `unknown`-fallback inventories cannot grow silently |
 | `test_display_alignment.py` | 18 | Budgets match the surfaces; the schema discloses them; the real store measured through the display path |
 
+## What this PR does not prove
+
+State these as limits, not as things to find. They are measured, and they are in
+`ASSESSMENT.md` in full.
+
+- **No live Codex session has run through the new hook.** The fix is verified
+  against the code paths and against recording a section that inherits Codex
+  context, not against a real Codex turn. The hook also has to be reinstalled on
+  a machine before it takes effect; that is the upgrade path check, not a claim
+  that any machine is already fixed.
+- **The rules only bind new writes.** The 9 stored records they refuse stay
+  stored. Nothing here rewrites history, and no past work becomes more complete.
+- **The card budget is a geometric estimate.** 54 characters is derived from the
+  card's measured width and type, not from screen capture, and it is stated to
+  ±10%. 28 of 538 live titles (5.2%) exceed it and clip.
+- **Summary quality is the biggest remaining gap and this PR does not close it.**
+  Roughly 41% of stored summaries restate process, ~20% restate status, and only
+  ~3–15% state an outcome. The rules require a summary to exist and to be
+  readable; they cannot require it to be useful.
+- **Nobody has visually reviewed the app after these changes.** The alignment
+  work is argued from the store through the display path, and the snapshots pass.
+  That is not the same as a person looking at the canvas.
+- **The counting copy is still wrong, and it is filed rather than fixed.**
+  Receipts print `1 checks · 1 passed · 0 failed`, `touched 3 file(s)`,
+  `1 step(s) ran in subagents`. It spans eight Python sites and four in the app
+  — the one-vocabulary rule changes them together — and the reference images
+  that draw it can only be re-recorded on macOS 26.6. Ranked as item 6 in
+  `ASSESSMENT.md` §7 with the exact lines.
+
 ## Verify it yourself rather than trusting the description
 
+Both commands below import `agentacct`, so they need the project environment —
+`.venv/bin/python -m pip install -e . pytest` per `CONTRIBUTING.md`. A bare
+system `python3` has no dependencies installed and stops at `import fastapi`.
+
 ```sh
-python3 design-plans/data-quality/tools/verify-fixes.py    # 30 checks, exits non-zero on failure
+.venv/bin/python design-plans/data-quality/tools/verify-fixes.py    # 30 checks, exits non-zero on failure
 ```
 
-It drives the real code paths a client drives and prints every value it observed
-— including the before/after of the session-link fix and the upgrade path for a
-machine that already has the old Codex config. Output is committed at
+Drives the real code paths a client drives and prints every value it observed,
+including the before/after of the session-link fix and the upgrade path for a
+machine that already has the old Codex config. Output committed at
 `design-plans/data-quality/evidence/VERIFICATION.txt`.
 
-## What would make this reviewable *and* mergeable
+To check the rules against real data rather than fixtures:
 
-The stack is the problem, not the change. Options, in order of preference:
+```sh
+.venv/bin/python design-plans/data-quality/tools/audit-agent-data.py --replay
+```
 
-1. **Merge #190 first.** Then this becomes a small standalone PR against `main`
-   — 10 product files, no stack, no 28k-line diff. This is the outcome worth
-   asking for.
-2. **Open with the base branch**, which removes the stack from the diff. Not
-   possible from this fork, because cross-fork stacks are unsupported.
-3. **Review commit by commit** if the diff is too much at once — the commits are
-   ordered so each one is a coherent step, and each keeps the suite green.
+It sends every stored record back through the live write path. On the installed
+store that is 9 refusals out of 1,541 (0.58%), all genuinely incomplete — zero
+legitimate reports refused. The denominator grows as the ledger fills; the
+refused count does not. A rule that refused real work would show up here as a
+number rather than an opinion.

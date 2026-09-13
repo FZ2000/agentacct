@@ -84,6 +84,14 @@ text, which is what a reader actually sees when data is thin.
   strings of 12+ characters in the Swift sources; the agent-facing MCP
   instruction block is 8 lines / 1,627 characters, with two single lines over
   200 characters trying to convey a three-lever setup.
+- **One string was not copy at all but an unfilled template.** The evidence
+  coverage *definition* printed by the CLI, the TUI and every exported Markdown
+  receipt read `X of Y checkable steps carry a passing check…` — a formula
+  written for a reader of the source, shipped to a reader of the receipt. It is
+  in the two published worked examples, where it reads as a renderer bug. It now
+  states the rule in words (`Counts are passing checks over checkable steps,
+  split by how independent each check is.`), and `test_receipt_markdown.py`
+  fails on any `N of M`-shaped token in a rendered receipt.
 
 **Inferred:** the user's complaint that explanations are "constantly visible"
 follows directly from this. Every mandatory field absorbs one piece of
@@ -186,5 +194,7 @@ These are deliberately source-level tests. Copy drift is a source problem: a
 runtime validator cannot stop a developer from adding a nineteenth apology
 string, but a failing test can.
 
-Full suite after this work: **2,834 passed, 1 failed** — the same pre-existing
-year-10000 formatting test that fails at the pristine baseline.
+Full suite on this head: **4,348 passed, 0 failed**. When this audit was written
+the branch had not yet merged `main`, and the suite read 2,834 passed with one
+pre-existing failure — `test_out_of_range_timestamp_never_500s_kept_surfaces`,
+which the merged `main` fixes.

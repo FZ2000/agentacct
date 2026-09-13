@@ -20,7 +20,8 @@ Re-run the audit:
 
 ```sh
 # from this worktree; aggregate output only, safe to paste
-PYTHONPATH=src python3 design-plans/data-quality/tools/audit-agent-data.py --limit 9000
+# (.venv/bin/python, not a bare python3 — see REVIEW_GUIDE.md)
+PYTHONPATH=src .venv/bin/python design-plans/data-quality/tools/audit-agent-data.py --limit 9000
 ```
 
 ## Headline: raw hygiene is good; structure is what is missing

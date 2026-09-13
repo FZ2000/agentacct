@@ -8,11 +8,16 @@ text, file paths, identifiers or prompts, so its output is safe to paste into a
 review note.
 
 Usage:
-    python3 audit-agent-data.py [--db PATH] [--json PATH] [--limit N]
+    .venv/bin/python design-plans/data-quality/tools/audit-agent-data.py [--db PATH] [--json PATH] [--limit N]
 
 Defaults to ~/.local/state/agentacct/state/events.sqlite3 (the installed store,
 which is the one real coding agents write to). A missing or unreadable database
 is reported as a single line and exits 2 rather than raising.
+
+The read-only audit above needs only the standard library. ``--replay`` sends
+every stored record back through the live write path, which imports agentacct,
+so that mode needs the project environment
+(``python3 -m venv .venv && .venv/bin/python -m pip install -e . pytest``).
 """
 
 from __future__ import annotations

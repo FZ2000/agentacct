@@ -161,6 +161,20 @@ test counts imply otherwise.
    the writing guidance worth following.
 5. **Be explicit about the cost gap in the UI.** Say "cost per task is
    unavailable for 91% of usage" once, at the top, instead of a footnote per row.
+6. **Finish the counting copy, in both languages at once.** The receipt still
+   prints `1 checks · 1 passed · 0 failed` and `touched 3 file(s)` /
+   `ran 1 command(s)`; the coverage ledger says `1 step(s) ran in subagents` and
+   `2 check(s) attach to no step`. Eight Python sites
+   (`receipt.py:545,551,554,936`, `receipt_markdown.py:100,102`,
+   `cli.py:9773,9776`) and, for the same rows, four in the app
+   (`V1Model.swift:771,773,774`, `ReceiptsPane.swift:110`) — the one-vocabulary
+   rule means they change together or not at all. The app already carries the
+   pattern to copy: `ReceiptsPane.swift:463` pluralizes
+   (`pathCount == 1 ? "path" : "paths"`). Why it is filed rather than half-done:
+   `dashboard.json:554-555,1472` holds ledger counts of exactly 1, so corrected
+   wording changes what the Work page draws, and the 98 canonical reference
+   images can only be re-recorded on macOS 26.6 (25G72) — this host is 26.5.1,
+   so the change would be unverifiable here and would land blind in CI.
 
 ## 8. The one-sentence answer
 
@@ -171,9 +185,9 @@ record of claims into a record of verifiable work.
 
 ## 9. What I am not claiming
 
-- The 4,253 passing tests prove the rules behave as designed. They do not prove
-  the rules were the most valuable thing to build. By the ranking in §6, they
-  were not.
+- The 4,253 passing tests (4,348 on this PR's head) prove the rules behave as
+  designed. They do not prove the rules were the most valuable thing to build. By
+  the ranking in §6, they were not.
 - "Zero false positives on 1,504 replayed records" measures that the rules do not
   reject legitimate work. It says nothing about whether the work was legitimate.
 - The evidence rate, the usage attribution and the attention ratio are properties
