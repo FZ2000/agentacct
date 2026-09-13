@@ -71,7 +71,9 @@ def _record_section(service, *, session, section_id, title, status, at, client="
             "client_transcript_id": session,
             "client_context_keys_authored": ["client_session_id", "client_transcript_id"],
             "project_dir": f"/tmp/{project}", "section_id": section_id, "section_status": status,
-            "section_title": title, "summary": summary, "kind": kind,
+            "section_title": title,
+            "summary": (summary or ("Recorded outcome for this fixture section." if status in {"completed", "handed_off"} else summary)),
+            "kind": kind,
             "files": ["src/mod.py"], "blocker": blocker, "next_step": None,
         },
     })
