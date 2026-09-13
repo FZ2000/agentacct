@@ -166,18 +166,24 @@ HOOK_CONTEXT_CLIENTS = ("claude-code", "codex")
 
 
 def _client_context_slug(client: str) -> str:
-    return "codex" if client == "codex" else "claude-code"
+    """The client name that owns a context slot, defaulting for anything else."""
+    return client if client in HOOK_CONTEXT_CLIENTS else HOOK_CONTEXT_CLIENTS[0]
 
 
 def claude_code_hook_context_path(store_dir: Path | str, client: str = "claude-code") -> Path:
-    """Legacy single-slot context path. ``client`` selects the per-client slot."""
-    if client == "claude-code":
+    """The single-slot context file for ``client``.
+
+    Claude Code keeps the historical path; every other client gets its own file
+    under ``client-context/`` so one client can never overwrite another's ids.
+    """
+    if _client_context_slug(client) == HOOK_CONTEXT_CLIENTS[0]:
         return Path(store_dir) / CLAUDE_CODE_HOOK_CONTEXT_RELATIVE_PATH
     return Path(store_dir) / "client-context" / f"{_client_context_slug(client)}.json"
 
 
 def claude_code_hook_context_dir(store_dir: Path | str, client: str = "claude-code") -> Path:
-    if client == "claude-code":
+    """The per-session slot directory for ``client`` (mirrors the path rule)."""
+    if _client_context_slug(client) == HOOK_CONTEXT_CLIENTS[0]:
         return Path(store_dir) / CLAUDE_CODE_HOOK_CONTEXT_DIR_RELATIVE_PATH
     return Path(store_dir) / "client-context" / _client_context_slug(client)
 
@@ -367,8 +373,8 @@ def _prune_hook_context_dir(
 def write_claude_code_hook_context(store_dir: Path | str, context: dict[str, Any], *, now: float | None = None) -> Path:
     current = time.time() if now is None else float(now)
     payload = {**context, "observed_at": current}
-    client = str(context.get("client") or "claude-code")
-    if client != "claude-code":
+    client = _client_context_slug(str(context.get("client") or "claude-code"))
+    if client != HOOK_CONTEXT_CLIENTS[0]:
         # A non-Claude client owns its own slot: the legacy path is Claude
         # Code's, and overwriting it would mis-attribute one client's session
         # id to the other.
