@@ -47,7 +47,7 @@ final class WorkTimelineTickTests: XCTestCase {
         let start = Date(timeIntervalSince1970: 1_789_234_567)
         let window = WorkTimelineInterval(lower: start.timeIntervalSince1970,
                                           upper: start.timeIntervalSince1970 + 7 * 86_400)
-        let ticks = WorkTimelineTimeAxis.ticks(in: window, width: 1600, minimumSpacing: 100, calendar: calendar)
+        let ticks = WorkTimelineTimeAxis.ticks(in: window, width: 1000, minimumSpacing: 100, calendar: calendar)
         XCTAssertEqual(ticks.step, 86_400)
         XCTAssertFalse(ticks.times.isEmpty)
         for tick in ticks.times {
@@ -63,14 +63,14 @@ final class WorkTimelineTickTests: XCTestCase {
         let window = WorkTimelineInterval(lower: start.timeIntervalSince1970,
                                           upper: start.timeIntervalSince1970 + 14 * 86_400)
         let base = WorkTimelineTimeAxis.ticks(in: window, width: 1000, minimumSpacing: 100, calendar: calendar)
-        XCTAssertEqual(base.step, 259_200)
+        XCTAssertEqual(base.step, 172_800)
         // Panning by one lattice period yields the same absolute marks shifted:
         // the lattice phase comes from the epoch, not from the window.
         let panned = WorkTimelineTimeAxis.ticks(
-            in: WorkTimelineInterval(lower: window.lower + 3 * 86_400, upper: window.upper + 3 * 86_400),
+            in: WorkTimelineInterval(lower: window.lower + 2 * 86_400, upper: window.upper + 2 * 86_400),
             width: 1000, minimumSpacing: 100, calendar: calendar)
         XCTAssertEqual(panned.step, base.step)
-        XCTAssertEqual(panned.times.map { $0 - 3 * 86_400 }, base.times)
+        XCTAssertEqual(panned.times.map { $0 - 2 * 86_400 }, base.times)
     }
 
     func testTickLabelsDependOnTimeAndStepNotWindowPosition() {
@@ -112,6 +112,59 @@ final class WorkTimelineTickTests: XCTestCase {
         XCTAssertEqual(WorkTimelineTimeAxis.tickLabel(midnight.timeIntervalSince1970, step: 86_400,
                                                       range: longRange, calendar: calendar),
                        reference("yMMMd", midnight))
+    }
+
+    func testStepDoesNotChangeWhenTheWindowCrossesMidnight() {
+        let calendar = calendar("America/Los_Angeles")
+        let day = Date(timeIntervalSince1970: 1_789_234_567)
+        let midnight = calendar.startOfDay(for: day).timeIntervalSince1970
+        let sameDay = WorkTimelineInterval(lower: midnight - 300, upper: midnight + 2_700)
+        let crossDay = WorkTimelineInterval(lower: midnight - 1_200, upper: midnight + 1_800)
+        let same = WorkTimelineTimeAxis.ticks(in: sameDay, width: 1000, minimumSpacing: 100, calendar: calendar)
+        let cross = WorkTimelineTimeAxis.ticks(in: crossDay, width: 1000, minimumSpacing: 100, calendar: calendar)
+        // The step depends only on span and width: crossing a day boundary
+        // changes labels, never the lattice.
+        XCTAssertEqual(same.step, cross.step)
+    }
+
+    func testPreEpochWindowsStillUseLocalMidnightLattice() {
+        let calendar = calendar("America/Chicago")
+        let start = Date(timeIntervalSince1970: -631_584_000) // 1950: far before the epoch
+        let window = WorkTimelineInterval(lower: start.timeIntervalSince1970,
+                                          upper: start.timeIntervalSince1970 + 7 * 86_400)
+        let ticks = WorkTimelineTimeAxis.ticks(in: window, width: 1000, minimumSpacing: 100, calendar: calendar)
+        XCTAssertEqual(ticks.step, 86_400)
+        XCTAssertFalse(ticks.times.isEmpty)
+        for tick in ticks.times {
+            XCTAssertEqual(Date(timeIntervalSince1970: tick),
+                           calendar.startOfDay(for: Date(timeIntervalSince1970: tick)))
+        }
+    }
+
+    func testPreEpochMultiDayLatticeUsesTheAbsolutePhase() {
+        let calendar = calendar("America/Chicago")
+        let start = Date(timeIntervalSince1970: -631_584_000) // 1950
+        let window = WorkTimelineInterval(lower: start.timeIntervalSince1970,
+                                          upper: start.timeIntervalSince1970 + 14 * 86_400)
+        let ticks = WorkTimelineTimeAxis.ticks(in: window, width: 1000, minimumSpacing: 100, calendar: calendar)
+        XCTAssertEqual(ticks.step, 172_800)
+        XCTAssertFalse(ticks.times.isEmpty)
+        for tick in ticks.times {
+            XCTAssertEqual(Date(timeIntervalSince1970: tick),
+                           calendar.startOfDay(for: Date(timeIntervalSince1970: tick)))
+        }
+        for (earlier, later) in zip(ticks.times, ticks.times.dropFirst()) {
+            XCTAssertEqual(later - earlier, 172_800, accuracy: 0.000_001)
+        }
+    }
+
+    func testExtremeSpansStillProduceFiniteBoundedTicks() {
+        let window = WorkTimelineInterval(lower: 1_789_234_567, upper: 1_789_234_567 + 1e12)
+        let ticks = WorkTimelineTimeAxis.ticks(in: window, width: 1000, minimumSpacing: 100)
+        XCTAssertTrue(ticks.step.isFinite && ticks.step > 0)
+        XCTAssertFalse(ticks.times.isEmpty)
+        XCTAssertLessThanOrEqual(ticks.times.count, 14)
+        XCTAssertTrue(ticks.times.allSatisfy(\.isFinite))
     }
 
     func testTickCountStaysBoundedByWidth() {

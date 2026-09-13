@@ -53,9 +53,7 @@ enum WorkTimelineTimeAxis {
         !calendar.isDate(Date(timeIntervalSince1970: range.lower), inSameDayAs: Date(timeIntervalSince1970: range.upper))
     }
     static func label(_ time: Double, range: WorkTimelineInterval) -> String {
-        let formatter = DateFormatter()
-        formatter.setLocalizedDateFormatFromTemplate(showsDates(in: range) ? "MMMdjm" : "jms")
-        return formatter.string(from: Date(timeIntervalSince1970: time))
+        formatter(template: showsDates(in: range) ? "MMMdjm" : "jms").string(from: Date(timeIntervalSince1970: time))
     }
 
     // MARK: Anchored ticks
@@ -70,31 +68,51 @@ enum WorkTimelineTimeAxis {
         7_776_000, 15_724_800, 31_557_600,
     ]
 
+    /// Date formatters are expensive to build and labels are regenerated on
+    /// every canvas update, so templates are cached per calendar and locale.
+    /// Main-thread-only use matches the views that call them.
+    nonisolated(unsafe) private static var formatterCache: [String: DateFormatter] = [:]
+
+    private static func formatter(template: String, calendar: Calendar = .current) -> DateFormatter {
+        let key = "\(template)|\(calendar.identifier)|\(calendar.timeZone.identifier)|\(Locale.current.identifier)|\(Locale.current.hourCycle)"
+        if let cached = formatterCache[key] { return cached }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        formatterCache[key] = formatter
+        return formatter
+    }
+
     /// The smallest step whose on-screen spacing stays readable at this scale.
+    /// The result is finite and positive for any input.
     static func tickStep(span: Double, width: Double, minimumSpacing: Double) -> Double {
         let span = span.isFinite && span > 0 ? span : 1
         let width = width.isFinite && width > 0 ? width : 1
         let spacing = minimumSpacing.isFinite && minimumSpacing > 0 ? minimumSpacing : 100
         let needed = span * spacing / width
-        for step in tickSteps where step >= needed { return step }
+        let target = needed.isFinite && needed > 0 ? needed : Double.greatestFiniteMagnitude / 4
+        for step in tickSteps where step >= target { return step }
         var step = tickSteps.last!
-        while step < needed { step *= 4 }
+        while step < target, step < 1e15 { step *= 4 }
         return step
     }
 
     /// Absolute tick times inside `window`. Sub-day steps anchor to epoch
-    /// multiples; day-and-larger steps align to local midnights. Panning the
-    /// window translates the same marks across the screen rather than
-    /// redividing the window at fixed positions.
+    /// multiples; day-and-larger steps align to local midnights. The step
+    /// depends only on span and width — never on the window's position — so
+    /// panning translates the same marks across the screen rather than
+    /// redividing or relabelling them.
     static func ticks(in window: WorkTimelineInterval, width: Double, minimumSpacing: Double,
                       calendar: Calendar = .current) -> (step: Double, times: [Double]) {
-        // A window crossing a day boundary needs wider, date-bearing labels.
-        let dated = showsDates(in: window, calendar: calendar)
-        let step = tickStep(span: window.span, width: width,
-                            minimumSpacing: dated ? minimumSpacing * 1.5 : minimumSpacing)
+        // Sanitize before any conversion so degenerate geometry can never
+        // crash or produce an unbounded loop.
+        let width = width.isFinite && width > 0 ? width : 1
+        let minimumSpacing = minimumSpacing.isFinite && minimumSpacing > 0 ? minimumSpacing : 100
+        let step = tickStep(span: window.span, width: width, minimumSpacing: minimumSpacing)
         let lower = min(window.lower, window.upper), upper = max(window.lower, window.upper)
         guard lower.isFinite, upper.isFinite else { return (step, []) }
-        let limit = max(2, Int(width / max(minimumSpacing, 1)) + 4)
+        let limit = max(2, Int(min(width / minimumSpacing, 1e6)) + 4)
         if step < 86_400 {
             var tick = (lower / step).rounded(.up) * step
             var times: [Double] = []
@@ -106,12 +124,12 @@ enum WorkTimelineTimeAxis {
         }
         // Day-level steps follow local midnights on an absolute lattice: the
         // phase is counted from the local epoch day, so panning the window
-        // never shifts where marks land.
-        let dayStep = max(1, Int((step / 86_400).rounded()))
+        // never shifts where marks land. The phase floors for pre-1970 dates.
+        let dayStep = max(1, Int(min(step / 86_400, 1e12).rounded()))
         let reference = calendar.startOfDay(for: Date(timeIntervalSince1970: 0))
         let lowerDay = calendar.startOfDay(for: Date(timeIntervalSince1970: lower))
-        let elapsedDays = max(0, calendar.dateComponents([.day], from: reference, to: lowerDay).day ?? 0)
-        var offset = (elapsedDays / dayStep) * dayStep
+        let elapsedDays = calendar.dateComponents([.day], from: reference, to: lowerDay).day ?? 0
+        var offset = elapsedDays - (((elapsedDays % dayStep) + dayStep) % dayStep)
         var times: [Double] = []
         while times.count < limit {
             guard let day = calendar.date(byAdding: .day, value: offset, to: reference) else { break }
@@ -128,18 +146,16 @@ enum WorkTimelineTimeAxis {
     /// reformatting happens only when zoom changes the step or day context.
     static func tickLabel(_ time: Double, step: Double, range: WorkTimelineInterval,
                           calendar: Calendar = .current) -> String {
-        let date = Date(timeIntervalSince1970: time)
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
+        let template: String
         if step >= 86_400 {
-            formatter.setLocalizedDateFormatFromTemplate(range.span > 400 * 86_400 ? "yMMMd" : "MMMdj")
-        } else if showsDates(in: range, calendar: calendar) || date == calendar.startOfDay(for: date) {
-            formatter.setLocalizedDateFormatFromTemplate("MMMdjm")
+            template = range.span > 400 * 86_400 ? "yMMMd" : "MMMdj"
+        } else if showsDates(in: range, calendar: calendar)
+                    || Date(timeIntervalSince1970: time) == calendar.startOfDay(for: Date(timeIntervalSince1970: time)) {
+            template = "MMMdjm"
         } else {
-            formatter.setLocalizedDateFormatFromTemplate(step < 60 ? "jms" : "jm")
+            template = step < 60 ? "jms" : "jm"
         }
-        return formatter.string(from: date)
+        return formatter(template: template, calendar: calendar).string(from: Date(timeIntervalSince1970: time))
     }
 }
 

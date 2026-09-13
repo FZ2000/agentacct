@@ -161,6 +161,51 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
         XCTAssertEqual(WorkTimeCanvasLayout.pannedWindow(window, by: .nan, within: full), window)
     }
 
+    func testEdgeRevealIsACappedFractionOfTheVisibleSpan() {
+        let window = WorkTimelineInterval(lower: 100, upper: 200)
+        // 15% of the span, independent of width or card size, so the canvas
+        // and the view clamp every produced window the same way.
+        XCTAssertEqual(WorkTimeCanvasLayout.edgeRevealTime(window: window),
+                       WorkTimeCanvasLayout.maximumEdgeRevealFraction * 100, accuracy: 0.000_001)
+        // Degenerate spans stay finite and positive.
+        XCTAssertEqual(WorkTimeCanvasLayout.edgeRevealTime(window: .init(lower: 0, upper: .nan)),
+                       WorkTimeCanvasLayout.maximumEdgeRevealFraction, accuracy: 0.000_001)
+    }
+
+    func testExpandedDomainAddsTheEdgeRevealWithinBounds() {
+        let full = WorkTimelineInterval(lower: 100, upper: 200)
+        XCTAssertEqual(WorkTimeCanvasLayout.expandedDomain(full, by: 10), .init(lower: 90, upper: 210))
+        XCTAssertEqual(WorkTimeCanvasLayout.expandedDomain(full, by: 0), full)
+        XCTAssertEqual(WorkTimeCanvasLayout.expandedDomain(full, by: .nan), full)
+        XCTAssertEqual(WorkTimeCanvasLayout.expandedDomain(full, by: -.infinity), full)
+    }
+
+    func testExpandedDomainFallsBackWhenEndpointsOrSpanOverflow() {
+        let belowZero = WorkTimelineInterval(lower: -.greatestFiniteMagnitude, upper: -.greatestFiniteMagnitude / 2)
+        XCTAssertEqual(WorkTimeCanvasLayout.expandedDomain(belowZero, by: 1), belowZero)
+        // Finite endpoints whose span overflows also fall back instead of
+        // defeating the zoom-out bound.
+        let wide = WorkTimelineInterval(lower: -8e307, upper: 8e307)
+        XCTAssertEqual(WorkTimeCanvasLayout.expandedDomain(wide, by: 2.4e307), wide)
+    }
+
+    func testPanningReachesTheEdgeRevealSoTheFirstCardFitsInFull() throws {
+        let full = WorkTimelineInterval(lower: 100, upper: 200)
+        let window = WorkTimelineInterval(lower: 100, upper: 130)
+        let reveal = WorkTimeCanvasLayout.edgeRevealTime(window: window)
+        let domain = WorkTimeCanvasLayout.expandedDomain(full, by: reveal)
+        let earliest = WorkTimeCanvasLayout.pannedWindow(window, by: -1_000, within: domain)
+
+        XCTAssertEqual(earliest.lower, full.lower - reveal, accuracy: 0.000_001)
+        // A record at the recorded domain's lower bound lands at least half a
+        // 200pt card inside a 1000pt viewport at the extreme position.
+        let layout = WorkTimeCanvasLayout(records: [record("first", start: 100)],
+            window: earliest, width: 1000, height: 420)
+        let item = try XCTUnwrap(layout.visibleCards(in: 1000).first)
+        XCTAssertGreaterThanOrEqual(item.frame.minX, 0, "the first card is fully inside at the extreme")
+        XCTAssertEqual(item.frame.minX, 50, accuracy: 0.000_001)
+    }
+
     func testZoomKeepsPointerTimeAnchoredUntilDomainEdgeRequiresClamping() {
         let window = WorkTimelineInterval(lower: 120, upper: 180)
         let zoomed = WorkTimeCanvasLayout.zoomedWindow(window, factor: 2, anchorFraction: 0.25, within: full)
@@ -218,6 +263,21 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
         for invalid in invalidLatest {
             XCTAssertEqual(WorkTimeCanvasLayout.latestWindow(within: domain, latest: invalid).upper, domain.upper)
         }
+    }
+
+    func testCrossingClusterSpansAreRetainedForDrawing() {
+        // Five records far before the window merge into a cluster whose
+        // recorded extent crosses it; its members still need drawn spans even
+        // though its card is offscreen.
+        var records = (0..<5).map { record("old-\($0)", start: 50, end: 250) }
+        records.append(record("inside", start: 190))
+        let layout = WorkTimeCanvasLayout(records: records, window: full, width: 1000, height: 420)
+        let crossing = layout.crossingSpans(in: 1000)
+        XCTAssertTrue(crossing.contains {
+            $0.isCluster && $0.timeBounds.upper >= full.lower && $0.timeBounds.lower <= full.upper
+        }, "a crossing cluster stays available for span drawing")
+        let crossingIDs = crossing.flatMap(\.recordIDs)
+        XCTAssertEqual(Set(crossingIDs).count, crossingIDs.count, "no member is drawn twice")
     }
 
     private func assertReadable(

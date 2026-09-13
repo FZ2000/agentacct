@@ -39,6 +39,13 @@ struct WorkTimeCanvasLayout {
     /// the full recorded domain.
     static let minimumVisibleSpan = 5.0
 
+    /// Upper bound on the extra time the viewport may show beyond the recorded
+    /// domain. Cards are centered on their timestamps, so the earliest and
+    /// latest records need up to half a card of margin to be shown in full at
+    /// the extreme positions — without it, their edge half is unreachable.
+    /// Capping the margin keeps the maximum zoom-out bounded.
+    static let maximumEdgeRevealFraction = 0.15
+
     init(
         records: [WorkTimelineRecord],
         window: WorkTimelineInterval,
@@ -83,8 +90,16 @@ struct WorkTimeCanvasLayout {
             if start <= window.upper, end >= window.lower { visibleCount += 1 }
             candidates.append(Group(recordIDs: [record.id], lower: start, upper: end))
         }
-        candidates.sort {
-            $0.lower == $1.lower ? $0.recordIDs[0] < $1.recordIDs[0] : $0.lower < $1.lower
+        // The projection already orders records chronologically, so the sort
+        // is a safety net for arbitrary callers. Verifying order costs O(n)
+        // versus O(n log n) for a sort that reruns on every drag frame.
+        var ordered = true
+        for (previous, next) in zip(candidates, candidates.dropFirst()) where Self.precedes(next, previous) {
+            ordered = false
+            break
+        }
+        if !ordered {
+            candidates.sort(by: Self.precedes)
         }
         self.visibleRecordCount = visibleCount
         self.undatedRecordIDs = undated.sorted()
@@ -149,6 +164,28 @@ struct WorkTimeCanvasLayout {
             end = full.upper
         }
         return clampedWindow(.init(lower: end - duration, upper: end), to: full)
+    }
+
+    /// The pannable domain: the recorded range plus a small edge margin so a
+    /// card centered on the first or last record is fully reachable. Extremes
+    /// that would overflow fall back to the unexpanded domain.
+    static func expandedDomain(_ full: WorkTimelineInterval, by reveal: Double) -> WorkTimelineInterval {
+        let full = normalizedDomain(full)
+        let reveal = reveal.isFinite && reveal > 0 ? reveal : 0
+        let lower = full.lower - reveal, upper = full.upper + reveal
+        guard lower.isFinite, upper.isFinite, lower < upper, (upper - lower).isFinite else { return full }
+        return .init(lower: lower, upper: upper)
+    }
+
+    /// How far the viewport may pan beyond the recorded domain: a capped
+    /// fraction of the visible span. The same formula clamps the canvas and
+    /// the view, so a window produced by one is never re-clamped by the other.
+    /// At ordinary widths the cap exceeds half a card, so a card centered on
+    /// the first or last record still fits in full at the extreme.
+    static func edgeRevealTime(window: WorkTimelineInterval) -> Double {
+        let rawSpan = window.span
+        let span = rawSpan.isFinite && rawSpan > 0 ? rawSpan : 1
+        return maximumEdgeRevealFraction * span
     }
 
     /// Constrain a requested window to the domain, preserving its span where
@@ -234,6 +271,13 @@ struct WorkTimeCanvasLayout {
         var recordIDs: [String]
         var lower: Double
         var upper: Double
+    }
+
+    /// Chronological packing order: by start time, then by first member ID so
+    /// ties stay deterministic. Shared by the ordering fast-path and the sort
+    /// fallback so the two can never drift apart.
+    private static func precedes(_ lhs: Group, _ rhs: Group) -> Bool {
+        lhs.lower == rhs.lower ? lhs.recordIDs[0] < rhs.recordIDs[0] : lhs.lower < rhs.lower
     }
 
     private struct PlacedGroup {

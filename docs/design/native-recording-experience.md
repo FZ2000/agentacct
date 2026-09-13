@@ -75,9 +75,11 @@ pixel-reference approvals. The records in these two examples differ.
 
 System-reserved modified wheel gestures remain available to macOS. The visible
 window never shrinks below a five-second span, keeping the axis and the
-overview control meaningful. Geometry and
-native input have separate tests; real interaction checks are recorded separately
-from simulated events. No measured FPS or full VoiceOver certification is claimed.
+overview control meaningful, and may pan a small capped margin beyond the
+recorded range so a card centered on the first or last record stays fully
+reachable. Geometry and native input have separate tests; real interaction
+checks are recorded separately from simulated events. No measured FPS or full
+VoiceOver certification is claimed.
 
 ## Review the change in this order
 

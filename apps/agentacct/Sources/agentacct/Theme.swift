@@ -1270,3 +1270,16 @@ struct ScrollContentStack<Content: View>: View {
         }
     }
 }
+
+extension WorkTimelineRecord {
+    /// The shared card-text color for a record: superseded or dispositioned
+    /// records stay muted, current failures are coral, steps use the accent and
+    /// everything else uses ink. One definition serves the canvas cards and
+    /// the detail region so the two cannot drift apart. Axis stems and span
+    /// lines deliberately keep their own failure/accent palette.
+    var presentationTint: Color {
+        if superseded || disposition != nil { return Theme.muted }
+        if isCurrentFailure { return Theme.coral }
+        return kind == .step ? Theme.accent : Theme.ink
+    }
+}

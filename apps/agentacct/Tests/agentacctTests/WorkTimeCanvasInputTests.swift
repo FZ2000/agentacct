@@ -32,7 +32,9 @@ final class WorkTimeCanvasInputTests: XCTestCase {
         XCTAssertNil(scroll(x: .infinity, y: 0))
         XCTAssertNil(scroll(x: 12, y: .nan))
         XCTAssertNil(scroll(x: 0, y: 0))
-        XCTAssertNil(scroll(x: .greatestFiniteMagnitude, y: 0, precise: false))
+        // An extreme but finite device delta saturates at the factor bound
+        // instead of overflowing to a pass-through event.
+        XCTAssertEqual(scroll(x: .greatestFiniteMagnitude, y: 0, precise: false), 1.33)
     }
 
     func testPinchScaleAndAnchorUseBoundedFiniteValues() throws {
@@ -173,6 +175,26 @@ final class WorkTimeCanvasInputTests: XCTestCase {
             let outsidePoint = view.convert(CGPoint(x: -10, y: 40), to: parent)
             XCTAssertNil(view.hitTest(outsidePoint))
         }
+    }
+
+    @MainActor func testBlankDragReportsCumulativeTranslationForGestureScopedPans() {
+        var drags: [Double] = []
+        var interactions = 0
+        let view = WorkTimeCanvasInputView(configuration: WorkTimeCanvasInput(interactiveRegions: [],
+            onPan: { _ in }, onDrag: { drags.append($0) }, onZoom: { _, _ in }, onInteraction: { interactions += 1 },
+            onBackgroundClick: {}) { Color.clear })
+        view.frame = CGRect(x: 0, y: 0, width: 400, height: 180)
+        let down = CanvasEvent(); down.testLocation = CGPoint(x: 100, y: 50)
+        view.mouseDown(with: down)
+        let dragged = CanvasEvent(); dragged.testLocation = CGPoint(x: 110, y: 50)
+        view.mouseDragged(with: dragged)
+        dragged.testLocation.x = 120
+        view.mouseDragged(with: dragged)
+        view.mouseUp(with: dragged)
+        // The translation is measured from gesture start, so the receiver can
+        // resolve every event against one base window even if commits lag.
+        XCTAssertEqual(drags, [10, 20])
+        XCTAssertEqual(interactions, 1)
     }
 
     @MainActor func testClickJitterDoesNotPanButBlankDragDoes() {

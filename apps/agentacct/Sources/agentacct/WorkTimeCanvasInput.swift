@@ -10,11 +10,13 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
     @Environment(\.self) private var environment
     var interactiveRegions: [CGRect]
     var onPan: (Double) -> Void
+    var onDrag: ((Double) -> Void)?
     var onZoom: (Double, Double) -> Void
     var onInteraction: (() -> Void)?
     var onEdge: ((Bool) -> Void)?
     var onDismiss: (() -> Void)?
     var onBackgroundClick: (() -> Void)?
+    var onGestureBegan: (() -> Void)?
     var onGestureEnded: (() -> Void)?
     var onGestureCancelled: (() -> Void)?
     var accessibilityValue: String
@@ -26,16 +28,19 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
     }
 
     init(interactiveRegions: [CGRect], onPan: @escaping (Double) -> Void,
+         onDrag: ((Double) -> Void)? = nil,
          onZoom: @escaping (Double, Double) -> Void, onInteraction: (() -> Void)? = nil,
          onEdge: ((Bool) -> Void)? = nil, onDismiss: (() -> Void)? = nil,
-         onBackgroundClick: (() -> Void)? = nil, onGestureEnded: (() -> Void)? = nil,
+         onBackgroundClick: (() -> Void)? = nil, onGestureBegan: (() -> Void)? = nil,
+         onGestureEnded: (() -> Void)? = nil,
          onGestureCancelled: (() -> Void)? = nil, accessibilityValue: String = "",
          accessibilityIdentifier: String = "work.timeline.navigation",
          @ViewBuilder content: () -> Content) {
         self.interactiveRegions = interactiveRegions
-        self.onPan = onPan; self.onZoom = onZoom; self.onInteraction = onInteraction
+        self.onPan = onPan; self.onDrag = onDrag; self.onZoom = onZoom; self.onInteraction = onInteraction
         self.onEdge = onEdge; self.onDismiss = onDismiss
-        self.onBackgroundClick = onBackgroundClick; self.onGestureEnded = onGestureEnded
+        self.onBackgroundClick = onBackgroundClick; self.onGestureBegan = onGestureBegan
+        self.onGestureEnded = onGestureEnded
         self.onGestureCancelled = onGestureCancelled
         self.accessibilityValue = accessibilityValue; self.accessibilityIdentifier = accessibilityIdentifier
         self.content = content()
@@ -95,7 +100,10 @@ enum WorkTimeCanvasInputIntent {
             delta = deltaY != 0 ? deltaY : deltaX
         }
         guard delta != 0 else { return nil }
-        let factor = exp(delta * (precise ? 0.004 : 0.12))
+        // Clamp before exponentiating so an extreme device delta saturates at
+        // the factor bounds instead of overflowing to a pass-through event.
+        let bounded = min(max(delta, -100), 100)
+        let factor = exp(bounded * (precise ? 0.004 : 0.12))
         guard factor.isFinite, factor > 0 else { return nil }
         return min(max(factor, 0.75), 1.33)
     }
@@ -254,6 +262,7 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         dragStart = convert(event.locationInWindow, from: nil)
         lastDragX = dragStart!.x
         dragging = false
+        configuration.onGestureBegan?()
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -266,9 +275,15 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
             configuration.onInteraction?()
             NSCursor.closedHand.set()
         }
-        let delta = point.x - lastDragX
-        lastDragX = point.x
-        if delta != 0 { configuration.onPan(delta) }
+        if let onDrag = configuration.onDrag {
+            // Cumulative translation from gesture start; the receiver resolves
+            // it against its gesture-start state.
+            onDrag(point.x - dragStart.x)
+        } else {
+            let delta = point.x - lastDragX
+            lastDragX = point.x
+            if delta != 0 { configuration.onPan(delta) }
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
