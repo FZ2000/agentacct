@@ -17,7 +17,11 @@ is reported as a single line and exits 2 rather than raising.
 The read-only audit above needs only the standard library. ``--replay`` sends
 every stored record back through the live write path, which imports agentacct,
 so that mode needs the project environment
-(``python3 -m venv .venv && .venv/bin/python -m pip install -e . pytest``).
+(``python3 -m venv .venv && .venv/bin/python -m pip install -e . pytest``). This
+script puts its own checkout's ``src/`` first (like verify-fixes.py and
+demo-data-quality.py), so ``--replay`` tests THIS tree's rules even when an
+older agentacct is installed; if the rules cannot be imported it errors and
+exits non-zero rather than reporting a falsely-clean ``refused: 0``.
 """
 
 from __future__ import annotations
@@ -26,11 +30,21 @@ import argparse
 import collections
 import json
 import os
+import pathlib
 import re
 import sqlite3
 import statistics
 import sys
 from typing import Any
+
+# Put this checkout's src/ first so --replay exercises THIS tree's write path,
+# not an installed or editable agentacct that may predate the rules. Without
+# this, the tool could import an older agentacct whose MCP server has no
+# semantic rules, accept every record, and print "refused: 0" -- a false clean
+# against the wrong code. The sibling tools do the same; see _rules_provenance
+# below for the guard that turns a still-wrong import into a loud failure.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 DEFAULT_DB = "~/.local/state/agentacct/state/events.sqlite3"
 
@@ -434,6 +448,34 @@ def choke_point_replay(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def rules_provenance() -> dict[str, Any]:
+    """Which agentacct will --replay import, and does it carry the rules?
+
+    A replay is only meaningful against a tree that has the semantic rules. If
+    the imported agentacct predates them, the write path has no rules, accepts
+    everything, and reports a falsely-clean ``refused: 0``. Report the resolved
+    location and whether ``agentacct.semantic_rules`` imports, so both the
+    reader and ``main`` can tell a real green from a green against the wrong
+    code.
+    """
+    try:
+        import agentacct
+    except ImportError as exc:
+        return {"importable": False, "reason": f"agentacct not importable: {exc}"}
+    package_dir = os.path.dirname(getattr(agentacct, "__file__", "") or "")
+    try:
+        import agentacct.semantic_rules  # noqa: F401
+    except ImportError:
+        rules_present = False
+    else:
+        rules_present = True
+    return {
+        "importable": True,
+        "package_dir": package_dir,
+        "rules_module_present": rules_present,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", default=DEFAULT_DB, help=f"ledger SQLite path (default: {DEFAULT_DB})")
@@ -463,16 +505,46 @@ def main() -> int:
         "sections": section_findings(sections, checks),
         "machine_checks": check_findings(sections, checks),
         "ui_projection": projection_findings(events),
-        "choke_point_replay": choke_point_replay(events) if args.replay else {"skipped": "pass --replay"},
-        "replay": replay_findings(events) if args.replay else {"skipped": "pass --replay to check stored records against the current rules"},
     }
+
+    replay_exit = 0
+    if not args.replay:
+        skip = {"skipped": "pass --replay to check stored records against the current rules"}
+        audit["choke_point_replay"] = {"skipped": "pass --replay"}
+        audit["replay"] = skip
+    else:
+        provenance = rules_provenance()
+        audit["agentacct_under_test"] = provenance
+        if provenance.get("importable") and provenance.get("rules_module_present"):
+            audit["choke_point_replay"] = choke_point_replay(events)
+            audit["replay"] = replay_findings(events)
+        else:
+            # Refuse to report a replay result against code that has no rules: a
+            # green here would be a false clean, the exact failure this tool
+            # exists to catch. Say what was imported and exit non-zero.
+            reason = provenance.get("reason") or (
+                "agentacct.semantic_rules not importable from "
+                f"{provenance.get('package_dir')!r}: --replay would exercise a "
+                "write path with no rules and report a false 'refused: 0'. Run "
+                "from the checkout root, or put its src/ first on PYTHONPATH."
+            )
+            error = {"error": reason}
+            audit["choke_point_replay"] = error
+            audit["replay"] = error
+            replay_exit = 3
 
     print(json.dumps(audit, indent=2, sort_keys=False))
     if args.json_path:
         with open(os.path.expanduser(args.json_path), "w", encoding="utf-8") as handle:
             json.dump(audit, handle, indent=2)
         print(f"\nwrote {args.json_path}", file=sys.stderr)
-    return 0
+    if replay_exit:
+        print(
+            "error: --replay could not confirm it was testing this checkout's "
+            "rules; see audit['replay']['error'] above.",
+            file=sys.stderr,
+        )
+    return replay_exit
 
 
 if __name__ == "__main__":
