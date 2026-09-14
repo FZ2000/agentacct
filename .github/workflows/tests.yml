@@ -48,8 +48,8 @@ jobs:
   # command under the release toolchain so that class of break fails at PR
   # time. Move the pinned version when the release machine updates.
   macos-release-build:
-    name: macOS release build (Xcode 26.3)
-    runs-on: macos-26
+    name: macOS release build (macOS 15.7, Xcode 26.3)
+    runs-on: macos-15
     timeout-minutes: 15
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
