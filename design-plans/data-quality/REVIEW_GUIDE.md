@@ -124,6 +124,20 @@ including the before/after of the session-link fix and the upgrade path for a
 machine that already has the old Codex config. Output committed at
 `design-plans/data-quality/evidence/VERIFICATION.txt`.
 
+To watch the loop a user and an agent are actually in — the refusal, the retry
+that fixes it, what the card and the receipt then render — and to see the search
+for what is still wrong:
+
+```sh
+.venv/bin/python design-plans/data-quality/tools/demo-data-quality.py
+```
+
+Parts 1-3 are assertions and exit non-zero if any stops holding;
+`tests/test_data_quality_demo.py` runs them in CI. **Part 4 is a falsification
+run, not a certificate:** it goes looking for remaining defects and prints what
+it finds, with live counts from the installed ledger. Read Part 4 before
+believing Parts 1-3, and see "What this PR does not prove" below.
+
 To check the rules against real data rather than fixtures:
 
 ```sh
