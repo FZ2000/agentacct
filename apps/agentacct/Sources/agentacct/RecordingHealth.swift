@@ -17,10 +17,15 @@ enum RecordingHealthTone: String, Equatable, Codable {
 enum RecordingHealthAction: String, Equatable, Codable {
     case setup, sources, refresh
 
+    /// One verb per destination, and every destination is a place that
+    /// exists: "Connections" is the setup flow this action opens (reachable
+    /// from Sources and from the health popover), and "Sources" is the tab.
+    /// The pair used to read "Open Connections" / "View Sources", two verbs
+    /// for two places, one of which a reviewer could not find (K53).
     var title: String {
         switch self {
-        case .setup: return "Open Connections"
-        case .sources: return "View Sources"
+        case .setup: return "Open recording setup"
+        case .sources: return "Open Sources"
         case .refresh: return "Check again"
         }
     }
@@ -67,7 +72,8 @@ struct RecordingClientCapture: Equatable, Identifiable {
     let requiredAfter: Date?
     let confirmed: Bool
 
-    var title: String { recordingHealthClientName(id) }
+    /// The mono client slug is the client identity everywhere (C54).
+    var title: String { id }
     var status: String { confirmed ? "Capture observed" : "Awaiting capture confirmation" }
 }
 
@@ -82,6 +88,10 @@ struct RecordingHealthSnapshot: Equatable {
     /// Missing or failed fetches cannot resolve a previous ingestion fault.
     let resolutionScopes: Set<RecordingHealthScope>
     var resolutionExclusions: Set<String> = []
+    /// Whether the local recorder answered. This is the ONLY fact that may
+    /// turn the top bar's freshness dot green (K02); a reachable endpoint is
+    /// still not proof of capture, which the dimensions state separately.
+    var endpointReachable = false
 
     @MainActor
     static func project(
@@ -153,7 +163,7 @@ struct RecordingHealthSnapshot: Equatable {
             }
             let watcher = ingestion.watcher?.state
             if watcher != "running" { resolutionExclusions.insert("ingestion:watcher") }
-            dimensions.append(.init(id: "imports", title: "Continuous import", value: watcherValue(watcher), detail: "Importer state reported by the recorder. A successful scan can contain only older records.", tone: watcher == "running" ? .positive : .caution))
+            dimensions.append(.init(id: "imports", title: "Continuous import", value: PayloadAbsence.text(ingestion.watcher?.stateTitle) ?? "Watcher state not reported", detail: "Importer state reported by the recorder. A successful scan can contain only older records.", tone: watcher == "running" ? .positive : .caution))
             if watcher == "stopped" || watcher == "stale" || (ingestion.issues ?? []).contains(where: { $0.code == "watcher_stale" }) {
                 causes.append(.init(id: "ingestion:watcher", scope: .ingestion, title: "Continuous import needs attention", detail: watcher == "stopped" ? "The import watcher is stopped. New usage may be delayed." : "The import watcher heartbeat is stale. New usage may be delayed.", tone: .caution, action: .setup, affectedSources: [], recoveryDetail: "The recorder reports a running import watcher. Check client capture separately; the exact bounds of any missed recording remain unknown."))
             }
@@ -186,17 +196,7 @@ struct RecordingHealthSnapshot: Equatable {
             title = "Waiting for client capture"
             tone = .neutral
         }
-        return .init(title: title, tone: tone, dimensions: dimensions, clients: clients, causes: causes, resolutionScopes: resolutionScopes, resolutionExclusions: resolutionExclusions)
-    }
-
-    private static func watcherValue(_ state: String?) -> String {
-        switch state {
-        case "running": return "Watcher running"
-        case "stale": return "Watcher heartbeat stale"
-        case "stopped": return "Watcher stopped"
-        case "not_configured": return "Watcher not configured"
-        default: return "Watcher state unknown"
-        }
+        return .init(title: title, tone: tone, dimensions: dimensions, clients: clients, causes: causes, resolutionScopes: resolutionScopes, resolutionExclusions: resolutionExclusions, endpointReachable: endpointReachable)
     }
 
     static func groupedIssues(_ issues: [V1IngestionIssue]) -> [RecordingHealthCause] {
@@ -295,14 +295,62 @@ final class RecordingHealthCoordinator {
     }
 }
 
-func recordingHealthClientName(_ id: String) -> String {
-    switch id {
-    case "claude-code", "claude_code", "claude": return "Claude Code"
-    case "codex": return "Codex"
-    case "opencode": return "OpenCode"
-    case "openclaw": return "OpenClaw"
-    case "hermes": return "Hermes"
-    case "cursor": return "Cursor"
-    default: return id
+/// What the top bar's freshness dot and caption may claim (K02).
+///
+/// The dot used to be `Theme.green` whenever `lastUpdated` existed, so it went
+/// on claiming a live connection beside "Recorder unreachable" and beside a
+/// failed refresh. `Theme` reserves green for live-connection facts and
+/// externally verified evidence, so green here has exactly one meaning: the
+/// recorder answered AND the last refresh of this window's data succeeded.
+///
+/// The time itself is never dropped or dashed — a non-live state names itself
+/// and keeps its age ("refresh failed · 4m ago").
+struct TopBarFreshness: Equatable {
+    enum State: Equatable {
+        /// Recorder reachable and the last refresh succeeded.
+        case live
+        /// The recorder answered, but a lane of the last refresh failed.
+        case refreshFailed
+        /// The recorder did not answer, so nothing on screen is live.
+        case notReachable
+    }
+
+    let state: State
+
+    init(reachable: Bool, lastRefreshFailed: Bool) {
+        if lastRefreshFailed {
+            state = .refreshFailed
+        } else if !reachable {
+            state = .notReachable
+        } else {
+            state = .live
+        }
+    }
+
+    /// Only `.live` may wear the reserved green fill.
+    var isLive: Bool { state == .live }
+
+    /// The words before the age. A named state, never a dash.
+    var label: String {
+        switch state {
+        case .live: return "Local data"
+        case .refreshFailed: return "refresh failed"
+        case .notReachable: return "recorder unreachable"
+        }
+    }
+
+    /// The caption. The compact form drops only the "Local data ·" prefix —
+    /// a failure state keeps its words at every width (C81).
+    func caption(age: String, compact: Bool) -> String {
+        if isLive && compact { return age }
+        return "\(label)\(FreshnessVocabulary.separator)\(age)"
+    }
+
+    func accessibilityLabel(age: String) -> String {
+        switch state {
+        case .live: return "Local data updated \(age)"
+        case .refreshFailed: return "Local data refresh failed, last updated \(age)"
+        case .notReachable: return "Recorder unreachable, local data last updated \(age)"
+        }
     }
 }

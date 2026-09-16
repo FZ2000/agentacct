@@ -341,9 +341,9 @@ text sizes, and both appearances; transient states render at the standard viewpo
 | expanded check history | 760 × 1450 pt, light/dark | `work-session-steps-expanded-history-*.png` |
 | session load failure | 760 × 240 pt, light/dark | `work-session-steps-load-failure-*.png` |
 | in-place Retry progress | 760 × 240 pt, light/dark | `work-session-steps-retrying-*.png` |
-| compact check preview | 360 × 1600 pt, light/dark | `work-session-steps-compact-checks-*.png` |
+| compact check preview | 360 × 1700 pt, light/dark | `work-session-steps-compact-checks-*.png` |
 | Arabic RTL/mixed-text stress | 760 × 1250 pt, light/dark | `work-session-steps-rtl-stress-*.png` |
-| accessibility5 compact and Arabic RTL stress | 360 × 4000 pt, light/dark | `work-session-steps-{compact,rtl}-accessibility-*.png` |
+| accessibility5 compact and Arabic RTL stress | 360 × 7200 pt, light/dark | `work-session-steps-{compact,rtl}-accessibility-*.png` |
 
 For an ad-hoc render that does not compare or update references:
 
@@ -371,8 +371,8 @@ harness never depends on the current checkout, machine settings, or wall clock.
 
 | Artifact | Appearance | Pixel size |
 | --- | --- | --- |
-| `menu-connected-sparse-light.png` | sparse, light | 720 × 880 px |
-| `menu-connected-sparse-dark.png` | sparse, dark | 720 × 880 px |
+| `menu-connected-sparse-light.png` | sparse, light | 720 × 982 px |
+| `menu-connected-sparse-dark.png` | sparse, dark | 720 × 982 px |
 | `menu-connected-dense-light.png` | dense, light | 720 × 928 px |
 | `menu-connected-dense-dark.png` | dense, dark | 720 × 928 px |
 
@@ -421,8 +421,8 @@ diagnostics, recovery guidance, and retry controls.
 
 | Artifact | Appearance | Pixel size |
 | --- | --- | --- |
-| `setup-failure-light.png` | light | 920 × 1028 px |
-| `setup-failure-dark.png` | dark | 920 × 1028 px |
+| `setup-failure-light.png` | light | 920 × 1044 px |
+| `setup-failure-dark.png` | dark | 920 × 1044 px |
 
 Run the canonical pair with:
 

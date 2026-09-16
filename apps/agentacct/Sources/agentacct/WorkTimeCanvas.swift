@@ -18,7 +18,14 @@ struct WorkTimeCanvas: View {
     let onHold: () -> Void
     var focusRecordID: String? = nil
     var focusRequest = 0
+    /// Keyboard focus moved onto a card. The page scrolls the canvas into
+    /// view, so a Tab stop can never sit behind the toolbar or below the fold
+    /// (K115).
+    var onFocusEnter: (() -> Void)? = nil
     var compact = false
+    /// False when the whole task (unfiltered) has a single lane: every card's
+    /// lane caption would then repeat the same text (C114).
+    var showsLaneCaptions = true
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var systemScale: CGFloat = 1
     @State private var lastTriggerID: String?
@@ -30,17 +37,80 @@ struct WorkTimeCanvas: View {
     private var scale: Double {
         Double(WorkTypeScale.resolved(base: 1, systemScaled: systemScale, dynamicTypeSize: dynamicTypeSize))
     }
+    /// A lane caption earns its line only when it tells cards apart: with one
+    /// lane in the task (C114) — or many lanes that all carry the same caption,
+    /// which is how every card ended up repeating the task's own title (K18) —
+    /// the caption is noise. Computed from the loaded records, not the visible
+    /// ones, so panning never adds or drops a line.
+    private var showsCaptions: Bool {
+        showsLaneCaptions && Set(records.map(\.laneTitle)).count > 1
+    }
     private var canvasHeight: Double { max(compact ? 280 : 420, WorkTimeCanvasLayout.minimumHeight(textScale: scale)) }
+
+    /// The reducer's words for a lane, taken from the records in it. Nothing
+    /// is invented: a payload that carries no `lane_label` draws no caption
+    /// (and the gutter then takes no width at all).
+    private func laneCaption(_ band: WorkTimelineLaneBand) -> String? {
+        // The work side holds more than one reducer lane (`primary` and
+        // `supporting`). Naming it after whichever record happened to be first
+        // would mislabel the other, so every label present is listed, in the
+        // order the records arrive.
+        var seen = Set<String>()
+        let labels = records.compactMap { record -> String? in
+            guard record.laneBand == band, let label = record.laneLabel,
+                  seen.insert(label).inserted else { return nil }
+            return label
+        }
+        return labels.isEmpty ? nil : labels.joined(separator: " · ")
+    }
+    private var laneCaptions: [(band: WorkTimelineLaneBand, text: String)] {
+        WorkTimelineLaneBand.allCases.compactMap { band in
+            laneCaption(band).map { (band: band, text: $0) }
+        }
+    }
+    private var laneGutterWidth: Double { laneCaptions.isEmpty ? 0 : 72 * scale }
+
+    /// PERMANENT lane labels beside the axis. The canvas's vertical axis
+    /// carries the reducer's two-lane grammar (work above, check evidence
+    /// below); unlabelled, that split was a shape a reader had to guess at.
+    /// The captions sit outside the plot, so they can never cover a card.
+    private var laneGutter: some View {
+        let height = canvasHeight
+        let axis = WorkTimeCanvasLayout.axisY(height: height, textScale: scale)
+        return ZStack(alignment: .topLeading) {
+            Color.clear
+            ForEach(laneCaptions, id: \.band) { lane in
+                Text(lane.text)
+                    .workFont(.caption).foregroundStyle(Theme.muted)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    .frame(width: laneGutterWidth,
+                           height: max(lane.band.isAbove ? axis - 6 : height - axis - 6, 0),
+                           alignment: lane.band.isAbove ? .bottomLeading : .topLeading)
+                    .offset(y: lane.band.isAbove ? 0 : axis + 6)
+            }
+        }
+        .frame(width: laneGutterWidth, height: height)
+        .accessibilityHidden(true)  // every card already speaks its own lane
+    }
 
     var body: some View {
         VStack(spacing: 8) {
             if dynamicTypeSize.isAccessibilitySize {
                 WorkTimeWindowScroller(records: records, full: full, window: window, domain: scrollerDomain, onWindow: onWindow)
             }
+            HStack(alignment: .top, spacing: laneGutterWidth > 0 ? 6 : 0) {
+            if laneGutterWidth > 0 { laneGutter }
             GeometryReader { geometry in
                 let width = Double(geometry.size.width)
                 let indexedRecords = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-                let layout = WorkTimeCanvasLayout(records: records, window: window,
+                // The plot maps slightly more time than the requested window:
+                // half a card at each edge, so a card centered on the first or
+                // last record in view is drawn in full instead of being sliced
+                // by the plot edge (K18). Every window the page computes —
+                // initial, latest, focused, zoomed-out, restored — inherits it.
+                let plotWindow = WorkTimeCanvasLayout.edgeRevealedWindow(window,
+                    width: width, cardWidth: min(200 * scale, width))
+                let layout = WorkTimeCanvasLayout(records: records, window: plotWindow,
                     width: width, height: canvasHeight, textScale: scale)
                 let visibleCards = layout.visibleCards(in: width)
                 let crossingSpans = layout.crossingSpans(in: width)
@@ -49,18 +119,31 @@ struct WorkTimeCanvas: View {
                 // full; placement itself stays anchored to absolute time.
                 let edgeDomain = WorkTimeCanvasLayout.expandedDomain(full,
                     by: WorkTimeCanvasLayout.edgeRevealTime(window: window, width: width, cardWidth: layout.cardWidth))
-                let tickMarkings = WorkTimelineTimeAxis.ticks(in: window, width: width, minimumSpacing: 140 * scale)
-                input(items: visibleCards, window: window, full: full, domain: edgeDomain, width: width) {
+                let tickMarkings = WorkTimelineTimeAxis.ticks(in: plotWindow, width: width, minimumSpacing: 140 * scale)
+                input(items: visibleCards, window: window, plotSpan: plotWindow.span, full: full, domain: edgeDomain, width: width) {
                     ZStack(alignment: .topLeading) {
-                    Theme.canvas
+                    Theme.well
                     drawing(layout: layout, items: visibleCards, crossing: crossingSpans, ticks: tickMarkings.times, width: width, indexedRecords: indexedRecords).allowsHitTesting(false)
-                    axisLabels(ticks: tickMarkings, width: width, axisY: layout.axisY).allowsHitTesting(false)
+                    axisLabels(ticks: tickMarkings, plotWindow: plotWindow, width: width, axisY: layout.axisY).allowsHitTesting(false)
                     ForEach(visibleCards) { item in
                         itemButton(item, indexedRecords: indexedRecords)
                             .frame(width: item.frame.width, height: item.frame.height)
                             .position(x: item.frame.midX, y: item.frame.midY)
                     }
-                    if layout.visibleRecordCount == 0 {
+                    // Named absence whenever the window holds no record, even
+                    // when a crossing span line runs through it (C12).
+                    //
+                    // The test is the SHARED window rule (F5), not the drawn
+                    // frames: the Activity heading above counts by that rule
+                    // and prints this window's own bounds beside the count, so
+                    // "0 of 20 records" and this sentence must agree. The plot
+                    // maps half a card of extra time at each edge so a record
+                    // AT the boundary is drawn in full (K18) — a record just
+                    // OUTSIDE can therefore still show a sliver of card, and
+                    // that margin must not silence the named absence.
+                    if !records.contains(where: {
+                        WorkTimelineProjection.validTime($0.start) != nil && window.contains($0)
+                    }) {
                         Text("No activity in this time window")
                             .workFont(.body).foregroundStyle(Theme.muted)
                             .frame(maxWidth: .infinity).offset(y: layout.axisY - 64 * scale)
@@ -82,11 +165,12 @@ struct WorkTimeCanvas: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Activity timeline")
             .accessibilityIdentifier("work.timeline.canvas")
+            }
             if !dynamicTypeSize.isAccessibilitySize {
                 WorkTimeWindowScroller(records: records, full: full, window: window, domain: scrollerDomain, onWindow: onWindow)
             }
         }
-        .background(Theme.canvas, in: RoundedRectangle(cornerRadius: Metrics.radius))
+        .background(Theme.well, in: RoundedRectangle(cornerRadius: Metrics.radius))
         .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Theme.hairline))
         .background(GeometryReader { proxy in
             Color.clear.preference(key: WorkTimeCanvasWidthKey.self, value: proxy.size.width)
@@ -107,12 +191,16 @@ struct WorkTimeCanvas: View {
             by: WorkTimeCanvasLayout.edgeRevealTime(window: window, width: width, cardWidth: card))
     }
 
-    private func input<Content: View>(items: [WorkTimeCanvasLayout.Item], window: WorkTimelineInterval, full: WorkTimelineInterval, domain: WorkTimelineInterval, width: Double, @ViewBuilder content: () -> Content) -> some View {
-        WorkTimeCanvasInput(interactiveRegions: items.map(\.frame),
+    /// `plotSpan` is the time the plot actually maps across `width` (the
+    /// window plus its edge reveal), so a drag moves the scene exactly as far
+    /// as the pointer travelled.
+    private func input<Content: View>(items: [WorkTimeCanvasLayout.Item], window: WorkTimelineInterval, plotSpan: Double, full: WorkTimelineInterval, domain: WorkTimelineInterval, width: Double, @ViewBuilder content: () -> Content) -> some View {
+        let secondsPerPixel = (plotSpan.isFinite && plotSpan > 0 ? plotSpan : window.span) / max(width, 1)
+        return WorkTimeCanvasInput(interactiveRegions: items.map(\.frame),
             onPan: { pixels in
                 // Keyboard and accessibility increments resolve against the
                 // latest committed window.
-                onWindow(WorkTimeCanvasLayout.pannedWindow(window, by: -pixels / max(width, 1) * window.span, within: domain))
+                onWindow(WorkTimeCanvasLayout.pannedWindow(window, by: -pixels * secondsPerPixel, within: domain))
             },
             onDrag: { cumulativePixels in
                 // Mouse drags carry the total translation from gesture start
@@ -121,11 +209,22 @@ struct WorkTimeCanvas: View {
                 if dragBaseWindow == nil { dragBaseWindow = window }
                 let base = dragBaseWindow ?? window
                 onWindow(WorkTimeCanvasLayout.pannedWindow(base,
-                    by: -cumulativePixels / max(width, 1) * base.span, within: domain))
+                    by: -cumulativePixels * secondsPerPixel, within: domain))
             },
             onZoom: { factor, anchor in
                 onWindow(WorkTimeCanvasLayout.zoomedWindow(window, factor: factor, anchorFraction: anchor,
                     within: full, positionDomain: domain))
+            },
+            canZoom: { factor, anchor in
+                // A clamped zoom leaves the wheel event to the page.
+                !WorkTimeCanvasLayout.sameWindow(WorkTimeCanvasLayout.zoomedWindow(window, factor: factor,
+                    anchorFraction: anchor, within: full, positionDomain: domain),
+                    WorkTimeCanvasLayout.clampedWindow(window, to: domain))
+            },
+            canPan: { pixels in
+                !WorkTimeCanvasLayout.sameWindow(WorkTimeCanvasLayout.pannedWindow(window,
+                    by: -pixels * secondsPerPixel, within: domain),
+                    WorkTimeCanvasLayout.clampedWindow(window, to: domain))
             },
             onEdge: { latest in
                 onWindow(WorkTimeCanvasLayout.pannedWindow(window,
@@ -148,11 +247,13 @@ struct WorkTimeCanvas: View {
     /// panning or zooming out reaches the card.
     private func drawing(layout: WorkTimeCanvasLayout, items: [WorkTimeCanvasLayout.Item], crossing: [WorkTimeCanvasLayout.Item], ticks: [Double], width: Double, indexedRecords: [String: WorkTimelineRecord]) -> some View {
         Canvas { context, size in
-            func xPosition(_ time: Double) -> Double { (time - window.lower) / window.span * width }
+            // The plot's own window (the requested one plus its edge reveal).
+            let plot = layout.window
+            func xPosition(_ time: Double) -> Double { (time - plot.lower) / plot.span * width }
             var spine = Path()
             spine.move(to: CGPoint(x: 0, y: layout.axisY))
             spine.addLine(to: CGPoint(x: width, y: layout.axisY))
-            context.stroke(spine, with: .color(Theme.muted.opacity(0.65)), lineWidth: 1)
+            context.stroke(spine, with: .color(Theme.chartNeutral), lineWidth: 1)
             for tick in ticks {
                 let x = xPosition(tick)
                 var line = Path()
@@ -169,36 +270,110 @@ struct WorkTimeCanvas: View {
                 for id in item.recordIDs {
                     guard let record = indexedRecords[id], record.isDuration,
                           let start = record.start, let end = record.end else { continue }
-                    let key = CrossingSpanKey(start: start, end: end, failure: record.isCurrentFailure)
+                    let key = CrossingSpanKey(start: start, end: end, failure: record.isDanger)
                     guard drawnSpans.insert(key).inserted else { continue }
-                    let tint: Color = record.isCurrentFailure ? Theme.coral : Theme.accent
+                    let tint: Color = record.isDanger ? Theme.coral : Theme.chartNeutral
                     var span = Path()
                     span.move(to: CGPoint(x: xPosition(start), y: y))
                     span.addLine(to: CGPoint(x: xPosition(end), y: y))
-                    context.stroke(span, with: .color(tint.opacity(0.35)), lineWidth: 3)
+                    context.stroke(span, with: .color(tint), lineWidth: 3)
+                }
+            }
+            // SUPERSESSION, drawn as the link it is: from a failed run's dot to
+            // the dot of the run that replaced it. Without this the canvas's
+            // only statement about a recovered check was silence — the tile
+            // beside it said one run failed and the plot showed nothing.
+            // Both endpoints and the direction come from the payload
+            // (`superseded_by_event_id`); Swift infers no relationship.
+            var anchorsByEvent: [String: Double] = [:]
+            for item in layout.items {
+                for id in item.recordIDs {
+                    guard let event = indexedRecords[id]?.eventID else { continue }
+                    anchorsByEvent[event] = item.anchorX
+                }
+            }
+            for item in layout.items {
+                for id in item.recordIDs {
+                    guard let record = indexedRecords[id], let successor = record.resolvedByEventID,
+                          let targetX = anchorsByEvent[successor] else { continue }
+                    let fromX = item.anchorX, toX = targetX
+                    guard max(fromX, toX) >= -width, min(fromX, toX) <= width * 2 else { continue }
+                    // A shallow arc below the axis spine, so the link cannot be
+                    // read as one more recorded span sitting on it.
+                    let lift = min(max(abs(toX - fromX) * 0.35, 8), 22)
+                    let y = layout.axisY
+                    var link = Path()
+                    link.move(to: CGPoint(x: fromX, y: y))
+                    link.addQuadCurve(to: CGPoint(x: toX, y: y),
+                                      control: CGPoint(x: (fromX + toX) / 2, y: y + lift * 2))
+                    context.stroke(link, with: .color(Theme.coral),
+                                   style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+                    // The arrowhead names the direction: the failure is the
+                    // tail, the run that replaced it is the head.
+                    let direction: Double = toX >= fromX ? 1 : -1
+                    var head = Path()
+                    head.move(to: CGPoint(x: toX, y: y))
+                    head.addLine(to: CGPoint(x: toX - direction * 5, y: y + 4))
+                    head.addLine(to: CGPoint(x: toX - direction * 5, y: y - 1))
+                    head.closeSubpath()
+                    context.fill(head, with: .color(Theme.coral))
                 }
             }
             for item in items {
                 let selected = selectedID.map(item.recordIDs.contains) ?? false
                 let emphasized = selected || hoveredID == item.id || focusedItem == item.id
-                let tint = item.recordIDs.contains { id in indexedRecords[id]?.isCurrentFailure == true }
-                    ? Theme.coral : Theme.accent
-                let edge = item.isAbove ? item.frame.maxY : item.frame.minY
+                let danger = item.recordIDs.contains { id in indexedRecords[id]?.isDanger == true }
+                let members = item.recordIDs.compactMap { indexedRecords[$0] }
+                // A data mark never wears the interactive accent (K04). The
+                // mark tone is the record's own: coral for a failure (current
+                // or resolved), the neutral chart tone otherwise.
+                let markTint = members.first(where: \.isCurrentFailure)?.markTint
+                    ?? members.first(where: \.isResolvedFailure)?.markTint
+                    ?? members.first(where: \.isDanger)?.markTint
+                    ?? Theme.chartNeutral
+                // Open only when EVERY member is a resolved failure, so a group
+                // holding one live failure can never read as answered.
+                let markHollow = !members.isEmpty && members.allSatisfy(\.markIsHollow)
+                // The leader from the dot to the card: straight up or down at
+                // the record's own time, or routed around an occluding nearer
+                // card so it is never lost behind one (K18).
+                let route = layout.stemPoints(for: item)
                 var stem = Path()
-                stem.move(to: CGPoint(x: item.anchorX, y: layout.axisY))
-                stem.addLine(to: CGPoint(x: item.anchorX, y: edge))
-                context.stroke(stem, with: .color(tint.opacity(emphasized ? 0.85 : 0.32)), lineWidth: emphasized ? 2 : 1)
+                stem.move(to: route[0])
+                for point in route.dropFirst() { stem.addLine(to: point) }
+                // Resting geometry is neutral; the tint appears on emphasis.
+                context.stroke(stem, with: .color(emphasized || danger ? markTint : Theme.rule),
+                    lineWidth: emphasized ? 2 : 1)
                 if !item.isCluster, let id = item.recordIDs.first, let record = indexedRecords[id], record.isDuration {
                     let x1 = xPosition(record.start!)
                     let x2 = xPosition(record.end!)
                     let y = layout.axisY + (item.isAbove ? -5.0 : 5.0)
                     var span = Path()
                     span.move(to: CGPoint(x: x1, y: y)); span.addLine(to: CGPoint(x: x2, y: y))
-                    context.stroke(span, with: .color(tint.opacity(emphasized ? 0.9 : 0.35)), lineWidth: 3)
+                    context.stroke(span, with: .color(emphasized || danger ? markTint : Theme.chartNeutral), lineWidth: 3)
                 }
                 let radius = item.isCluster ? 5.0 : 3.5
-                context.fill(Path(ellipseIn: CGRect(x: item.anchorX - radius, y: layout.axisY - radius,
-                    width: radius * 2, height: radius * 2)), with: .color(tint))
+                let dot = Path(ellipseIn: CGRect(x: item.anchorX - radius, y: layout.axisY - radius,
+                    width: radius * 2, height: radius * 2))
+                if markHollow {
+                    context.stroke(dot, with: .color(markTint), lineWidth: 1.5)
+                } else {
+                    context.fill(dot, with: .color(markTint))
+                }
+                // WHERE the reducer says a terminal status was reported
+                // (completed, blocked, handed off): a short tick across the
+                // span's end, so a handoff is not read at the section's start.
+                // The time and the terminal decision both come from the
+                // payload (`terminal_status_at`).
+                if !item.isCluster, let id = item.recordIDs.first,
+                   let time = indexedRecords[id]?.terminalMarkTime {
+                    let x = xPosition(time)
+                    let y = layout.axisY + (item.isAbove ? -5.0 : 5.0)
+                    var mark = Path()
+                    mark.move(to: CGPoint(x: x, y: y - 4))
+                    mark.addLine(to: CGPoint(x: x, y: y + 4))
+                    context.stroke(mark, with: .color(emphasized || danger ? markTint : Theme.chartNeutral), lineWidth: 2)
+                }
             }
         }
         .accessibilityHidden(true)
@@ -207,13 +382,21 @@ struct WorkTimeCanvas: View {
     /// Labels sit on their tick marks and slide with them. A label's text is
     /// fixed by its absolute time and the current step, so it never renumbers
     /// in place while the window moves.
-    private func axisLabels(ticks: (step: Double, times: [Double]), width: Double, axisY: Double) -> some View {
+    private func axisLabels(ticks: (step: Double, times: [Double]), plotWindow: WorkTimelineInterval, width: Double, axisY: Double) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(ticks.times, id: \.self) { tick in
-                Text(WorkTimelineTimeAxis.tickLabel(tick, step: ticks.step, range: window))
+                let text = WorkTimelineTimeAxis.tickLabel(tick, step: ticks.step, range: plotWindow)
+                // A label centered on a tick near the plot edge would lose
+                // half its characters to the clip ("5:45 PI"). Keeping its
+                // centre half a label inside shows the whole time; the tick
+                // itself still marks the exact position (K18).
+                let labelSize = max(12, WorkFontRole.dataSmall.metrics.size * scale)
+                let half = Double(workDataTextWidth(text, size: labelSize)) / 2 + 1
+                Text(text)
                     .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                    .fixedSize().background(Theme.canvas)
-                    .position(x: (tick - window.lower) / window.span * width, y: axisY + 12 + 7 * scale)
+                    .fixedSize().background(Theme.well)
+                    .position(x: min(max((tick - plotWindow.lower) / plotWindow.span * width, half), max(width - half, half)),
+                              y: axisY + 12 + 7 * scale)
             }
         }
         .frame(width: width)
@@ -226,20 +409,48 @@ struct WorkTimeCanvas: View {
         return Button { activate(item, members: members) } label: {
             VStack(alignment: .leading, spacing: 2) {
                 if item.isCluster {
-                    Text("\(members.count) records").workFont(.rowLabel).foregroundStyle(Theme.ink)
-                    let sessionCount = Set(members.map(\.laneID)).count
-                    Text(sessionCount == 1 ? (members.first?.laneTitle ?? "Activity") : "\(sessionCount) sessions")
-                        .workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
-                    let failures = members.filter(\.isCurrentFailure).count
-                    if failures > 0 {
-                        Label("\(failures) failed", systemImage: "exclamationmark.circle")
-                            .workFont(.caption).foregroundStyle(Theme.coral)
+                    clusterBody(members)
+                } else if let record = members.first, record.isBeat {
+                    // A progress note, drawn as narration under the SECTION
+                    // that recorded it: its section's title as the eyebrow,
+                    // its prose at caption weight in muted ink, and no result
+                    // glyph at all — a beat reports no outcome, so it wears
+                    // neither a step's square nor a check's circle (K05).
+                    if let section = WorkTimelineProjection.nonempty(record.sectionTitle) {
+                        Text(section).workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
                     }
+                    Text(record.displayTitle).workFont(.caption).foregroundStyle(Theme.muted).lineLimit(3)
+                    Text(record.resultLabel).workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
                 } else if let record = members.first {
-                    Text(record.laneTitle).workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
-                    Text(record.title).workFont(.rowLabel).foregroundStyle(Theme.ink).lineLimit(2)
-                    Label(record.resultLabel, systemImage: symbol(record))
-                        .workFont(.caption).foregroundStyle(tint(record)).lineLimit(1)
+                    // The step's own declared kind, verbatim from the payload
+                    // (`section_kind`): the eyebrow that tells a debugging step
+                    // from a review one before the title is read.
+                    if let kind = record.sectionKind {
+                        Text(kind).workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
+                    } else if showsCaptions && record.laneTitle != record.displayTitle {
+                        Text(record.laneTitle).workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
+                    }
+                    Text(record.displayTitle).workFont(.rowLabel).foregroundStyle(Theme.ink).lineLimit(2)
+                    Label {
+                        Text(record.resultLabel)
+                    } icon: {
+                        if let symbol = symbol(record) {
+                            Image(systemName: symbol)
+                        } else {
+                            // A lifecycle step is not an evidence tier: a small
+                            // flat square, never a pip-family circle (K05).
+                            Rectangle().frame(width: 6, height: 6)
+                        }
+                    }
+                    .workFont(.caption).foregroundStyle(tint(record)).lineLimit(1)
+                    // The reducer's named result/exit-code disagreement. It
+                    // had no render site anywhere; the card now carries the
+                    // caution glyph and the details region prints the sentence.
+                    if record.noteText != nil {
+                        Image(systemName: "exclamationmark.triangle")
+                            .workFont(.caption).foregroundStyle(Theme.amber)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .padding(6)
@@ -248,23 +459,126 @@ struct WorkTimeCanvas: View {
                 in: RoundedRectangle(cornerRadius: Metrics.radius))
             .overlay(RoundedRectangle(cornerRadius: Metrics.radius)
                 .strokeBorder(selected ? Theme.accent : Theme.cardLine, lineWidth: selected ? 2 : 1))
+            // The reducer's salience, as a rule on the card's leading edge —
+            // never the accent (the interactive voice) and never a result tone
+            // (salience is not an outcome). A single-record card only: a group
+            // card speaks for several records and none of them owns its edge.
+            .modifier(SalienceRule(record: item.isCluster ? nil : members.first))
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.radius))
             .contentShape(Rectangle())
         }
         .buttonStyle(SurfaceButtonStyle(focusInset: 2))
         .focusable()
+        // The style draws its own inset focus ring; the system effect is drawn
+        // by the AppKit host OUTSIDE this canvas's rounded container (K99).
+        .focusEffectDisabled()
         .focused($focusedItem, equals: item.id)
+        .onChange(of: focusedItem) { _, id in
+            guard id == item.id else { return }
+            onFocusEnter?()
+        }
         .onKeyPress(.space) { activate(item, members: members); return .handled }
         .onKeyPress(.return) { activate(item, members: members); return .handled }
         .onHover { hoveredID = $0 ? item.id : nil }
-        .help(members.count == 1 ? "\(members[0].title)\n\(members[0].laneTitle)\n\(members[0].source)" : "Inspect these \(members.count) records or zoom into their time range")
+        // A tooltip repeating the accessibility label teaches nothing (K122);
+        // a single card's full title is already spoken and, when the card
+        // truncates it, the inspector below prints it in full.
+        .modifier(OptionalHelp(text: item.isCluster
+            ? "Inspect these \(members.count) records or zoom into their time range" : nil))
         .accessibilityIdentifier(item.isCluster
             ? "work.timeline.cluster.\(item.id.replacingOccurrences(of: "cluster:", with: ""))"
             : "work.timeline.record.\(item.recordIDs[0])")
-        .accessibilityLabel(item.isCluster ? "\(members.count) records in a time group" : "\(members.first?.title ?? "Activity"), \(members.first?.resultLabel ?? ""), \(members.first?.laneTitle ?? ""), \(members.first?.source ?? ""), \(members.first?.start.map { WorkTimelineTimeAxis.preciseLabel($0) } ?? "Time unavailable")")
+        // Spoken time is the same local clock the axis and the screen show
+        // (C55/K122) — never a UTC ISO string or epoch digits.
+        // A group speaks its members the way it prints them — a spoken bare
+        // count would hide the same evidence the card used to hide.
+        .accessibilityLabel(item.isCluster
+            ? (["\(members.count) records in a time group"]
+                + members.prefix(Self.clusterSpokenLimit).map { "\($0.displayTitle), \($0.resultLabel)" }
+                + (members.count > Self.clusterSpokenLimit ? ["\(members.count - Self.clusterSpokenLimit) more"] : []))
+                .joined(separator: ", ")
+            : Self.spokenCard(members.first))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .onKeyPress(.escape) {
             onDismiss()
             return .handled
+        }
+    }
+
+    /// What ONE card says aloud. A salient card also speaks the reducer's
+    /// reason: the leading rule is visual only, and a sentence is the only way
+    /// a VoiceOver reader learns that this record was pulled forward (F3). A
+    /// beat speaks its own prose and the section it belongs to, so narration is
+    /// never heard as a step.
+    static func spokenCard(_ record: WorkTimelineRecord?) -> String {
+        guard let record else { return "Activity" }
+        let time = record.start.map { WorkTimelineTimeAxis.spokenLabel($0) } ?? "Time unavailable"
+        if record.isBeat {
+            return [WorkTimelineProjection.nonempty(record.summary) ?? record.displayTitle,
+                    record.resultLabel,
+                    WorkTimelineProjection.nonempty(record.sectionTitle),
+                    time].compactMap { $0 }.joined(separator: ", ")
+        }
+        return [record.displayTitle, record.resultLabel, record.laneTitle, record.source,
+                record.isSalient ? record.salienceReason : nil,
+                time].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// How many lines a group card has under its count, at the card's height.
+    private static let clusterContentLines = 3
+    /// How many members a group card names aloud before it counts the rest.
+    private static let clusterSpokenLimit = 6
+
+    /// What a group card SAYS it contains.
+    ///
+    /// A bare "N records" hid the very thing a reviewer opened the timeline
+    /// for — the check names and their results. A group now names its members
+    /// (each with its own result glyph and tint) until the card is full, and
+    /// whatever cannot fit is COUNTED, never silently dropped. A current
+    /// failure and a multi-session mix outrank the names for the remaining
+    /// lines: they change what the reviewer does next.
+    @ViewBuilder
+    private func clusterBody(_ members: [WorkTimelineRecord]) -> some View {
+        let sessionCount = Set(members.map(\.laneID)).count
+        let failures = members.filter(\.isCurrentFailure).count
+        // A failure a LATER RUN replaced is still a failure this group
+        // contains. Counting only live failures meant the one task with a
+        // fail → pass recovery showed no failure line at all, while the tile
+        // beside it reported an earlier failed run (B5).
+        let resolved = failures > 0 ? 0 : members.filter(\.isResolvedFailure).count
+        let failureLines = (failures > 0 || resolved > 0) ? 1 : 0
+        let budget = Self.clusterContentLines - failureLines - (sessionCount > 1 ? 1 : 0)
+        let named = members.count <= budget ? members.count : max(0, budget - 1)
+        Text("\(members.count) records").workFont(.rowLabel).foregroundStyle(Theme.ink)
+        if failures > 0 {
+            Label("\(failures) failed", systemImage: "exclamationmark.circle")
+                .workFont(.caption).foregroundStyle(Theme.coral).lineLimit(1)
+        } else if resolved > 0 {
+            // Same words, same coral — a failure did happen. The GLYPH is what
+            // separates it from a live failure: a failure and its re-run.
+            Label("\(resolved) failed", systemImage: "exclamationmark.arrow.circlepath")
+                .workFont(.caption).foregroundStyle(Theme.coral).lineLimit(1)
+        }
+        if sessionCount > 1 {
+            Text("\(sessionCount) sessions").workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
+        }
+        ForEach(members.prefix(named)) { member in
+            Label {
+                // One line per member, so the END of a command or path — the
+                // part that tells two runs of the same tool apart — survives.
+                Text(member.displayTitle).lineLimit(1).truncationMode(.middle)
+            } icon: {
+                if let symbol = symbol(member) {
+                    Image(systemName: symbol)
+                } else {
+                    Rectangle().frame(width: 6, height: 6)
+                }
+            }
+            .workFont(.caption).foregroundStyle(tint(member))
+            .accessibilityLabel("\(member.displayTitle), \(member.resultLabel)")
+        }
+        if named > 0, named < members.count {
+            Text("+\(members.count - named) more").workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
         }
     }
 
@@ -285,10 +599,21 @@ struct WorkTimeCanvas: View {
     }
 
     private func tint(_ record: WorkTimelineRecord) -> Color { record.presentationTint }
-    private func symbol(_ record: WorkTimelineRecord) -> String {
+    /// The SF symbol of a record's result line, or nil for a step (drawn as
+    /// the flat square marker). Circle-family shapes are the evidence pips'
+    /// grammar, so a non-passing, non-current check is a flat minus (K05).
+    private func symbol(_ record: WorkTimelineRecord) -> String? {
+        // A failure a later run replaced gets its OWN glyph — a recorded
+        // failure and its re-run — distinct from both a live failure (cross)
+        // and plain superseded history (clock).
+        if record.isResolvedFailure { return "exclamationmark.arrow.circlepath" }
         if record.superseded { return "clock.arrow.circlepath" }
-        if record.kind == .step { return "circle.inset.filled" }
-        return record.result == "passed" ? "checkmark.circle" : (record.isCurrentFailure ? "xmark.circle" : "circle")
+        if record.kind == .step { return nil }
+        switch record.checkTone {
+        case .pass: return "checkmark.circle"
+        case .failure: return record.isCurrentFailure ? "xmark.circle" : "minus"
+        case .notRun: return CheckResultTone.notRun.symbol
+        }
     }
 }
 
@@ -309,7 +634,10 @@ private struct CrossingSpanKey: Hashable {
 /// resize one boundary, and wheel or pinch input resizes the visible span
 /// around the pointer. The small histogram counts dated records, never elapsed
 /// work or utilization.
-private struct WorkTimeWindowScroller: View {
+/// The overview strip: a draggable, zoomable window over the whole recorded
+/// range. It is the canvas's navigation control, and the record LIST uses the
+/// same one — so choosing the list never costs the reviewer zoom or panning.
+struct WorkTimeWindowScroller: View {
     let records: [WorkTimelineRecord]
     let full: WorkTimelineInterval
     let window: WorkTimelineInterval
@@ -330,39 +658,36 @@ private struct WorkTimeWindowScroller: View {
                     // the visible window.
                     onWindow(WorkTimeCanvasLayout.zoomedWindow(window, factor: factor,
                         anchorTime: domain.lower + domain.span * anchor, within: full, positionDomain: domain))
-                }, accessibilityIdentifier: "work.timeline.overview.navigation") {
+                }, cursorRegions: cursorRegions(left: left, right: right, height: geometry.size.height),
+                accessibilityIdentifier: "work.timeline.overview.navigation",
+                accessibilityLabel: "Timeline overview") {
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 4).fill(Theme.hairline.opacity(0.5))
-                Canvas { context, size in
-                    var bins = [Int](repeating: 0, count: max(1, Int(size.width / 5)))
-                    for record in records {
-                        guard let time = WorkTimelineProjection.validTime(record.start) else { continue }
-                        let bucket = domain.fraction(time) * Double(bins.count)
-                        guard bucket.isFinite else { continue }
-                        bins[min(max(Int(bucket), 0), bins.count - 1)] += 1
-                    }
-                    let peak = max(bins.max() ?? 0, 1)
-                    for (index, value) in bins.enumerated() where value > 0 {
-                        let h = max(3, Double(value) / Double(peak) * 20)
-                        context.fill(Path(CGRect(x: Double(index) * size.width / Double(bins.count), y: size.height - h - 3,
-                            width: max(size.width / Double(bins.count) - 1, 1), height: h)), with: .color(Theme.muted.opacity(0.4)))
-                    }
-                }.allowsHitTesting(false)
+                RoundedRectangle(cornerRadius: 4).fill(Theme.hairline)
                 Button { onWindow(window) } label: {
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Theme.accent.opacity(0.12))
-                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.accent.opacity(0.7)))
+                        .fill(Theme.tintAccent)
+                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.accent))
                         .contentShape(Rectangle())
                 }
                     .buttonStyle(SurfaceButtonStyle())
+                    // The style draws the app's own 2pt accent ring; the
+                    // system's pale halo is the only thing that showed here
+                    // before, and it measured below the 3:1 minimum (K117).
+                    .focusEffectDisabled()
                     .frame(width: max(right - left, 2)).offset(x: left)
                     .simultaneousGesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("work-time-overview")).onChanged { value in
                         let start = dragStart ?? window; dragStart = start
                         onWindow(WorkTimeCanvasLayout.pannedWindow(start, by: value.translation.width / width * domain.span, within: domain))
                     }.onEnded { _ in dragStart = nil })
-                    .onHover { ($0 ? NSCursor.openHand : NSCursor.arrow).set() }
                     .accessibilityRepresentation { accessibleRangeControl(isStart: nil) }
-                    .help("Drag to move through time. Scroll or drag either edge to change the visible time span.")
+                    .help("Drag to move through time. Pinch, Option-scroll or drag either edge to change the visible time span.")
+                // The marks are drawn ON TOP of the window thumb, not under it.
+                // Underneath, a window that already covered everything loaded
+                // hid every mark behind its own full-width fill, and the strip
+                // read as a broken empty control (F4). The thumb says WHERE you
+                // are looking; the marks say where the records are — and the
+                // marks must survive the thumb covering them.
+                marks.allowsHitTesting(false)
                 handle(at: left, isStart: true, width: width)
                 handle(at: right, isStart: false, width: width)
             }
@@ -370,6 +695,41 @@ private struct WorkTimeWindowScroller: View {
             }.renderingSurface
         }
         .frame(height: 40)
+    }
+
+    /// The strip's own content: one bar per bucket of dated records, counting
+    /// RECORDS — never elapsed work or utilization. It is the reason the strip
+    /// is worth looking at when the window already spans everything, so it is
+    /// drawn over the window thumb rather than under it.
+    private var marks: some View {
+        Canvas { context, size in
+            var bins = [Int](repeating: 0, count: max(1, Int(size.width / 5)))
+            for record in records {
+                guard let time = WorkTimelineProjection.validTime(record.start) else { continue }
+                let bucket = domain.fraction(time) * Double(bins.count)
+                guard bucket.isFinite else { continue }
+                bins[min(max(Int(bucket), 0), bins.count - 1)] += 1
+            }
+            let peak = max(bins.max() ?? 0, 1)
+            for (index, value) in bins.enumerated() where value > 0 {
+                let h = max(3, Double(value) / Double(peak) * 20)
+                context.fill(Path(CGRect(x: Double(index) * size.width / Double(bins.count), y: size.height - h - 3,
+                    width: max(size.width / Double(bins.count) - 1, 1), height: h)), with: .color(Theme.chartNeutral))
+            }
+        }
+        .accessibilityHidden(true)  // the window control beside it speaks the range
+    }
+
+    /// Cursor rects owned by the input view (C107): the window body shows an
+    /// open hand and each edge handle a resize cursor. Coordinates include the
+    /// strip's 20pt horizontal inset and match the handle offsets below.
+    private func cursorRegions(left: Double, right: Double, height: CGFloat) -> [WorkTimeCanvasCursorRegion] {
+        let inset = 20.0
+        return [
+            .init(rect: CGRect(x: inset + left, y: 0, width: max(right - left, 2), height: height), cursor: .openHand),
+            .init(rect: CGRect(x: inset + left - 19, y: 0, width: 18, height: height), cursor: .resizeLeftRight),
+            .init(rect: CGRect(x: inset + right + 1, y: 0, width: 18, height: height), cursor: .resizeLeftRight),
+        ]
     }
 
     private func handle(at x: Double, isStart: Bool, width: Double) -> some View {
@@ -388,36 +748,39 @@ private struct WorkTimeWindowScroller: View {
                 let upper = isStart ? start.upper : max(min(start.upper + delta, full.upper), start.lower + minimum)
                 onWindow(.init(lower: lower, upper: upper))
             }.onEnded { _ in dragStart = nil })
-            .onHover { ($0 ? NSCursor.resizeLeftRight : NSCursor.arrow).set() }
             .accessibilityRepresentation { accessibleRangeControl(isStart: isStart) }
             .help(isStart ? "Drag to change the start of the time window" : "Drag to change the end of the time window")
     }
 
-    /// The graphical range exposes native slider values and standard
-    /// increment/decrement actions to keyboard and accessibility navigation.
+    /// The graphical range as an adjustable element: its VALUE is the clock a
+    /// reader sees, and increment/decrement move it.
+    ///
+    /// A native `Slider` representation spoke its own numeric value instead —
+    /// the raw epoch seconds ("1789441993.940317"), which is unusable aloud
+    /// (K122). An adjustable element's value is the string set here, so the
+    /// spoken window matches the axis.
     private func accessibleRangeControl(isStart: Bool?) -> some View {
         let minimum = min(WorkTimeCanvasLayout.minimumVisibleSpan, full.span)
-        let lower = isStart == false ? window.lower + minimum : full.lower
-        let upper = isStart == true ? window.upper - minimum
-            : (isStart == false ? full.upper : full.upper - window.span)
-        let value = Binding<Double>(
-            get: { isStart == false ? window.upper : window.lower },
-            set: { value in
-                if let isStart {
-                    onWindow(.init(lower: isStart ? value : window.lower, upper: isStart ? window.upper : value))
-                } else {
-                    onWindow(WorkTimeCanvasLayout.pannedWindow(window, by: value - window.lower, within: full))
-                }
-            })
-        // A window that already spans the whole domain would otherwise give
-        // the slider a zero-length range.
-        let upperBound = max(upper, lower + min(WorkTimeCanvasLayout.minimumVisibleSpan, full.span))
-        return Slider(value: value, in: lower...upperBound)
+        let step = max(minimum, window.span * 0.1)
+        return Color.clear
+            .accessibilityElement()
             .accessibilityLabel(isStart == nil ? "Visible time window" : (isStart == true ? "Start of visible time window" : "End of visible time window"))
             .accessibilityValue(isStart == nil
                 ? "\(WorkTimelineTimeAxis.label(window.lower, range: window)) to \(WorkTimelineTimeAxis.label(window.upper, range: window))"
                 : WorkTimelineTimeAxis.label(isStart == true ? window.lower : window.upper, range: window))
             .accessibilityIdentifier(isStart == nil ? "work.timeline.window" : (isStart == true ? "work.timeline.window.start" : "work.timeline.window.end"))
+            .accessibilityAdjustableAction { direction in
+                let delta = direction == .increment ? step : -step
+                guard let isStart else {
+                    onWindow(WorkTimeCanvasLayout.pannedWindow(window, by: delta, within: full))
+                    return
+                }
+                let lower = isStart
+                    ? min(max(window.lower + delta, full.lower), window.upper - minimum) : window.lower
+                let upper = isStart
+                    ? window.upper : max(min(window.upper + delta, full.upper), window.lower + minimum)
+                onWindow(.init(lower: lower, upper: upper))
+            }
     }
 
 }

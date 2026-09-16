@@ -409,3 +409,23 @@ enum VisualSnapshotHarness {
         }
     }
 }
+
+extension VisualSnapshotImage {
+    /// Pixels at the offscreen renderer's unsupported-view yellow, #FFCC00.
+    ///
+    /// That exact colour is in no token (the amber family is 0x7A5A00,
+    /// 0xA67B00 and 0xE7C66A), so any of it in a review render means an
+    /// AppKit-backed control drew a placeholder instead of itself (K68). Every
+    /// fixture harness asserts this, so the rule cannot be fixed on one
+    /// surface and left broken on another.
+    var unsupportedControlPlaceholderPixels: Int {
+        rgba.withUnsafeBytes { (pixels: UnsafeRawBufferPointer) in
+            var found = 0
+            for index in stride(from: 0, to: width * height * 4, by: 4)
+            where pixels[index] == 255 && pixels[index + 1] == 204 && pixels[index + 2] == 0 {
+                found += 1
+            }
+            return found
+        }
+    }
+}

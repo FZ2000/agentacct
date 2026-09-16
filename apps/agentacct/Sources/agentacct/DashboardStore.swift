@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
@@ -45,6 +46,33 @@ func attentionPageCanAppend(
         && next.counts == current.counts
 }
 
+/// What a window refresh does with the review queue (K87).
+///
+/// The Dashboard's short preview and the Work pane's queue are separate state,
+/// so a 60-second tick refreshes the preview and leaves a queue the reviewer
+/// has not opened untouched. Once the Work pane HAS loaded one, the refresh
+/// re-requests exactly that extent: the queue still shrinks when the store has
+/// fewer items, never because the preview's page size replaced it.
+enum AttentionRefreshPlan: Equatable {
+    case previewOnly
+    case reloadQueue(extent: Int)
+
+    init(loadedExtent: Int?) {
+        guard let loadedExtent, loadedExtent > 0 else {
+            self = .previewOnly
+            return
+        }
+        self = .reloadQueue(extent: loadedExtent)
+    }
+}
+
+/// How many items the next page of a queue reload asks for: whole pages until
+/// the loaded extent is back, then only the remainder (the daemon caps one
+/// request at its page size).
+func attentionReloadPageLimit(loaded: Int, extent: Int, pageLimit: Int) -> Int {
+    min(pageLimit, max(extent - loaded, 1))
+}
+
 /// Named state variants used only by deterministic offscreen review tooling.
 /// Keeping the mutation inside DashboardStore preserves its private setters;
 /// the live initializer and network lifecycle remain unchanged.
@@ -83,11 +111,56 @@ final class DashboardStore {
     private(set) var totalReceiptTasks: Int?
     private(set) var receiptTasksTruncated: Bool?
     private(set) var receiptAttention: ReceiptAttentionPayload?
+    /// The vocabulary's status legend, from `/v1/tasks`.
+    private(set) var decisionLegend: DecisionLegendPayload?
+    /// The vocabulary's receipt field labels, from `/v1/tasks`.
+    private(set) var receiptFieldLabels: ReceiptFieldLabels?
+    /// The review queue's words, from `/v1/tasks` (or `/v1/attention`).
+    private(set) var receiptQueue: AttentionQueueCopy?
+    /// The queue words for the current attention count: the attention
+    /// projection's own copy, else the task list's.
+    var attentionQueue: AttentionQueueCopy? { attention?.queue ?? receiptQueue }
     /// Complete review classification plus a bounded operational queue.
     private(set) var attention: V1AttentionPayload?
     private(set) var attentionError: String?
     private(set) var isLoadingMoreAttention = false
+    /// The Dashboard's short attention preview, kept apart from the queue
+    /// above. A window refresh used to publish its 5-item page into
+    /// `attention`, so a Work queue the reviewer had paged through shrank back
+    /// to five on a 60-second timer — dropping the Blocked item off the end of
+    /// their own review list (K87).
+    private(set) var attentionPreview: V1AttentionPayload?
+    private(set) var attentionPreviewError: String?
+    /// The queue page size the reviewer has loaded, nil until the Work pane
+    /// asks for one. A refresh re-requests exactly this much: the queue still
+    /// shrinks when the store has fewer items, never because of the timer.
+    @ObservationIgnored private var attentionLoadedExtent: Int?
+    /// The complete review total. BOTH attention pages carry the store-wide
+    /// total — only the number of items they return differs — so a tab count
+    /// stays true whether the Work pane has loaded the queue or only the
+    /// Dashboard's preview has arrived (K87).
+    var attentionTotal: Int? { (attention ?? attentionPreview)?.total }
+    /// What the Dashboard's attention card reads: the preview when a refresh
+    /// has published one, else whatever page the Work pane loaded.
+    var dashboardAttention: V1AttentionPayload? {
+        attentionPreviewError == nil ? (attentionPreview ?? attention) : nil
+    }
+    var dashboardAttentionError: String? {
+        attentionPreviewError ?? (attentionPreview == nil ? attentionError : nil)
+    }
+    /// The Dashboard's preview page size, and the queue page the Work pane
+    /// requests. The daemon caps `/v1/attention?limit=` at the page size.
+    /// How far behind a failed-refresh fixture's freshness stamp sits, so a
+    /// review render shows the aging time the live app would show (K02).
+    static let fixtureStaleRefreshSeconds: TimeInterval = 240
+    static let attentionPreviewLimit = 5
+    static let attentionPageLimit = 50
     private(set) var receipt: Receipt?
+    /// WHEN each Task's receipt was last fetched successfully, by task id.
+    /// A copy still on screen after a failed refresh needs its own absolute
+    /// age: the payload's own relative "updated 2m ago" froze at fetch time
+    /// and would read as current (K55).
+    private(set) var receiptFetchedAt: [String: Date] = [:]
     private(set) var receiptListError: String?
     private(set) var receiptError: String?
     private(set) var receiptErrorTaskId: String?
@@ -132,6 +205,7 @@ final class DashboardStore {
     /// failed fetch can't leave the old data labeled with the new range.
     @ObservationIgnored private var usageDaysGeneration = 0
     @ObservationIgnored private var attentionGeneration = LatestRequestGeneration()
+    @ObservationIgnored private var attentionPreviewGeneration = LatestRequestGeneration()
     @ObservationIgnored private var setupCaptureCursors = SetupCaptureCursorState()
 
     @ObservationIgnored private let client: GlanceClient
@@ -140,6 +214,12 @@ final class DashboardStore {
     var receiptSavedAt: Date? {
         guard let taskID = receipt?.taskId else { return nil }
         return savedWork?.entries["/v1/receipt?task=\(Self.queryValue(taskID))"]?.receivedAt
+    }
+    /// When the receipt currently on screen was taken: saved (offline) or
+    /// fetched (live). Nil when no receipt is loaded or its time is unknown.
+    var currentReceiptCopiedAt: Date? {
+        guard let taskID = receipt?.taskId else { return nil }
+        return receiptSavedAt ?? receiptFetchedAt[taskID]
     }
     func sessionSavedAt(client: String, sessionID: String) -> Date? {
         savedWork?.entries["/v1/session?client=\(Self.queryValue(client))&session_id=\(Self.queryValue(sessionID))"]?.receivedAt
@@ -186,6 +266,9 @@ final class DashboardStore {
             totalReceiptTasks = fixture.tasks.total
             receiptTasksTruncated = fixture.tasks.truncated
             receiptAttention = fixture.tasks.attention
+            decisionLegend = fixture.tasks.decisionLegend
+            receiptFieldLabels = fixture.tasks.fieldLabels
+            receiptQueue = fixture.tasks.queue
             receipt = fixture.work?.receipt
             for session in fixture.work?.sessions ?? [] {
                 let key = "\(session.session.client)::\(session.session.clientSessionId)"
@@ -216,12 +299,18 @@ final class DashboardStore {
             totalReceiptTasks = fixture.tasks.total
             receiptTasksTruncated = fixture.tasks.truncated
             receiptAttention = fixture.tasks.attention
+            decisionLegend = fixture.tasks.decisionLegend
+            receiptFieldLabels = fixture.tasks.fieldLabels
+            receiptQueue = fixture.tasks.queue
             receiptListError = "receipts fetch failed: synthetic review error"
         case .shiftBriefUnavailable:
             receiptTasks = fixture.tasks.tasks
             totalReceiptTasks = fixture.tasks.total
             receiptTasksTruncated = fixture.tasks.truncated
             receiptAttention = fixture.tasks.attention
+            decisionLegend = fixture.tasks.decisionLegend
+            receiptFieldLabels = fixture.tasks.fieldLabels
+            receiptQueue = fixture.tasks.queue
             attentionError = "attention fetch failed: synthetic review error"
             ingestionError = "source health fetch failed: synthetic review error"
         case .receiptLoading:
@@ -229,11 +318,17 @@ final class DashboardStore {
             totalReceiptTasks = fixture.tasks.total
             receiptTasksTruncated = fixture.tasks.truncated
             receiptAttention = fixture.tasks.attention
+            decisionLegend = fixture.tasks.decisionLegend
+            receiptFieldLabels = fixture.tasks.fieldLabels
+            receiptQueue = fixture.tasks.queue
         case .receiptError:
             receiptTasks = fixture.tasks.tasks
             totalReceiptTasks = fixture.tasks.total
             receiptTasksTruncated = fixture.tasks.truncated
             receiptAttention = fixture.tasks.attention
+            decisionLegend = fixture.tasks.decisionLegend
+            receiptFieldLabels = fixture.tasks.fieldLabels
+            receiptQueue = fixture.tasks.queue
             receiptError = "receipt fetch failed: synthetic review error"
             receiptErrorTaskId = fixture.work?.receipt.taskId
         case .receiptStale:
@@ -241,6 +336,9 @@ final class DashboardStore {
             totalReceiptTasks = fixture.tasks.total
             receiptTasksTruncated = fixture.tasks.truncated
             receiptAttention = fixture.tasks.attention
+            decisionLegend = fixture.tasks.decisionLegend
+            receiptFieldLabels = fixture.tasks.fieldLabels
+            receiptQueue = fixture.tasks.queue
             receipt = fixture.work?.receipt
             receiptError = "receipt refresh failed: synthetic review error"
             receiptErrorTaskId = fixture.work?.receipt.taskId
@@ -249,10 +347,26 @@ final class DashboardStore {
             totalReceiptTasks = fixture.tasks.total
             receiptTasksTruncated = fixture.tasks.truncated
             receiptAttention = fixture.tasks.attention
+            decisionLegend = fixture.tasks.decisionLegend
+            receiptFieldLabels = fixture.tasks.fieldLabels
+            receiptQueue = fixture.tasks.queue
             receipt = fixture.work?.attentionReceipt
         }
         let updated = fixture.glance.generatedAt.map(Date.init(timeIntervalSince1970:))
-        lastUpdated = updated
+        // Only a SUCCESSFUL refresh advances the window's freshness stamp —
+        // the same rule the live path follows (`if tasksSucceeded`). Stamping
+        // the generation time on every state made an error render read "just
+        // now" beside its own failure banner, which is not what the live app
+        // does: there the stamp stays at the last success and ages (K02).
+        switch workState {
+        case .listError, .listErrorWithRetainedData:
+            lastUpdated = updated.map { $0.addingTimeInterval(-Self.fixtureStaleRefreshSeconds) }
+        default:
+            lastUpdated = updated
+        }
+        // A preloaded receipt was "fetched" when the fixture was generated, so
+        // a stale-state render shows a deterministic saved-copy time.
+        if let taskID = receipt?.taskId, let updated { receiptFetchedAt[taskID] = updated }
         switch workState {
         case .listLoading, .listError:
             receiptListLastUpdated = nil
@@ -272,13 +386,14 @@ final class DashboardStore {
         }
         let days = usageDays
         let rangeGeneration = usageDaysGeneration
-        let attentionRequestGeneration = attentionGeneration.begin()
-        isLoadingMoreAttention = false
+        let attentionRequestGeneration = attentionPreviewGeneration.begin()
         // Launch independent lanes together, but publish each error through
         // its own state so a successful range request cannot hide a stale Task
         // list (or vice versa).
         async let tasksRequest: ReceiptTasksPayload = client.getAuthed("/v1/tasks?limit=200")
-        async let attentionRequest: V1AttentionPayload = client.getAuthed("/v1/attention?limit=5")
+        async let attentionRequest: V1AttentionPayload = client.getAuthed(
+            "/v1/attention?limit=\(Self.attentionPreviewLimit)"
+        )
         async let planRequest: V1PlanPayload = client.getAuthed("/v1/plan?days=\(days)")
         async let usageRequest: UsageSummary = client.getLocal("/usage/summary?days=\(days)")
         async let ingestionRefresh: Void = refreshIngestion()
@@ -306,27 +421,34 @@ final class DashboardStore {
         do {
             let payload = try await attentionRequest
             if !Task.isCancelled,
-               attentionGeneration.accepts(attentionRequestGeneration) {
-                attention = payload
-                attentionError = nil
+               attentionPreviewGeneration.accepts(attentionRequestGeneration) {
+                attentionPreview = payload
+                attentionPreviewError = nil
             }
         } catch GlanceClientError.http(404) {
-            if attentionGeneration.accepts(attentionRequestGeneration) {
+            if attentionPreviewGeneration.accepts(attentionRequestGeneration) {
                 // A pre-attention daemon cannot support a complete review claim.
-                attention = nil
-                attentionError = "this daemon predates /v1/attention"
+                attentionPreview = nil
+                attentionPreviewError = "this daemon predates /v1/attention"
             }
         } catch GlanceClientError.noDiscovery(_) {
-            if attentionGeneration.accepts(attentionRequestGeneration) {
-                attention = nil
-                attentionError = "daemon not running (no discovery file) — start it with `agentacct start`"
+            if attentionPreviewGeneration.accepts(attentionRequestGeneration) {
+                attentionPreview = nil
+                attentionPreviewError = "daemon not running (no discovery file) — start it with `agentacct start`"
             }
         } catch {
-            if attentionGeneration.accepts(attentionRequestGeneration),
+            if attentionPreviewGeneration.accepts(attentionRequestGeneration),
                !requestWasCancelled(error, taskIsCancelled: Task.isCancelled) {
-                attention = nil
-                attentionError = "attention fetch failed: \(error.localizedDescription)"
+                attentionPreview = nil
+                attentionPreviewError = "attention fetch failed: \(error.localizedDescription)"
             }
+        }
+
+        switch AttentionRefreshPlan(loadedExtent: attentionLoadedExtent) {
+        case .previewOnly:
+            break
+        case .reloadQueue(let extent):
+            await reloadAttentionQueue(extent: extent)
         }
 
         _ = await ingestionRefresh
@@ -406,24 +528,85 @@ final class DashboardStore {
         let generation = attentionGeneration.begin()
         isLoadingMoreAttention = false
         do {
-            let payload: V1AttentionPayload = try await client.getAuthed("/v1/attention?limit=50&offset=0")
+            let payload: V1AttentionPayload = try await client.getAuthed(
+                "/v1/attention?limit=\(Self.attentionPageLimit)&offset=0"
+            )
             guard !Task.isCancelled, attentionGeneration.accepts(generation) else { return }
             attention = payload
+            attentionLoadedExtent = Self.attentionPageLimit
             attentionError = nil
         } catch GlanceClientError.http(404) {
             guard !Task.isCancelled, attentionGeneration.accepts(generation) else { return }
             attention = nil
+            attentionLoadedExtent = nil
             attentionError = "this daemon predates /v1/attention"
         } catch GlanceClientError.noDiscovery(_) {
             guard !Task.isCancelled, attentionGeneration.accepts(generation) else { return }
             attention = nil
+            attentionLoadedExtent = nil
             attentionError = "daemon not running (no discovery file) — start it with `agentacct start`"
         } catch {
             guard attentionGeneration.accepts(generation),
                   !requestWasCancelled(error, taskIsCancelled: Task.isCancelled) else { return }
             attention = nil
+            attentionLoadedExtent = nil
             attentionError = "attention fetch failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Re-request the review queue at the extent the Work pane has loaded,
+    /// paging back up to it when the reviewer had asked for more. A background
+    /// refresh publishes the fresh queue only when it arrives whole: a
+    /// transient failure leaves the loaded queue and names the error, rather
+    /// than emptying the list someone is working through (K87).
+    private func reloadAttentionQueue(extent: Int) async {
+        guard !isOfflineSnapshot, !isLoadingMoreAttention else { return }
+        let generation = attentionGeneration.begin()
+        var merged: V1AttentionPayload?
+        do {
+            while true {
+                let loaded = merged?.items.count ?? 0
+                let pageLimit = attentionReloadPageLimit(
+                    loaded: loaded,
+                    extent: extent,
+                    pageLimit: Self.attentionPageLimit
+                )
+                let page: V1AttentionPayload = try await client.getAuthed(
+                    "/v1/attention?limit=\(pageLimit)&offset=\(loaded)"
+                )
+                guard !Task.isCancelled, attentionGeneration.accepts(generation) else { return }
+                guard page.offset == loaded else { break }
+                if let current = merged {
+                    // The queue changed between pages: keep the whole pages we
+                    // have rather than stitch two classifications together.
+                    guard attentionPageCanAppend(current, page) else { break }
+                    merged = mergedAttentionPages(current, page)
+                } else {
+                    merged = page
+                }
+                guard let current = merged, current.truncated, current.items.count < extent else { break }
+            }
+        } catch GlanceClientError.http(404) {
+            guard !Task.isCancelled, attentionGeneration.accepts(generation) else { return }
+            // A daemon without the route cannot support a complete review claim.
+            attention = nil
+            attentionLoadedExtent = nil
+            attentionError = "this daemon predates /v1/attention"
+            return
+        } catch GlanceClientError.noDiscovery(_) {
+            guard !Task.isCancelled, attentionGeneration.accepts(generation) else { return }
+            attentionError = "daemon not running (no discovery file) — start it with `agentacct start`"
+            return
+        } catch {
+            guard attentionGeneration.accepts(generation),
+                  !requestWasCancelled(error, taskIsCancelled: Task.isCancelled) else { return }
+            attentionError = "attention fetch failed: \(error.localizedDescription)"
+            return
+        }
+        guard attentionGeneration.accepts(generation), let merged else { return }
+        attention = merged
+        attentionLoadedExtent = max(extent, merged.items.count)
+        attentionError = nil
     }
 
     func fetchMoreAttention() async {
@@ -449,7 +632,9 @@ final class DashboardStore {
                 await fetchAttention()
                 return
             }
-            attention = mergedAttentionPages(current, page)
+            let merged = mergedAttentionPages(current, page)
+            attention = merged
+            attentionLoadedExtent = max(attentionLoadedExtent ?? 0, merged.items.count)
             attentionError = nil
         } catch GlanceClientError.http(404) {
             guard !Task.isCancelled, attentionGeneration.accepts(generation) else { return }
@@ -492,6 +677,9 @@ final class DashboardStore {
         totalReceiptTasks = payload.total
         receiptTasksTruncated = payload.truncated
         receiptAttention = payload.attention
+        decisionLegend = payload.decisionLegend
+        receiptFieldLabels = payload.fieldLabels
+        receiptQueue = payload.queue
         receiptListError = nil
         receiptListLastUpdated = savedWork?.collectionDate ?? Date()
     }
@@ -513,6 +701,7 @@ final class DashboardStore {
             let payload: Receipt = try await client.getAuthed("/v1/receipt?task=\(encoded)")
             guard !Task.isCancelled, generation == receiptGeneration else { return }
             receipt = payload
+            receiptFetchedAt[taskId] = SnapshotMode.currentDate
             receiptError = nil
             receiptErrorTaskId = nil
             receiptLoadingTaskId = nil
@@ -693,18 +882,37 @@ struct DispositionResponse: Decodable {
     let revision: Int?
 }
 
+/// Why the record page is on screen. Navigating to a record opens it at its
+/// verdict with a clean inspector; coming BACK from somewhere else (Setup)
+/// restores the reading position the user left (K104).
+enum WorkEntryReason {
+    case navigate
+    case restore
+}
+
 /// The menu bar → main window selection channel.
 @MainActor
 @Observable
 final class AppSelection {
     var sessionId: String?
-    var taskId: String?
+    var taskId: String? {
+        didSet {
+            // Landing on a different record is navigation. Only an explicit
+            // return (`prepareWorkReturnFocus`, which keeps the same task)
+            // asks for the previous reading position back.
+            if taskId != oldValue { workEntry = .navigate }
+        }
+    }
     var pane: MainPane = .dashboard
     let workBrowse = WorkBrowseState()
     var workReturnFocus = WorkTimelineFocusRestoration()
+    /// How the record now on screen was reached. Selecting a row or following
+    /// a dashboard link is navigation; only an explicit return restores.
+    private(set) var workEntry: WorkEntryReason = .navigate
 
     func prepareWorkReturnFocus() {
         guard pane == .work, let taskId else { return }
+        workEntry = .restore
         workReturnFocus.prepare(taskID: taskId)
     }
 
@@ -723,6 +931,15 @@ final class AppSelection {
     /// keeps a previous Task or session from overriding the control the user
     /// just activated when WorkPane resolves its selection.
     func open(_ destination: DashboardDestination) {
+        let previousGroup = workGroup
+        defer {
+            // A deep link that also changes the lifecycle filter shows its new
+            // state ("Status: Attention"), but a screen-reader user never sees
+            // that control move, so the change is announced (K104).
+            if let group = workGroup, group != previousGroup, pane == .work {
+                Self.announce("Showing \(group.rawValue)")
+            }
+        }
         switch destination {
         case .work:
             taskId = nil
@@ -763,6 +980,29 @@ final class AppSelection {
     }
 }
 
+extension AppSelection {
+    /// The app's one VoiceOver announcement call: a state change a sighted
+    /// reader can see but a screen-reader user would otherwise miss.
+    static func announce(_ message: String) {
+        // `NSApp` is an implicitly-unwrapped global that stays nil until an
+        // NSApplication exists, so it must be BOUND, not dereferenced: a unit
+        // test that exercises a navigation action without having created an
+        // application otherwise crashed here rather than simply not speaking.
+        guard !SnapshotMode.enabled,
+              let app = NSApp,
+              let window = app.keyWindow ?? app.mainWindow
+        else { return }
+        NSAccessibility.post(
+            element: window,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
+    }
+}
+
 enum DashboardDestination: Equatable {
     case work
     case reviewQueue
@@ -771,6 +1011,17 @@ enum DashboardDestination: Equatable {
     case session(String)
     case limits
     case sources
+
+    /// The section this destination lands in, named exactly as its tab and
+    /// its menu command name it. A hint that says where a control leads uses
+    /// this, so no surface invents a second name for the same place.
+    var paneName: String {
+        switch self {
+        case .work, .reviewQueue, .task, .attentionTask, .session: return MainPane.work.rawValue
+        case .limits: return MainPane.usage.rawValue
+        case .sources: return MainPane.sources.rawValue
+        }
+    }
 }
 
 enum MainPane: String, CaseIterable, Identifiable {

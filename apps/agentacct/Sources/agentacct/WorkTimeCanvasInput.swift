@@ -1,9 +1,18 @@
 import AppKit
 import SwiftUI
 
-/// Native input for a fixed-size time canvas. Dragging pans through time in
-/// content-motion pixels (positive to the right); wheel and pinch input resize
-/// the visible span with zoom factors above one zooming in. Interactive
+/// A cursor owned by the input view through cursor rects, in the same top-left
+/// coordinates as `interactiveRegions` (C107).
+struct WorkTimeCanvasCursorRegion {
+    var rect: CGRect
+    var cursor: NSCursor
+}
+
+/// Native input for a fixed-size time canvas embedded in a scrolling page.
+/// Dragging and sideways scrolling pan through time in content-motion pixels
+/// (positive to the right); pinch and Option-scroll resize the visible span
+/// with zoom factors above one zooming in. A plain vertical wheel always
+/// reaches the page, and saturated zoom or pan input does too (C13). Interactive
 /// rectangles use the same top-left coordinate system as the hosted SwiftUI
 /// content.
 struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
@@ -12,6 +21,10 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
     var onPan: (Double) -> Void
     var onDrag: ((Double) -> Void)?
     var onZoom: (Double, Double) -> Void
+    /// Whether a zoom would change the window; nil means always.
+    var canZoom: ((Double, Double) -> Bool)?
+    /// Whether a pan would change the window; nil means always.
+    var canPan: ((Double) -> Bool)?
     var onInteraction: (() -> Void)?
     var onEdge: ((Bool) -> Void)?
     var onDismiss: (() -> Void)?
@@ -19,8 +32,12 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
     var onGestureBegan: (() -> Void)?
     var onGestureEnded: (() -> Void)?
     var onGestureCancelled: (() -> Void)?
+    var cursorRegions: [WorkTimeCanvasCursorRegion]
     var accessibilityValue: String
     var accessibilityIdentifier: String
+    /// Names THIS canvas. Two groups that both said "Time canvas" left a
+    /// screen-reader user unable to tell the plot from its overview (K122).
+    var accessibilityLabel: String
     var content: Content
 
     var hostedContent: WorkTimeCanvasHostedContent<Content> {
@@ -29,20 +46,26 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
 
     init(interactiveRegions: [CGRect], onPan: @escaping (Double) -> Void,
          onDrag: ((Double) -> Void)? = nil,
-         onZoom: @escaping (Double, Double) -> Void, onInteraction: (() -> Void)? = nil,
+         onZoom: @escaping (Double, Double) -> Void,
+         canZoom: ((Double, Double) -> Bool)? = nil, canPan: ((Double) -> Bool)? = nil,
+         onInteraction: (() -> Void)? = nil,
          onEdge: ((Bool) -> Void)? = nil, onDismiss: (() -> Void)? = nil,
          onBackgroundClick: (() -> Void)? = nil, onGestureBegan: (() -> Void)? = nil,
          onGestureEnded: (() -> Void)? = nil,
-         onGestureCancelled: (() -> Void)? = nil, accessibilityValue: String = "",
+         onGestureCancelled: (() -> Void)? = nil,
+         cursorRegions: [WorkTimeCanvasCursorRegion] = [], accessibilityValue: String = "",
          accessibilityIdentifier: String = "work.timeline.navigation",
+         accessibilityLabel: String = "Activity timeline",
          @ViewBuilder content: () -> Content) {
         self.interactiveRegions = interactiveRegions
         self.onPan = onPan; self.onDrag = onDrag; self.onZoom = onZoom; self.onInteraction = onInteraction
+        self.canZoom = canZoom; self.canPan = canPan; self.cursorRegions = cursorRegions
         self.onEdge = onEdge; self.onDismiss = onDismiss
         self.onBackgroundClick = onBackgroundClick; self.onGestureBegan = onGestureBegan
         self.onGestureEnded = onGestureEnded
         self.onGestureCancelled = onGestureCancelled
         self.accessibilityValue = accessibilityValue; self.accessibilityIdentifier = accessibilityIdentifier
+        self.accessibilityLabel = accessibilityLabel
         self.content = content()
     }
 
@@ -54,6 +77,7 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
         view.configuration = self
         view.hosting.rootView = hostedContent
         view.setAccessibilityValue(accessibilityValue)
+        view.setAccessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -84,14 +108,16 @@ enum WorkTimeCanvasInputIntent {
         case pan(Double), zoom(Double), edge(latest: Bool), dismiss
     }
 
-    /// Wheel input resizes the visible time span. A positive dominant delta
+    /// Only Option-scroll resizes the visible time span; an unmodified wheel
+    /// returns nil so the page keeps its scroll axis. A positive dominant delta
     /// (scrolling up or right) zooms in; negative zooms out. The per-event
     /// factor is bounded so one notch or a fast trackpad flick stays
-    /// predictable, and reserved system modifiers keep their OS behavior.
+    /// predictable. Command and Control keep their system behavior (Control
+    /// scroll is accessibility zoom).
     static func zoomScroll(deltaX: Double, deltaY: Double, precise: Bool,
                            modifiers: NSEvent.ModifierFlags,
                            horizontalGesture: Bool? = nil) -> Double? {
-        guard modifiers.intersection([.command, .control, .option]).isEmpty,
+        guard modifiers.contains(.option), modifiers.intersection([.command, .control]).isEmpty,
               deltaX.isFinite, deltaY.isFinite else { return nil }
         let delta: Double
         if let horizontalGesture {
@@ -106,6 +132,22 @@ enum WorkTimeCanvasInputIntent {
         let factor = exp(bounded * (precise ? 0.004 : 0.12))
         guard factor.isFinite, factor > 0 else { return nil }
         return min(max(factor, 0.75), 1.33)
+    }
+
+    /// Sideways scrolling pans through time in content-motion pixels. Only a
+    /// horizontal-dominant, unmodified delta pans; vertical-dominant input
+    /// returns nil and reaches the page. A phased gesture passes its latched
+    /// axis so diagonal drift cannot flip meaning mid-gesture.
+    static func panScroll(deltaX: Double, deltaY: Double, precise: Bool,
+                          modifiers: NSEvent.ModifierFlags,
+                          horizontalGesture: Bool? = nil) -> Double? {
+        guard modifiers.intersection([.command, .control, .option]).isEmpty,
+              deltaX.isFinite, deltaY.isFinite else { return nil }
+        let horizontal = horizontalGesture ?? (abs(deltaX) > abs(deltaY))
+        guard horizontal, deltaX != 0 else { return nil }
+        // A line-based wheel reports whole lines; scale them to points.
+        let pixels = precise ? deltaX : deltaX * 10
+        return min(max(pixels, -2_000), 2_000)
     }
 
     static func zoomFactor(magnification: Double) -> Double? {
@@ -142,7 +184,12 @@ enum WorkTimeCanvasInputIntent {
 /// under the pointer. Blank-area mouse input is handled by this parent; card
 /// mouse input remains inside SwiftUI. No application-wide event monitor exists.
 final class WorkTimeCanvasInputView<Content: View>: NSView {
-    var configuration: WorkTimeCanvasInput<Content>
+    var configuration: WorkTimeCanvasInput<Content> {
+        didSet {
+            let old = oldValue.cursorRegions.map(\.rect)
+            if old != configuration.cursorRegions.map(\.rect) { window?.invalidateCursorRects(for: self) }
+        }
+    }
     let hosting: WorkTimeCanvasHostingView<WorkTimeCanvasHostedContent<Content>>
     private var dragStart: NSPoint?
     private var lastDragX: CGFloat = 0
@@ -155,16 +202,24 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         self.configuration = configuration
         hosting = WorkTimeCanvasHostingView(rootView: configuration.hostedContent)
         super.init(frame: .zero)
+        // This host begins its own AppKit layer tree, so the enclosing
+        // SwiftUI `.clipped()` does not bound what it draws: a selected card's
+        // accent outline escaped into the page gutter (K99). Clip here, where
+        // the container's bounds are.
+        wantsLayer = true
+        layer?.masksToBounds = true
+        hosting.wantsLayer = true
+        hosting.layer?.masksToBounds = true
         hosting.autoresizingMask = [.width, .height]
         addSubview(hosting)
         hosting.routeScroll = { [weak self] in self?.scrollWheel(with: $0) }
         hosting.routeMagnify = { [weak self] in self?.magnify(with: $0) }
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Time canvas")
+        setAccessibilityLabel(configuration.accessibilityLabel)
         setAccessibilityIdentifier(configuration.accessibilityIdentifier)
         setAccessibilityValue(configuration.accessibilityValue)
-        setAccessibilityHelp("Scroll to make the visible time span smaller or larger. Drag to move through time or pinch to zoom. The viewing window below also supports dragging and resizing.")
+        setAccessibilityHelp("Pinch or Option-scroll to change the visible time span; scroll sideways or drag to move through time. The viewing window below also supports dragging and resizing.")
         setAccessibilityCustomActions([
             NSAccessibilityCustomAction(name: "Move earlier") { [weak self] in self?.perform(.pan(48)) ?? false },
             NSAccessibilityCustomAction(name: "Move later") { [weak self] in self?.perform(.pan(-48)) ?? false },
@@ -195,6 +250,16 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
     override func layout() {
         super.layout()
         hosting.frame = bounds
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        for region in configuration.cursorRegions {
+            let rect = region.rect.intersection(bounds)
+            guard !rect.isNull, !rect.isEmpty else { continue }
+            addCursorRect(rect, cursor: region.cursor)
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -203,10 +268,11 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         return configuration.interactiveRegions.contains { $0.contains(local) } ? hit : self
     }
 
-    /// Wheel input resizes the visible span around the pointer, whichever axis
-    /// dominates the gesture. The dominant axis latches for the gesture's
-    /// phases so a diagonal drift cannot flip the zoom direction mid-gesture.
-    /// Reserved-modifier and zero-delta events fall through to the page.
+    /// Option-scroll resizes the visible span around the pointer; sideways
+    /// scrolling pans. The dominant axis latches for the gesture's phases so a
+    /// diagonal drift cannot flip meaning mid-gesture. A plain vertical wheel,
+    /// reserved modifiers, zero deltas and saturated zoom or pan fall through
+    /// to the page.
     override func scrollWheel(with event: NSEvent) {
         if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
             scrollHorizontalAtStart = nil
@@ -222,17 +288,29 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
                 scrollHorizontalAtStart = nil
             }
         }
-        guard let factor = WorkTimeCanvasInputIntent.zoomScroll(
+        let latched = phased ? scrollHorizontalAtStart : nil
+        if let factor = WorkTimeCanvasInputIntent.zoomScroll(
             deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY,
             precise: event.hasPreciseScrollingDeltas, modifiers: event.modifierFlags,
-            horizontalGesture: phased ? scrollHorizontalAtStart : nil) else {
-            super.scrollWheel(with: event)
-            return
+            horizontalGesture: latched) {
+            let anchor = WorkTimeCanvasInputIntent.anchorFraction(
+                x: convert(event.locationInWindow, from: nil).x, width: bounds.width) ?? 0.5
+            if configuration.canZoom?(factor, anchor) ?? true {
+                configuration.onInteraction?()
+                configuration.onZoom(factor, anchor)
+                return
+            }
+        } else if let pixels = WorkTimeCanvasInputIntent.panScroll(
+            deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY,
+            precise: event.hasPreciseScrollingDeltas, modifiers: event.modifierFlags,
+            horizontalGesture: latched) {
+            if configuration.canPan?(pixels) ?? true {
+                configuration.onInteraction?()
+                configuration.onPan(pixels)
+                return
+            }
         }
-        configuration.onInteraction?()
-        let anchor = WorkTimeCanvasInputIntent.anchorFraction(
-            x: convert(event.locationInWindow, from: nil).x, width: bounds.width) ?? 0.5
-        configuration.onZoom(factor, anchor)
+        super.scrollWheel(with: event)
     }
 
     override func magnify(with event: NSEvent) {
@@ -244,8 +322,13 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         if let factor = WorkTimeCanvasInputIntent.zoomFactor(magnification: event.magnification),
            let anchor = WorkTimeCanvasInputIntent.anchorFraction(
             x: convert(event.locationInWindow, from: nil).x, width: bounds.width) {
-            if !magnifying { configuration.onInteraction?(); magnifying = true }
-            configuration.onZoom(factor, anchor)
+            if configuration.canZoom?(factor, anchor) ?? true {
+                if !magnifying { configuration.onInteraction?(); magnifying = true }
+                configuration.onZoom(factor, anchor)
+            } else if !magnifying {
+                // Saturated pinch input is not consumed.
+                super.magnify(with: event)
+            }
         }
         if event.phase == .ended {
             if magnifying { configuration.onGestureEnded?() }
@@ -339,6 +422,7 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
 
     private func updateCursor(at point: NSPoint) {
         if dragging { NSCursor.closedHand.set() }
+        else if let region = configuration.cursorRegions.first(where: { $0.rect.contains(point) }) { region.cursor.set() }
         else if configuration.interactiveRegions.contains(where: { $0.contains(point) }) { NSCursor.arrow.set() }
         else { NSCursor.openHand.set() }
     }
