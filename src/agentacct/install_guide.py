@@ -294,28 +294,42 @@ _RECORDING_CONTRACT_LINES = (
     "call, and again before each meaningful task: it is the only thing that groups "
     "your actions, files, checks and cost into one readable unit. Use `source` (your "
     "client name), a stable `section_id` (the SAME id for this section's "
-    "started/checkpoint/terminal calls), `section_status=started`, and a short "
-    "`section_title`. Long task: send `section_status=checkpoint` updates rather than "
-    "one giant section.",
+    "started/checkpoint/terminal calls), `section_status=started`, a short "
+    "`section_title`, and `kind`. Name the paths you change in `files` — they are the "
+    "only anchor for WHAT changed, they stick to the section, and a terminal section "
+    "without them is refused unless its `kind` is review/research/planning/docs. Long "
+    "task: send `section_status=checkpoint` updates rather than one giant section.",
     "- Pass `client_session_id` when you know it — the only key that links this work to "
     "the session's token and cost usage. Never guess it: an installed hook bridge fills "
     "it in, and a wrong id is worse than a missing one. Add `turn_id` when your client "
-    "exposes it, so usage attributes per turn rather than per session.",
+    "exposes it, so usage attributes per turn rather than per session, and "
+    "`parent_client_session_id` when you are a subagent, so your work stays under the "
+    "parent's task instead of appearing as its own.",
     "- Finish with `section_status=completed` and a `summary`: one sentence stating the "
     "outcome, then short lines for what changed and what was verified. The user reads "
     "this prose, so lead with the result. A terminal section without it is refused. "
     "Call `agentacct_work_status` before you finish: it lists sections you left open and "
     "completed work that still has no check behind it.",
     "- Blocked or handing off: `section_status=blocked` with `blocker` (what stopped "
-    "you) plus `next_step`, or `section_status=handed_off` with `summary` and "
-    "`next_step` when the user continues in a new session — never leave it "
-    "`started`/`checkpoint`.",
+    "you), or `section_status=handed_off` with `summary` when the user continues in a "
+    "new session — both also require `next_step`, the concrete action that resumes the "
+    "work. Never leave a section at `started`/`checkpoint`.",
     "- After tests, a build, a lint, a smoke test or a browser check, call "
-    "`agentacct_record_machine_check` with `command` (what you ran) or `files` (what it "
+    "`agentacct_record_machine_check` with the `section_id` it belongs to (a check with "
+    "none is not attached to any step), `command` (what you ran) or `files` (what it "
     "covered) plus `exit_code`; a check naming neither cannot be audited and is "
-    "refused.",
-    "- If unsure whether something is worth recording, record it: a short section beats "
-    "a gap. Skip only genuinely trivial throwaway commands.",
+    "refused. `name` is a short label for what the check PROVES, not the command — "
+    "e.g. name=\"percentage() rounds half-up\", command=\"python -m pytest "
+    "tests/test_percent.py\". `result` is the verdict on the work: failed = the check "
+    "shows a defect, not_reproduced = the probe ran and the problem did not appear.",
+    "- A failed or error check must carry a `summary` saying what failed and what was "
+    "observed versus expected; restating the name and the result is refused. Re-run a "
+    "check with the same `command` and `section_id` (or the same `check_key`) so a pass "
+    "supersedes the earlier failure; error means it could not run, skipped means you "
+    "chose not to run it.",
+    # The ONE skip rule. Two bullets used to pull opposite ways when unsure ("a
+    # short section beats a gap" vs "recording nothing is better than noise").
+    "- Record every meaningful step; skip only trivial throwaway commands.",
     "- Keep MCP/event evidence separate from token/cost claims: MCP events prove what "
     "work happened; a token or cost figure is only real if it comes from actual client "
     "usage the importer read — never fabricate one.",
@@ -330,14 +344,6 @@ _LOAD_IF_DEFERRED_LINE = (
     "(they may be provided as searchable/deferred tools) before recording."
 )
 
-# The low-friction escape hatch — deliberately narrow so real work is never
-# skipped. Directive by omission: everything that is not a genuinely trivial
-# throwaway session should be recorded.
-_LOW_FRICTION_LINE = (
-    "- Low-friction: skip recording only for a genuinely trivial throwaway "
-    "session — recording nothing is better than recording noise, but do record "
-    "real work."
-)
 
 
 # --- MCP server instructions (returned in the `initialize` result) -------------
@@ -351,7 +357,6 @@ MCP_SERVER_INSTRUCTIONS = "\n".join(
         "agentacct records what this session actually did — the work, not just tokens — so the local work views can show it. Record your work as you go:",
         _LOAD_IF_DEFERRED_LINE,
         *_RECORDING_CONTRACT_LINES,
-        _LOW_FRICTION_LINE,
     )
 )
 
@@ -378,7 +383,6 @@ SESSION_START_ADDITIONAL_CONTEXT = "\n".join(
         "agentacct is installed on this machine: it records what each session actually did — the work, not just tokens — for the local work views. Record your work in this session:",
         _LOAD_IF_DEFERRED_LINE,
         *_RECORDING_CONTRACT_LINES,
-        _LOW_FRICTION_LINE,
     )
 )
 
@@ -451,12 +455,11 @@ INSTRUCTIONS_END_MARKERS = (
 # client-agnostic); the surrounding heading differs only in the target filename.
 # Shares the directive bullets with MCP_SERVER_INSTRUCTIONS so the two surfaces
 # cannot drift on the contract; adds the load-if-deferred hint (Claude Code defers
-# MCP tools) and a narrow low-friction note without inviting a blanket skip.
+# MCP tools); the shared contract's one skip rule never invites a blanket skip.
 WORKFLOW_INSTRUCTION_LINES = (
     "Record what this session does so the local work views can show it, not just tokens:",
     _LOAD_IF_DEFERRED_LINE,
     *_RECORDING_CONTRACT_LINES,
-    _LOW_FRICTION_LINE,
 )
 
 WORKFLOW_INSTRUCTION_HEADING = "## agentacct — record your work"

@@ -124,6 +124,7 @@ def test_narrative_newlines_are_preserved(tmp_path) -> None:
             server,
             section_status="completed",
             summary=summary,
+            files=["src/agentacct/mcp.py"],
         )
     )
     assert stored["event"]["metadata"]["summary"] == summary
@@ -156,6 +157,7 @@ def test_completed_section_with_a_real_summary_is_accepted(tmp_path) -> None:
             server,
             section_status="completed",
             summary="Added the rate limiter to the login endpoint and covered it with three tests.",
+            files=["src/agentacct/api.py"],
         )
     )
     assert stored["event"]["metadata"]["section_status"] == "completed"
@@ -172,6 +174,7 @@ def test_blocked_section_requires_a_blocker_not_a_summary(tmp_path) -> None:
             section_status="blocked",
             blocker="The staging database rejects the migration without an owner role.",
             next_step="Ask the platform team to grant the owner role.",
+            files=["migrations/0007_add_owner.sql"],
         )
     )
     assert stored["event"]["metadata"]["blocker"].startswith("The staging database")
@@ -257,7 +260,12 @@ def test_generic_check_name_without_evidence_is_refused(tmp_path) -> None:
     message = _error(_call(server, "agentacct_record_machine_check", {"source": "codex", "name": "check", "result": "passed"}))
     assert message is not None
     # The refusal must name the field and show a usable example.
-    assert "too generic" in message and "pytest tests/test_mcp.py" in message
+    # The refusal must show a LABEL alongside a command, never a command as a
+    # name: the old example ('name="pytest tests/test_mcp.py"') is exactly what
+    # taught agents to put the command in the name field.
+    assert "too generic" in message
+    assert 'name="percentage() rounds half-up"' in message
+    assert 'command="python -m pytest tests/test_percent.py"' in message
 
 
 def test_generic_name_with_a_command_is_accepted(tmp_path) -> None:
@@ -282,6 +290,9 @@ def test_real_ledger_shapes_are_accepted(tmp_path) -> None:
             section_status="completed",
             section_title="Coordinate 100 native macOS design reviews",
             summary="Ran the ten review rounds and recorded each disposition with its source hash.",
+            # A review step changes no files, and the contract says so by name
+            # rather than making the agent invent a path.
+            kind="review",
         ),
         _section(
             server,
@@ -348,3 +359,397 @@ def test_a_real_outcome_summary_is_evidence(tmp_path) -> None:
         "before_summary": "failed before", "after_summary": "passed after",
     }))
     assert stored["event"]["metadata"]["result"] == "passed"
+
+
+# --- Summary-shape advisory (a nudge, never a refusal) ------------------------
+# The write-time nudge toward "what changed". Two hard invariants: it is an
+# ADVISORY carried in the response (the record is always stored), and it is
+# conservative (an ambiguous summary is treated as an outcome, never nagged).
+
+from agentacct.semantic_rules import classify_summary_shape, summary_advice  # noqa: E402
+
+
+def test_classify_summary_shape_flags_process_and_status_but_not_outcomes() -> None:
+    assert classify_summary_shape("Reviewed the login flow and looked at the handler") == "process"
+    assert classify_summary_shape("Investigated the flaky test but changed nothing yet") == "process"
+    assert classify_summary_shape("In progress on the parser; still working the edges") == "status"
+    assert classify_summary_shape("Fixed the login redirect and covered it with two tests") == "outcome"
+    assert classify_summary_shape("Added a rate limiter to the login route; the test passes") == "outcome"
+    # Ambiguous / unknown shapes default to outcome so the advisory never nags.
+    assert classify_summary_shape("Rate limiter for the login route, plus a regression test") == "outcome"
+    assert classify_summary_shape("done") == "thin"
+
+
+def test_summary_advice_only_fires_for_terminal_non_outcome_summaries() -> None:
+    assert summary_advice("completed", "Reviewed the login flow")["shape"] == "process"
+    assert summary_advice("handed_off", "In progress; still going")["shape"] == "status"
+    # An outcome summary is never nagged.
+    assert summary_advice("completed", "Fixed the redirect and added a passing test") is None
+    # Non-terminal statuses are never nagged (checkpoints are progress notes).
+    assert summary_advice("checkpoint", "Reviewed the login flow") is None
+    assert summary_advice("started", "Reviewed the login flow") is None
+
+
+def test_record_section_advises_on_a_process_summary_but_still_stores_it(tmp_path) -> None:
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    process_summary = "Reviewed the login flow and inspected the session handler in detail"
+    payload = _stored(
+        _section(
+            server,
+            section_status="completed",
+            summary=process_summary,
+            files=["src/agentacct/api.py"],
+        )
+    )
+    # Stored (not refused): the event is present and carries the summary.
+    assert payload["event"]["event_type"] == "section_completed"
+    assert payload["event"]["metadata"]["summary"] == process_summary
+    # Advised, in the same response.
+    assert payload["summary_advice"]["shape"] == "process"
+    assert any("what changed" in w.lower() for w in payload["warnings"])
+
+
+def test_record_section_does_not_advise_on_an_outcome_summary(tmp_path) -> None:
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    payload = _stored(
+        _section(
+            server,
+            section_status="completed",
+            summary="Fixed the redirect and added a passing test",
+            files=["src/agentacct/api.py"],
+        )
+    )
+    assert payload["event"]["event_type"] == "section_completed"
+    assert "summary_advice" not in payload
+
+
+def test_status_words_match_as_whole_words_only() -> None:
+    """C67: a status word is a whole word. 'Wiped' is not 'wip' and
+    'Completely' is not 'complete', so neither reads as a status restatement."""
+    assert classify_summary_shape("Wiped the stale cache directory before the rerun") == "outcome"
+    assert classify_summary_shape("Completely rewrote the parser docs section") == "outcome"
+    # A real status lead still reads as status, case-insensitively.
+    assert classify_summary_shape("Completed source walkthrough. Found a P1 ambiguity in routing") == "status"
+    assert classify_summary_shape("WIP: parser edges still being explored") == "status"
+
+
+def test_outcome_and_process_markers_match_as_whole_words_only() -> None:
+    """A change verb inside another word ('fixed-size', 'unresolved', 'known')
+    is not a change verb, so an investigation-first summary is still process."""
+    assert classify_summary_shape("Reviewed the fixed-size buffer handling code") == "process"
+    assert classify_summary_shape("Reviewed the unresolved handler paths") == "process"
+    assert classify_summary_shape("Reviewed the known issues list thoroughly") == "process"
+    # The whole word still counts, anywhere in the text.
+    assert classify_summary_shape("Reviewed the handler and fixed the redirect") == "outcome"
+
+
+def test_a_status_word_lead_followed_by_content_is_told_to_lead_with_the_result() -> None:
+    lead = summary_advice("completed", "Completed source walkthrough. Found a P1 ambiguity in routing")
+    assert lead == {"shape": "status", "hint": "Lead with the result, e.g. what changed or was found."}
+    # Only a summary that is nothing but status words gets the restatement hint.
+    only = summary_advice("completed", "Done. Completed, wrapped up!!")
+    assert only is not None and only["shape"] == "status"
+    assert "restates the status word" in only["hint"]
+
+
+# --- Write-time advisories (non-blocking, never a refusal) --------------------
+
+from agentacct.display_budget import CARD_TITLE_CHARACTERS  # noqa: E402
+from agentacct.semantic_rules import check_advisories, section_advisories  # noqa: E402
+
+
+def test_failed_with_exit_code_zero_and_no_artifact_is_advised_but_stored(tmp_path) -> None:
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    payload = _stored(
+        _check(
+            server,
+            result="failed",
+            exit_code=0,
+            name="reproduce the release build failure",
+            summary="Ran the release build 3 times; it succeeded every time and the reported error never appeared.",
+        )
+    )
+    # Stored exactly as sent: an advisory never rewrites or refuses a record.
+    assert payload["event"]["metadata"]["result"] == "failed"
+    codes = [advisory["code"] for advisory in payload["advisories"]]
+    assert codes == ["failed_with_exit_code_zero"]
+    assert any("exit_code=0" in warning for warning in payload["warnings"])
+
+
+def test_failed_with_exit_code_zero_is_not_advised_when_an_artifact_shows_the_defect() -> None:
+    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=0, artifact_path="out/report.txt") == []
+    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=1, command="pnpm build") == []
+    assert check_advisories(name="the release build reproduces the failure", result="unknown", exit_code=0, command="pnpm build") == []
+    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=None, command="pnpm build") == []
+
+
+def test_over_budget_check_name_and_section_title_are_advised_but_stored(tmp_path) -> None:
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    long_name = "pytest " + "tests/test_mcp.py " * 5
+    assert len(long_name.strip()) > CARD_TITLE_CHARACTERS
+    check_payload = _stored(_check(server, name=long_name))
+    assert check_payload["event"]["metadata"]["name"] == long_name.strip()
+    assert [a["code"] for a in check_payload["advisories"]] == ["title_over_card_budget"]
+    assert check_payload["advisories"][0]["field"] == "name"
+    assert "about 54 characters; lead with the distinguishing words" in check_payload["advisories"][0]["hint"]
+
+    long_title = "Implementation of the login rate limiting work across every route"
+    assert len(long_title) > CARD_TITLE_CHARACTERS
+    section_payload = _stored(_section(server, section_title=long_title))
+    assert section_payload["event"]["metadata"]["section_title"] == long_title
+    assert [a["field"] for a in section_payload["advisories"]] == ["section_title"]
+    assert any("lead with the distinguishing words" in w for w in section_payload["warnings"])
+
+
+def test_titles_within_the_card_budget_are_not_advised(tmp_path) -> None:
+    assert section_advisories(section_title="x" * CARD_TITLE_CHARACTERS) == []
+    assert check_advisories(name="y" * CARD_TITLE_CHARACTERS, result="passed", exit_code=0, command="pytest -q") == []
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    assert "advisories" not in _stored(_section(server))
+    assert "advisories" not in _stored(_check(server))
+
+
+def test_a_check_without_a_summary_gets_no_synthesized_summary(tmp_path) -> None:
+    """The server no longer invents '<name>: <result>': a missing summary stays
+    absent, and the result stays in its own field."""
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    metadata = _stored(_check(server))["event"]["metadata"]
+    assert metadata.get("summary") in (None, "")
+    assert metadata["result"] == "passed"
+
+
+def test_check_schema_describes_result_evidence_type_and_section_kind() -> None:
+    from agentacct.mcp import TOOLS
+
+    by_name = {tool["name"]: tool["inputSchema"]["properties"] for tool in TOOLS}
+    check = by_name["agentacct_record_machine_check"]
+    assert check["result"]["description"].startswith(
+        "Verdict on the work: passed = the work does what was claimed; failed = the check shows a defect "
+        "in the work; not_reproduced = the probe RAN and the reported problem did not appear; error = "
+        "the check could not run"
+    )
+    assert "typecheck" in check["evidence_type"]["description"]
+    kind = by_name["agentacct_record_section"]["kind"]["description"]
+    assert "review/research/planning/docs steps are not check-relevant" in kind
+
+
+def test_work_status_does_not_ask_a_review_step_for_a_check(tmp_path) -> None:
+    """C68: work_status uses the receipt's step_is_checkable rule, so a
+    completed review step with no check is not listed as owing one, while an
+    implementation step still is."""
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    outcome = "Fixed the login redirect in auth/login.py and covered it with a regression test"
+    _stored(_section(server, section_id="review-step", section_status="completed", kind="review",
+                     client_session_id="sess-c68", summary=outcome))
+    _stored(_section(server, section_id="impl-step", section_status="completed", kind="implementation",
+                     client_session_id="sess-c68", summary=outcome, files=["auth/login.py"]))
+    status = _stored(_call(server, "agentacct_work_status", {"client_session_id": "sess-c68"}))
+    owing = [item["section_id"] for item in status["completed_without_evidence"]]
+    assert owing == ["impl-step"]
+    assert status["counts"]["completed_without_evidence"] == 1
+
+
+def test_work_status_shows_the_reviewer_headline_and_standing_checks(tmp_path) -> None:
+    """K62: before finishing, work_status projects the session's Task through
+    the receipt reducer, so an agent sees the headline the reviewer will see
+    and every standing check — and is never told to record a pass."""
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    session, ns = "sess-k62", "sha256:k62-ns"
+    scope = {
+        "client": "claude-code",
+        "client_session_id": session,
+        "session_namespace_fingerprint": ns,
+        "identity_scope_state": "explicit",
+        "project_dir": "/tmp/project",
+    }
+    server.service.record_event(
+        {
+            "event_id": "evt_usage_k62",
+            "created_at": 100.0,
+            "source": "claude-code-local-session-import",
+            "event_type": "model_usage",
+            "provider": "claude-code",
+            "model": "claude-opus-4-8",
+            "estimated_input_tokens": 100,
+            "estimated_output_tokens": 25,
+            "usage_confidence": "client_reported",
+            "metadata": {
+                **scope,
+                "usage_source": "local_client_session_store",
+                "usage_provenance": "agent_sentinel_local_usage_import",
+                "started_at": 100.0,
+                "updated_at": 100.0,
+                "source_namespace_fingerprint": ns,
+            },
+        },
+        trusted_usage_import=True,
+    )
+    server.service.record_event(
+        {
+            "event_id": "evt_section_k62_completed",
+            "created_at": 101.0,
+            "source": "claude-code",
+            "event_type": "section_completed",
+            "metadata": {
+                **scope,
+                "sentinel_semantic_kind": "section",
+                "client_context_keys_authored": ["client_session_id"],
+                "section_id": "impl",
+                "section_status": "completed",
+                "section_title": "Fix sign placement",
+                "kind": "implementation",
+                "summary": "Moved the sign before the currency symbol in format_amount.",
+                "files": ["moneyutil/format.py"],
+            },
+        }
+    )
+    server.service.record_event(
+        {
+            "event_id": "evt_check_k62_ruff",
+            "created_at": 102.0,
+            "source": "claude-code",
+            "event_type": "machine_check",
+            "metadata": {
+                **scope,
+                "sentinel_semantic_kind": "evidence",
+                "result": "error",
+                "evidence_type": "lint",
+                "name": "moneyutil lints clean",
+                "summary": "ruff aborted: unknown rule selector 'RUF200' in pyproject.toml, so nothing was linted.",
+                "exit_code": 1,
+                "section_id": "impl",
+            },
+        }
+    )
+    status = _stored(_call(server, "agentacct_work_status", {"client_session_id": session}))
+    assert status["tasks"], status
+    task = status["tasks"][0]
+    assert task["task_headline"]
+    assert "Finding" not in task["task_headline"]
+    assert task["standing_attention"] == [
+        {"reason_label": "Check could not run", "label": "Lint check · moneyutil lints clean · exit 1"}
+    ]
+    advice = " ".join(status["what_to_do_next"])
+    assert "re-run the same check" in advice
+    assert "Never record it as passed" in advice
+    assert "record it as passed" not in advice.replace("Never record it as passed", "")
+
+
+# --- Mechanical git-revision capture (never a self-reported SHA) --------------
+import subprocess  # noqa: E402
+
+
+def _git_repo(path) -> str:
+    path.mkdir(parents=True, exist_ok=True)
+    env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "HOME": str(path)}
+    run = lambda *a: subprocess.run(["git", "-C", str(path), *a], check=True, capture_output=True, text=True, env={**env})
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "T")
+    (path / "f.txt").write_text("hello\n", encoding="utf-8")
+    run("add", "f.txt")
+    run("commit", "-q", "-m", "init")
+    return subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_machine_check_stamps_the_server_captured_git_revision(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    head = _git_repo(repo)
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    payload = _stored(_check(server, project_dir=str(repo)))
+    meta = payload["event"]["metadata"]
+    assert meta["git_commit"] == head
+    assert meta["git_revision_basis"] == "server_captured_at_record"
+    assert meta["git_dirty"] is False  # clean tree right after commit
+
+
+def test_machine_check_never_stamps_git_for_a_non_repo_project_dir(tmp_path) -> None:
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    payload = _stored(_check(server, project_dir=str(tmp_path / "not-a-repo")))
+    meta = payload["event"]["metadata"]
+    # No repo -> no revision noise at all (receipt reads that as "not captured").
+    assert "git_revision_basis" not in meta
+    assert "git_commit" not in meta
+
+
+def test_a_caller_supplied_git_commit_is_stripped_not_trusted(tmp_path) -> None:
+    # record_section accepts free-form metadata, so it is the lane where a model
+    # could try to smuggle a SHA. The server-read revision must win and the
+    # smuggled value must be stripped and recorded as stripped.
+    repo = tmp_path / "repo"
+    head = _git_repo(repo)
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    payload = _stored(
+        _section(
+            server,
+            section_status="completed",
+            summary="Added the rate limiter to the login endpoint and covered it with tests.",
+            project_dir=str(repo),
+            kind="review",
+            metadata={"git_commit": "deadbeefdeadbeef", "git_revision_basis": "host_hook"},
+        )
+    )
+    meta = payload["event"]["metadata"]
+    # The server value wins; the smuggled SHA and basis never survive.
+    assert meta["git_commit"] == head
+    assert meta["git_commit"] != "deadbeefdeadbeef"
+    assert meta["git_revision_basis"] == "server_captured_at_record"
+    assert "git_commit" in (meta.get("reserved_context_keys_stripped") or [])
+
+
+def test_machine_check_tool_does_not_accept_free_form_metadata(tmp_path) -> None:
+    # Defense in depth: the check tool has no metadata argument at all, so there
+    # is no free-form lane to smuggle a revision through in the first place.
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    assert _error(_check(server, metadata={"git_commit": "deadbeef"})) is not None
+
+
+def test_declared_files_absent_at_the_stamped_revision_are_recorded(tmp_path) -> None:
+    """The revision basis is ``server_captured_at_record``: HEAD is read when the
+    call ARRIVES. An agent that records a check before it commits therefore
+    stamps the commit BEFORE its own work. When the check declares files, one
+    ``git ls-tree`` proves the stamp cannot be what ran — so the contradiction is
+    recorded instead of the receipt quietly asserting the revision.
+    """
+
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_subtract.py").write_text("def test(): ...\n", encoding="utf-8")
+    payload = _stored(
+        _check(server, project_dir=str(repo), files=["f.txt", "tests/test_subtract.py"])
+    )
+    meta = payload["event"]["metadata"]
+    # f.txt is in the stamped commit; the brand-new test file is not.
+    assert meta["git_declared_files_absent"] == ["tests/test_subtract.py"]
+
+
+def test_a_check_whose_declared_files_all_exist_records_no_contradiction(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    payload = _stored(_check(server, project_dir=str(repo), files=["f.txt"]))
+    meta = payload["event"]["metadata"]
+    # Nothing contradicted: the key is simply absent (the store drops nulls),
+    # never a fabricated list and never an empty-list "verified" claim.
+    assert meta.get("git_declared_files_absent") is None
+
+
+def test_a_caller_cannot_smuggle_its_own_absent_file_verdict(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    payload = _stored(
+        _section(
+            server,
+            section_status="completed",
+            summary="Added the rate limiter to the login endpoint and covered it with tests.",
+            project_dir=str(repo),
+            kind="review",
+            metadata={"git_declared_files_absent": ["invented.py"]},
+        )
+    )
+    meta = payload["event"]["metadata"]
+    assert meta.get("git_declared_files_absent") != ["invented.py"]
+    assert "git_declared_files_absent" in (meta.get("reserved_context_keys_stripped") or [])

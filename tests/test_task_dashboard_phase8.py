@@ -93,6 +93,7 @@ def _record_section(
         "sentinel_semantic_kind": "section",
         "section_id": section_id,
         "section_status": "completed",
+        "files": ["src/agentacct/mcp.py"],
         "section_title": title,
         "client": client,
         "summary": "Recorded outcome for this fixture section.",

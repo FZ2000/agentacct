@@ -244,6 +244,7 @@ def test_stored_value_is_stable_across_a_second_write(tmp_path) -> None:
         "section_status": "completed",
         "section_title": "  Padded   title\twith\tcontrol ",
         "summary": "Outcome first: the migration ran.\n\n\n\n- detail one\n- detail two",
+        "files": ["src/agentacct/mcp.py"],
         "idempotency_key": "stable-1",
     }
     first = json.loads(
@@ -334,6 +335,7 @@ def test_every_lane_refuses_the_same_incomplete_records(tmp_path) -> None:
             "sentinel_semantic_kind": "section",
             "section_id": "no-outcome",
             "section_status": "completed",
+            "files": ["src/agentacct/mcp.py"],
             "section_title": "Finished work with no outcome recorded",
         },
     }
@@ -419,7 +421,8 @@ def test_machine_recorded_events_are_not_subject_to_agent_rules(tmp_path) -> Non
             "source": "codex",
             "event_type": "section_completed",
             # A machine-recorded section event with no authoring agent.
-            "metadata": {"sentinel_semantic_kind": "section", "section_id": "imported", "section_status": "completed"},
+            "metadata": {"sentinel_semantic_kind": "section", "section_id": "imported", "section_status": "completed",
+                "files": ["src/agentacct/mcp.py"]},
         },
         transport="internal",
     )

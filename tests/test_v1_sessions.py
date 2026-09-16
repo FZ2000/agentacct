@@ -940,7 +940,10 @@ def test_detail_steps_carry_tui_grade_depth(tmp_path):
     # the check carries its trusted source_type so a surface can show independence.
     assert step["evidence_grade"] == "self_checked"
     assert step["evidence_grade_reason"]
+    assert step["evidence_grade_label"] == "self-checked"
     assert checks[0]["source_type"] == "mcp_agent_reported"
+    # ...and the shared display label for it, so the app keeps no label map.
+    assert checks[0]["source_label"] == "Agent-reported"
 
 
 def test_detail_descendants_and_plan_block(tmp_path):

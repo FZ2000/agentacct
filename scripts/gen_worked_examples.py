@@ -368,7 +368,8 @@ def _seed_example_b(store: Path) -> None:
              status="completed", kind="implementation", at=BASE + 240, files=["src/checkout/total.py"],
              summary="Rounded each line item before summing, which removes the drift.")
     _check(svc, client=c, session=s, project=p, ns=ns, section_id="fix", result="failed", at=BASE + 300,
-           summary="3 failed (red)", command="pytest tests/test_checkout.py -q", exit_code=1)
+           summary="3 failed: total() returned 19.99 for the 3-decimal line item, expected 20.00.",
+           command="pytest tests/test_checkout.py -q", exit_code=1)
     # 3) Re-run after the fix — passes, superseding the red run (the "retry").
     _check(svc, client=c, session=s, project=p, ns=ns, section_id="fix", result="passed", at=BASE + 520,
            summary="14 passed", command="pytest tests/test_checkout.py -q", exit_code=0)
@@ -440,8 +441,8 @@ def _render_example_b() -> str:
     out.append(
         "Each timeline row is sourced from the client that recorded it (here, Claude Code); the **Lane** "
         "column separates the work steps (`primary`) from the checks (`evidence`). The checks are "
-        "**self-checked** — agent-recorded through MCP, shown by the Evidence row's `mcp` source — while the "
-        "tool categories were hook-captured (the Actions row's `hook` source). What each source can and "
+        "**self-checked** — agent-recorded through MCP, shown by the Checks row's **Agent-reported** source — "
+        "while the tool categories were hook-captured (the Actions row's **Hook-captured** source). What each source can and "
         "cannot prove is in the [coverage matrix](../coverage-matrix.md); the capture boundaries (agentacct "
         "stores tool categories, files and commands — never full prompts or transcripts) are in the "
         "[privacy threat model](../multi-source-privacy-threat-model.md)."

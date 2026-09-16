@@ -51,6 +51,8 @@ def _post_section(client, *, section_id, title, session, source="codex", status=
                 "sentinel_semantic_kind": "section",
                 "section_id": section_id,
                 "section_status": status,
+                "files": ["src/agentacct/mcp.py"],
+                "next_step": "Re-run the focused suite and close the section",
                 "section_title": title,
                 "client": source,
                 "client_session_id": session,

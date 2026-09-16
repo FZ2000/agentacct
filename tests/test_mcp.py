@@ -483,11 +483,12 @@ def test_mcp_record_section_accepts_handed_off_and_reduces_to_clean_terminal(tmp
                 "arguments": {
                     "source": "codex",
                     "section_id": "handoff-step",
-                    "section_status": "handed_off",
+                    "section_status": "handed_off", "files": ["src/agentacct/mcp.py"],
                     "section_title": "Continue in a new session",
                     "client": "codex",
                     "client_session_id": "codex-session",
                     "summary": "Recorded outcome for this fixture section.",
+                    "next_step": "Re-run the focused suite in the new session.",
                 },
             },
         }
@@ -519,7 +520,7 @@ def test_mcp_record_machine_check_creates_evidence_event_linked_to_section(tmp_p
                 "arguments": {
                     "source": "codex",
                     "section_id": "mcp-v1",
-                    "section_status": "completed",
+                    "section_status": "completed", "files": ["src/agentacct/mcp.py"],
                     "section_title": "MCP v1 convergence",
                     "client": "codex",
                     "client_session_id": "codex-session",
@@ -620,10 +621,11 @@ def test_free_form_event_cannot_forge_blocker_resolution_provenance(tmp_path):
             {
             "source": "codex",
             "section_id": "publish-pr",
-            "section_status": "blocked",
+            "section_status": "blocked", "files": ["src/agentacct/mcp.py"],
             "section_title": "Publish private PR",
             "project_dir": "/tmp/project",
             "blocker": "GitHub authentication is unavailable.",
+            "next_step": "Ask the user to re-authenticate gh, then push the branch.",
             },
         )
     )["event"]
@@ -1248,7 +1250,7 @@ def test_usage_import_row_joins_section_with_inherited_context(tmp_path):
         {
             "source": "claude-code",
             "section_id": "inherited-join",
-            "section_status": "completed",
+            "section_status": "completed", "files": ["src/agentacct/mcp.py"],
             "section_title": "Inherited join",
             "kind": "implementation",
             "summary": "Recorded outcome for this fixture section.",
@@ -1449,7 +1451,7 @@ def test_stale_inherited_context_never_produces_exact_attribution(tmp_path):
         server,
         2,
         "agentacct_record_section",
-        {"source": "claude-code", "section_id": "conversation-b-work", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+        {"source": "claude-code", "section_id": "conversation-b-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
     )
     _record_trusted_usage(server, session_id="conversation-a-session")
 
@@ -1476,7 +1478,7 @@ def test_explicit_section_ids_still_produce_exact_attribution(tmp_path):
         {
             "source": "claude-code",
             "section_id": "explicit-work",
-            "section_status": "completed",
+            "section_status": "completed", "files": ["src/agentacct/mcp.py"],
             "summary": "Recorded outcome for this fixture section.",
             "client": "claude-code",
             "client_session_id": "explicit-session",
@@ -1564,7 +1566,7 @@ def test_context_bridge_does_not_upgrade_stale_inherited_section_to_exact(tmp_pa
         server,
         2,
         "agentacct_record_section",
-        {"source": "claude-code", "section_id": "conversation-b-work", "section_status": "completed", "summary": "Recorded outcome for this fixture section.", "section_title": "Fixture section title"},
+        {"source": "claude-code", "section_id": "conversation-b-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "summary": "Recorded outcome for this fixture section.", "section_title": "Fixture section title"},
     )
     _record_trusted_usage(server, session_id="conversation-a-session")
 
@@ -1611,7 +1613,7 @@ def test_context_bridge_explicit_section_ids_still_exact(tmp_path):
         {
             "source": "claude-code",
             "section_id": "explicit-work",
-            "section_status": "completed",
+            "section_status": "completed", "files": ["src/agentacct/mcp.py"],
             "summary": "Recorded outcome for this fixture section.",
             "client": "claude-code",
             "client_session_id": "explicit-session",
@@ -1687,7 +1689,7 @@ def test_mcp_section_inherits_hook_client_context(tmp_path):
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "hook-join", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "hook-join", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
         )
     )
     metadata = section_payload["event"]["metadata"]
@@ -1714,7 +1716,7 @@ def test_usage_joins_hook_derived_section_at_high_confidence(tmp_path):
         server,
         1,
         "agentacct_record_section",
-        {"source": "claude-code", "section_id": "hook-join", "section_status": "completed", "summary": "Recorded outcome for this fixture section.", "section_title": "Fixture section title"},
+        {"source": "claude-code", "section_id": "hook-join", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "summary": "Recorded outcome for this fixture section.", "section_title": "Fixture section title"},
     )
     _record_trusted_usage(server, session_id="hooked-session")
 
@@ -1940,7 +1942,7 @@ def test_explicit_session_id_with_hook_context_yields_exact(tmp_path):
             {
                 "source": "claude-code",
                 "section_id": "explicit-upgrade",
-                "section_status": "completed",
+                "section_status": "completed", "files": ["src/agentacct/mcp.py"],
                 "client_session_id": "hooked-session",
                 "section_title": "Fixture section title",
                 "summary": "Recorded outcome for this fixture section.",
@@ -2031,7 +2033,7 @@ def test_concurrent_hook_contexts_refuse_inheritance_end_to_end(tmp_path):
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "ambiguous-work", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "ambiguous-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
         )
     )
     metadata = payload["event"]["metadata"]
@@ -2069,7 +2071,7 @@ def test_concurrent_contexts_env_binding_selects_own_session(tmp_path):
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "env-bound", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "env-bound", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
         )
     )
     metadata = payload["event"]["metadata"]
@@ -2109,7 +2111,7 @@ def test_concurrent_contexts_env_binding_requires_strict_recency_end_to_end(tmp_
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "stale-env", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "stale-env", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
         )
     )["event"]["metadata"]
     assert "client_session_id" not in metadata
@@ -2135,7 +2137,7 @@ def test_concurrent_contexts_pid_lineage_selects_own_session(tmp_path):
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "lineage-bound", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "lineage-bound", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
         )
     )
     metadata = payload["event"]["metadata"]
@@ -2159,7 +2161,7 @@ def test_concurrent_contexts_pid_lineage_selects_own_session(tmp_path):
             sibling_server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "sibling-work", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "sibling-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
         )
     )["event"]["metadata"]
     assert "client_session_id" not in sibling_metadata
@@ -2184,7 +2186,7 @@ def test_explicit_ids_suppress_refusal_stamp(tmp_path):
             {
                 "source": "claude-code",
                 "section_id": "explicit-own-id",
-                "section_status": "completed",
+                "section_status": "completed", "files": ["src/agentacct/mcp.py"],
                 "client_session_id": "my-own-session",
                 "section_title": "Fixture section title",
                 "summary": "Recorded outcome for this fixture section.",
@@ -2254,7 +2256,7 @@ def test_metadata_overflow_keeps_refusal_marker(tmp_path):
             {
                 "source": "claude-code",
                 "section_id": "overflow-refusal",
-                "section_status": "completed",
+                "section_status": "completed", "files": ["src/agentacct/mcp.py"],
                 "metadata": {"filler": "x" * 7000},
                 "section_title": "Fixture section title",
                 "summary": "Recorded outcome for this fixture section.",
@@ -2301,7 +2303,7 @@ def test_section_spanning_sessions_keeps_per_session_snapshots(tmp_path):
         server,
         2,
         "agentacct_record_section",
-        {"source": "claude-code", "section_id": "spanning-work", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+        {"source": "claude-code", "section_id": "spanning-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
     )
     _record_trusted_usage(server, session_id="conversation-a")
 
@@ -2432,7 +2434,7 @@ def test_section_free_form_metadata_cannot_smuggle_join_keys(tmp_path):
         {
             "source": "codex",
             "section_id": "smuggle",
-            "section_status": "completed",
+            "section_status": "completed", "files": ["src/agentacct/mcp.py"],
             "metadata": {"client_session_id": "victim-session", "client_transcript_id": "victim-session"},
             "section_title": "Fixture section title",
             "summary": "Recorded outcome for this fixture section.",
@@ -2589,7 +2591,7 @@ def test_explicit_section_ids_persist_authored_marker_and_stay_exact(tmp_path):
             {
                 "source": "claude-code",
                 "section_id": "explicit-marker",
-                "section_status": "completed",
+                "section_status": "completed", "files": ["src/agentacct/mcp.py"],
                 "client": "claude-code",
                 "client_session_id": "explicit-session",
                 "client_transcript_id": "explicit-session",
@@ -2646,7 +2648,7 @@ def test_supplied_argument_overwrites_colliding_benign_metadata_without_label(tm
             {
                 "source": "codex",
                 "section_id": "server-wins",
-                "section_status": "completed",
+                "section_status": "completed", "files": ["src/agentacct/mcp.py"],
                 "summary": "Validated that the supplied argument wins over metadata.",
                 "metadata": {"summary": "caller summary", "custom": "kept"},
                 "section_title": "Fixture section title",
@@ -2670,7 +2672,7 @@ def test_forged_strip_label_in_metadata_is_discarded(tmp_path):
             {
                 "source": "codex",
                 "section_id": "forged-label",
-                "section_status": "completed",
+                "section_status": "completed", "files": ["src/agentacct/mcp.py"],
                 "metadata": {"reserved_context_keys_stripped": ["client_session_id"]},
                 "section_title": "Fixture section title",
                 "summary": "Recorded outcome for this fixture section.",
@@ -2707,7 +2709,7 @@ def test_refusal_note_with_attach_inherited_ids_does_not_claim_unattributed(tmp_
             server,
             2,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "attach-after-refusal", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "attach-after-refusal", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
         )
     )
 
@@ -2730,7 +2732,7 @@ def test_refusal_note_with_attach_inherited_ids_does_not_claim_unattributed(tmp_
             fresh,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "bare-refusal", "section_status": "completed", "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "bare-refusal", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
         )
     )
     assert "stays unattributed" in bare["refused_client_context"]["note"]
@@ -3053,6 +3055,9 @@ def test_mangled_tool_call_is_warned_about_never_repaired(tmp_path):
                 "source": "codex",
                 "section_id": "mangled",
                 "section_status": "completed",
+                # kind, not `files`: the detector only fires on a property the
+                # call did NOT supply, and this test is about `files`.
+                "kind": "review",
                 "summary": "Fixed the validator.</summary>\n<files>src/agentacct/mcp.py</files>",
                 "section_title": "Fixture section title",
             },
@@ -3102,7 +3107,7 @@ def test_mangle_detector_ignores_prose_that_merely_mentions_fields(tmp_path):
             {
                 "source": "codex",
                 "section_id": "prose",
-                "section_status": "completed",
+                "section_status": "completed", "files": ["src/agentacct/mcp.py"],
                 "summary": "Reviewed the files and the source list; <files> and <summary> tags are discussed in the MCP config docs.",
                 "blocker": "Waiting on the reviewer to confirm the config wording.",
                 "next_step": "Re-read the config docs once review returns.",
@@ -3156,20 +3161,19 @@ def test_mangle_marker_is_server_authored_and_cannot_be_forged(tmp_path):
 
 
 def test_machine_check_name_has_no_private_length_cap(tmp_path):
-    """A 240-character cap turned a 241-4036 band that recorded fine on main
-    into hard rejections. The band is real: an agent recording the full pytest
+    """A 240-character cap turned a band that recorded fine on main into hard
+    rejections. The band is real: an agent recording the full pytest
     invocation it ran routinely writes a ~300-character name. The only ceiling
     is the shared metadata budget, whose error now reports a field and a byte
     count instead of a bare "metadata must be <= 8192 bytes".
 
-    4036, not the 8000 first claimed: see
-    test_machine_check_name_band_is_the_measured_one for the boundary."""
+    See test_machine_check_name_band_is_the_measured_one for the boundary."""
     server = SentinelMCPServer(store_dir=tmp_path / "state")
 
     # Trailing whitespace is normalized by the display rules, so measure a name
     # that is already normalized.
     long_name = (".venv/bin/pytest -q " + "tests/test_mcp.py::test_a " * 12).strip()
-    assert 240 < len(long_name) <= 4036
+    assert 240 < len(long_name) <= 4036  # well inside the measured band
     accepted = _tool_payload(
         _call_tool(
             server,
@@ -3193,19 +3197,18 @@ def test_machine_check_name_has_no_private_length_cap(tmp_path):
     message = oversized["error"]["message"]
     assert message.startswith("metadata must be <= 8192 bytes when JSON encoded (received ")
     assert "name must be <=" not in message
-    # Measured, not assumed: at this size the largest field is the `summary`
-    # the server synthesizes as "<name>: <result>", so the blame is still
-    # indirect in this extreme case. Recorded here so the next reader sees it.
-    assert "largest field is summary" in message
+    # No summary is synthesized from the name any more, so the size error
+    # blames the field that actually carried the bytes.
+    assert "largest field is name" in message
 
 
 def test_machine_check_name_band_is_the_measured_one(tmp_path):
-    """The band this validator restored was documented as "241-8000". Binary
-    searching a {source, name, result} call puts the real edge at 4036 accepted
-    / 4037 rejected -- identical on the 0.5.2 release this branched from, so the
-    number was wrong when it was written, not changed by the branch. It is half
-    of 8192 because `name` lands in the budget twice: once as itself, once
-    inside the "<name>: <result>" summary the server synthesizes."""
+    """Binary searching a {source, name, result} call measures the real edge.
+    It used to sit at 4036 accepted / 4037 rejected, half of 8192, because
+    `name` landed in the budget twice: once as itself, once inside the
+    "<name>: <result>" summary the server synthesized. That summary is no longer
+    synthesized (a missing summary stays absent), so `name` lands once and the
+    edge is close to the whole budget."""
     server = SentinelMCPServer(store_dir=tmp_path / "state")
 
     def accepted(msg_id, length):
@@ -3230,8 +3233,8 @@ def test_machine_check_name_band_is_the_measured_one(tmp_path):
     # the server adds context to a payload. Measure it rather than pinning a
     # number the next field would invalidate; what must hold is that the ceiling
     # is the budget, never a private name-length cap.
-    edge = boundary(200, 8000)
-    assert 3900 <= edge <= 4100, edge
+    edge = boundary(200, 9000)
+    assert 7900 <= edge <= 8150, edge
 
     ok, response = accepted(2, edge)
     assert ok
@@ -3239,12 +3242,11 @@ def test_machine_check_name_band_is_the_measured_one(tmp_path):
 
     ok, response = accepted(3, edge + 1)
     assert not ok
-    # One character over the edge already blames the synthesized summary, so the
-    # indirection the comment warns about is the normal case, not an extreme.
-    # The largest-field indirection is the normal case, but the exact byte count
-    # moves when the server adds context to the metadata; assert the shape.
+    # One character over the edge blames `name` directly: nothing else carries
+    # its bytes. The exact byte count moves when the server adds context to the
+    # metadata; assert the shape.
     message = response["error"]["message"]
-    assert "8192 bytes" in message and "largest field is summary" in message
+    assert "8192 bytes" in message and "largest field is name" in message
 
 
 def test_metadata_budget_decision_is_identical_on_all_three_write_surfaces(tmp_path):
@@ -3634,6 +3636,7 @@ def test_mangle_detector_does_not_fire_on_a_closing_title_tag(tmp_path):
                 "source": "codex",
                 "section_id": "html",
                 "section_status": "completed",
+                "kind": "review",
                 "summary": "The page head has <title>Report</title> in it.",
                 "section_title": "Fixture section title",
             },
@@ -3652,6 +3655,7 @@ def test_mangle_detector_does_not_fire_on_a_closing_title_tag(tmp_path):
                 "source": "codex",
                 "section_id": "html",
                 "section_status": "completed",
+                "kind": "review",
                 "summary": "The page head has <title>Report</title> in it.</next_step>",
                 "section_title": "Fixture section title",
             },
@@ -3681,7 +3685,7 @@ def test_mangle_detector_ineligible_set_is_calibrated_not_hand_picked(tmp_path):
                 server,
                 msg_id,
                 "agentacct_record_section",
-                {"source": "codex", "section_id": "svg", "section_status": "completed", "summary": f"Reviewed the markup docs and the export pipeline. {summary}", "section_title": "Review markup prose handling"},
+                {"source": "codex", "section_id": "svg", "section_status": "completed", "kind": "review", "summary": f"Reviewed the markup docs and the export pipeline. {summary}", "section_title": "Review markup prose handling"},
             )
         )
         metadata = payload["event"]["metadata"]

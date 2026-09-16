@@ -41,6 +41,7 @@ def _section_event(section_id: str) -> dict:
             "sentinel_semantic_kind": "section",
             "section_id": section_id,
             "section_status": "completed",
+            "files": ["src/agentacct/mcp.py"],
             "client": "codex",
             "client_session_id": "concurrent-session",
             "section_title": "Fixture section title",

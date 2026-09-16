@@ -88,6 +88,8 @@ def _record_section(store_root, *, section_id, title, session, client="codex", s
                 "sentinel_semantic_kind": "section",
                 "section_id": section_id,
                 "section_status": status,
+                "files": ["src/agentacct/mcp.py"],
+                "next_step": "Re-run the focused suite and close the section",
                 "section_title": title,
                 "client": client,
                 "client_session_id": session,
@@ -324,7 +326,7 @@ def test_attention_groups_by_cause_with_bounded_redacted_examples(tmp_path):
     group = groups[0]
     assert group["cause"] == "usage_truth_without_mcp_context"
     assert group["count"] == 30
-    assert group["title"] == "30 usage row(s) have no work context"
+    assert group["title"] == "30 usage rows have no work context"
     # Bounded, pre-redacted example refs (never one entry per flooded row).
     assert len(group["example_refs"]) == 3
     # Labels are pre-redacted short session tails — full ids never appear.
@@ -578,6 +580,8 @@ def test_context_after_install_rate_is_exact_never_flattered(tmp_path):
                     "sentinel_semantic_kind": "section",
                     "section_id": f"work-{index:03d}",
                     "section_status": "completed",
+                    "next_step": "Re-run the focused suite and close the section",
+                    "files": ["src/agentacct/mcp.py"],
                     "section_title": f"Work {index:03d}",
                     "client": "claude-code",
                     "client_session_id": session,

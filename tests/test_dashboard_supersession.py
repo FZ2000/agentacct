@@ -29,6 +29,8 @@ def _section(service: SentinelService, *, section_id: str, status: str, session:
                 "sentinel_semantic_kind": "section",
                 "section_id": section_id,
                 "section_status": status,
+                "files": ["src/agentacct/mcp.py"],
+                "next_step": "Re-run the focused suite and close the section",
                 "section_title": title,
                 "client": "codex",
                 "client_session_id": session,
@@ -56,7 +58,7 @@ def _check(service: SentinelService, *, section_id: str, session: str, result: s
                 "client": "codex",
                 "client_session_id": session,
                 "project_dir": project,
-                "summary": f"{name}: {result}",
+                "summary": f"{name}: {result} — assert total == 42 got 41 (one row dropped)",
             },
         }
     )
@@ -227,6 +229,7 @@ def test_resolution_pointing_at_a_failed_check_surfaces_its_own_diagnostic(tmp_p
             "evidence_type": "test",
             "result": "failed",
             "name": "probe",
+            "summary": "probe.sh exited 1: expected the boundary guard to reject the payload, it accepted it",
             "command": "./probe.sh",
             "exit_code": 1,
         },

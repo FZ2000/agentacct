@@ -43,16 +43,14 @@ PRODUCT_SURFACES = [
 # is pinned: a new site must be a conscious choice between the two meanings.
 ALLOWED_UNKNOWN_FALLBACKS = [
     "src/agentacct/receipt.py",
-    "src/agentacct/receipt.py",
     "src/agentacct/task_intelligence.py",
     "src/agentacct/task_timeline.py",
-    "src/agentacct/tui.py",
-    "src/agentacct/tui.py",
+    "src/agentacct/tui.py",  # the Evidence-trust rail title now reads the reducer's state_title
 ]
 
 ALLOWED_IDENTITY_FALLBACKS = {
     'or "recorded check"': 2,      # receipt.py, tui.py -- a check with no name
-    'or "Recorded check"': 2,      # task_intelligence.py, task_timeline.py -- same, other casing
+    'or "Recorded check"': 1,      # task_intelligence.py -- same, other casing (task_timeline now uses receipt.check_title)
     'or "Recorded work"': 1,       # task_timeline.py -- a section with no title AND no summary
 }
 

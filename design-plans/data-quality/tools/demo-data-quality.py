@@ -209,6 +209,7 @@ def part_one(root: pathlib.Path) -> None:
             "section_status": "completed",
             "section_title": "Add rate-limit to login",
             "summary": "Inspected the login flow, the redirects and the related tests.",
+            "files": ["src/auth/login.py"],
         },
     )
     check(
@@ -228,6 +229,7 @@ def part_one(root: pathlib.Path) -> None:
             "section_title": "Add rate-limit to login",
             "summary": "Added a token-bucket limiter to the login endpoint and covered it with three tests.",
             "next_step": "Watch the first production hour for 429s.",
+            "files": ["src/auth/login.py"],
         },
     )
     metadata = (stored or {}).get("event", {}).get("metadata", {})
@@ -271,8 +273,12 @@ def part_two(root: pathlib.Path) -> None:
     unnamed = record(name="check", command=None, files=[], exit_code=None)
     check(
         "2.1 a check called \"check\" with no pointer is refused, and says what to send instead",
-        unnamed is not None and "too generic to identify" in unnamed and 'name="pytest tests/test_mcp.py"' in unnamed,
-        "identity is checked before reproducibility, because a check nobody can name cannot be referred to",
+        unnamed is not None
+        and "too generic to identify" in unnamed
+        and 'name="percentage() rounds half-up"' in unnamed
+        and 'command="python -m pytest tests/test_percent.py"' in unnamed,
+        "the example shows a LABEL beside a command; a command IN the name field is what produced two "
+        "byte-identical cards in the real ledger",
     )
 
     unanchored = record(name="login smoke test", command=None, files=[], exit_code=None)

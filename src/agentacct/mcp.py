@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import math
 import os
 import re
 import sys
 import tempfile
-from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
+from collections.abc import Mapping, Sequence
 from typing import Any, BinaryIO
 
 from . import version as version_info
@@ -21,11 +22,17 @@ from .hooks import (
     select_claude_code_hook_context,
 )
 from .install_guide import MCP_SERVER_INSTRUCTIONS
+from .mechanical_capture import absent_paths_at_revision, capture_git_revision
+from .task_outcome import step_is_checkable
 from .service import RESERVED_CLIENT_CONTEXT_PROVENANCE_KEYS, SentinelService
 from .semantic_rules import (
     SemanticRecordError,
     collapse_display_text,
     collapse_narrative_text,
+    check_advisories,
+    inherited_section_title,
+    section_advisories,
+    summary_advice,
     validate_semantic_record,
 )
 from .storage import METADATA_MAX_BYTES, json_utf8_size, validate_run_id
@@ -33,7 +40,12 @@ from .storage import METADATA_MAX_BYTES, json_utf8_size, validate_run_id
 
 WORK_KINDS = {"planning", "implementation", "debugging", "testing", "review", "docs", "refactor", "research", "other", "unknown"}
 EVIDENCE_TYPES = {"test", "build", "lint", "typecheck", "smoke", "benchmark", "browser", "security", "artifact", "other"}
-EVIDENCE_RESULTS = {"passed", "failed", "skipped", "error", "unknown"}
+# ADDITIVE only: ``not_reproduced`` joins the enum, nothing is renamed or
+# removed. It names the shape a clean investigation actually has -- the probe
+# ran, exited 0, and the reported problem did not appear -- which agents were
+# recording as ``failed`` for want of a word, turning a good investigation into
+# a task-level Finding.
+EVIDENCE_RESULTS = {"passed", "failed", "skipped", "error", "unknown", "not_reproduced"}
 
 # A machine check's `name` has no length limit of its own, on purpose. A cap of
 # 240 rejected a 241-4036 character band that recorded fine before it, and a
@@ -42,18 +54,13 @@ EVIDENCE_RESULTS = {"passed", "failed", "skipped", "error", "unknown"}
 # name lands. It is never truncated either: `name` feeds the check-identity
 # hash, so a truncated name forks the identity of the check it names.
 #
-# 4036 is measured, not assumed: binary-searching a {source, name, result} call
-# puts the largest accepted `name` at 4036 characters and the first rejection at
-# 4037, identically on this branch and on the 0.5.2 release it branched from.
-# The band is that much narrower than the 8000 first claimed here because `name`
-# lands in the budget TWICE — once as itself, once inside the summary below.
-#
-# Measured caveat: past the budget the size error names the LARGEST metadata
-# field, and for a machine check that is the `summary` the server synthesizes
-# as "<name>: <result>" — 4060 bytes against the name's own 4049 at the 4037
-# boundary. So the blame is one step removed for EVERY over-budget name, not
-# just extreme ones. It is still no worse than the un-named "metadata must be
-# <= 8192 bytes" it replaced; the band that actually regressed is fixed.
+# The edge is measured, not assumed: binary-searching a {source, name, result}
+# call puts the largest accepted `name` at about 8046 characters (it moves by a
+# few bytes whenever the server adds context to the metadata). It used to be
+# half that, 4036, because the server synthesized a "<name>: <result>" summary
+# that put `name` in the budget TWICE and made the size error blame `summary`
+# for an oversized name. No summary is synthesized any more, so the name lands
+# in the budget once and an over-budget size error names `name` itself.
 
 # The files rule, published in every schema that takes `files`. It is the single
 # biggest MCP rejection cause: agent harnesses hand out absolute paths, and the
@@ -64,6 +71,38 @@ FILES_DESCRIPTION = (
     "on this same call. One that is not is rejected rather than guessed at, except a Windows path "
     "(C:\\...), which is kept as-is with its separators normalized. An entry naming the project root "
     "itself ('.') is dropped rather than stored. Neither dropping nor a Windows path fails the call."
+)
+
+# The machine-check enums, described from the reviewer's side: what each value
+# claims about the WORK. Undocumented, `failed` was used for "my probe found
+# nothing", which turns a clean investigation into a task-level Finding.
+CHECK_RESULT_DESCRIPTION = (
+    "Verdict on the work: passed = the work does what was claimed; failed = the check shows a defect "
+    "in the work; not_reproduced = the probe RAN and the reported problem did not appear; error = the "
+    "check could not run; unknown = inconclusive for some other reason; skipped = the check was not "
+    "run. A failed check that no later passing run supersedes marks the task a Finding, so do not use "
+    "it for an investigation that found nothing -- that is not_reproduced. An error check proves "
+    "nothing, so the work stays unproven (never a Finding) until the same check runs. When omitted, it "
+    "is derived from exit_code (0 = passed, otherwise failed). A failed or error result must carry a "
+    "`summary` describing the failure."
+)
+EVIDENCE_TYPE_DESCRIPTION = (
+    "What kind of check this was: test (a test suite or test file), build (compile/package), lint, "
+    "typecheck, smoke (a quick end-to-end run), benchmark, browser (a check driven in a browser), "
+    "security (a scanner or audit), artifact (an inspected output file or report), or other. "
+    "Defaults to other."
+)
+SECTION_KIND_DESCRIPTION = (
+    "What kind of work this step is; it decides whether the step owes a check AND whether it owes "
+    "`files`. review/research/planning/docs steps are not check-relevant and are not expected to name "
+    "files. Every other kind, including unknown (the default), is expected to carry a check and to "
+    "name the files it changed. Sticky: declare it once on the section's first record and later "
+    "records of the same section keep it."
+)
+SECTION_FILES_DESCRIPTION = (
+    "The project-relative paths this step changed. They are the only per-step anchor for WHAT "
+    "changed, so a terminal section owes them unless its `kind` is review/research/planning/docs. "
+    "Sticky across the section: naming them once (on any record of the same section_id) is enough. "
 )
 
 # Join keys that stay valid for a whole client session, so sections recorded on
@@ -106,13 +145,31 @@ TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "run_id": {"type": "string", "default": "latest"},
+                # No default. The old default was the word "check", which
+                # GENERIC_CHECK_NAMES refuses on sight -- a default value that is
+                # immediately rejected is a trap, not a convenience.
                 "name": {
                     "type": "string",
-                    "default": "check",
                     "description": (
-                        "Human name of the exact check. Reusing the SAME name (and command) across a "
-                        "re-run is what lets a later passing check supersede an earlier failure of the "
-                        "same check; a different name/command reads as a different check."
+                        "A short label for what this check PROVES -- not the command; the command has "
+                        'its own field. e.g. name="percentage() rounds half-up", '
+                        'command="python -m pytest tests/test_percent.py". Two checks that carry the '
+                        "same label render as cards a reader cannot tell apart, so give each one the "
+                        "claim it establishes. The label does NOT key supersession: use `check_key` "
+                        "(or just re-run the same `command` in the same `section_id`) for that, which "
+                        "means you may reword the label between runs without splitting the history."
+                    ),
+                },
+                "check_key": {
+                    "type": ["string", "null"],
+                    "maxLength": 120,
+                    "description": (
+                        "Stable identity for THIS check across re-runs, so a later passing run "
+                        "supersedes the earlier failure of the same check. Optional: when omitted the "
+                        "server derives one from (command + evidence_type + section_id), which is "
+                        "already stable for a re-run of the same command in the same step. Pass it "
+                        "explicitly when the command legitimately varies between runs (a changing "
+                        "-k filter, a temp path) but the check is the same one."
                     ),
                 },
                 "before_exit_code": {"type": ["integer", "null"]},
@@ -130,10 +187,37 @@ TOOLS: list[dict[str, Any]] = [
                     ),
                 },
                 "work_id": {"type": ["string", "null"], "maxLength": 120},
-                "evidence_type": {"type": ["string", "null"], "enum": ["test", "build", "lint", "typecheck", "smoke", "benchmark", "browser", "security", "artifact", "other", None]},
-                "result": {"type": ["string", "null"], "enum": ["passed", "failed", "skipped", "error", "unknown", None]},
-                "summary": {"type": ["string", "null"], "maxLength": 1200},
-                "command": {"type": ["string", "null"], "maxLength": 500},
+                "evidence_type": {
+                    "type": ["string", "null"],
+                    "enum": ["test", "build", "lint", "typecheck", "smoke", "benchmark", "browser", "security", "artifact", "other", None],
+                    "description": EVIDENCE_TYPE_DESCRIPTION,
+                },
+                "result": {
+                    "type": ["string", "null"],
+                    "enum": ["passed", "failed", "skipped", "error", "unknown", None],
+                    "description": CHECK_RESULT_DESCRIPTION,
+                },
+                "summary": {
+                    "type": ["string", "null"],
+                    "maxLength": 1200,
+                    "description": (
+                        "What the check showed, in your words. REQUIRED when result is failed or error: "
+                        "a reviewer cannot act on a failure with no description, so give the assertion "
+                        "that failed and the observed vs expected value. Do not restate the name and "
+                        "the result -- a summary that only says '<name>: <result>' is dropped at read "
+                        "time and the card ends up with no description at all. Optional on a passing "
+                        "check: when omitted, nothing is synthesized."
+                    ),
+                },
+                "command": {
+                    "type": ["string", "null"],
+                    "maxLength": 500,
+                    "description": (
+                        "The exact command you ran, so a reviewer can re-run it. It is also the "
+                        "server-derived supersession key (with evidence_type and section_id) when no "
+                        "`check_key` is supplied."
+                    ),
+                },
                 "exit_code": {"type": ["integer", "null"]},
                 "artifact_ref": {"type": ["string", "null"], "maxLength": 240},
                 "artifact_path": {"type": ["string", "null"], "maxLength": 500},
@@ -255,7 +339,11 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "Alias for `section_title` (the HTTP lane names this field `title`). Ignored when `section_title` is also supplied.",
                 },
                 "phase": {"type": ["string", "null"], "maxLength": 80},
-                "kind": {"type": ["string", "null"], "enum": ["planning", "implementation", "debugging", "testing", "review", "docs", "refactor", "research", "other", "unknown", None]},
+                "kind": {
+                    "type": ["string", "null"],
+                    "enum": ["planning", "implementation", "debugging", "testing", "review", "docs", "refactor", "research", "other", "unknown", None],
+                    "description": SECTION_KIND_DESCRIPTION,
+                },
                 "summary": {
                     "type": ["string", "null"],
                     "maxLength": 1200,
@@ -316,7 +404,7 @@ TOOLS: list[dict[str, Any]] = [
                 "message_id": {"type": ["string", "null"], "maxLength": 240},
                 "request_id": {"type": ["string", "null"], "maxLength": 240},
                 "client_event_timestamp": {"type": ["string", "null"], "maxLength": 80},
-                "files": {"type": "array", "items": {"type": "string", "maxLength": 240}, "maxItems": 50, "default": [], "description": FILES_DESCRIPTION},
+                "files": {"type": "array", "items": {"type": "string", "maxLength": 240}, "maxItems": 50, "default": [], "description": SECTION_FILES_DESCRIPTION + FILES_DESCRIPTION},
                 "blocker": {
                     "type": ["string", "null"],
                     "maxLength": 1200,
@@ -331,7 +419,9 @@ TOOLS: list[dict[str, Any]] = [
                     "maxLength": 1200,
                     "description": (
                         "The concrete continuation point, so the next session (or the user) can resume "
-                        "without re-reading everything. Especially valuable with handed_off or blocked. "
+                        "without re-reading everything. REQUIRED when section_status is handed_off or "
+                        "blocked: `blocker` says why the work stopped, `next_step` is the only field "
+                        "that says what would move it. "
                         f"A reader sees roughly the first {INSPECTOR_SUMMARY_CHARACTERS} characters, so "
                         "state the action, not the background."
                     ),
@@ -410,8 +500,10 @@ TOOLS: list[dict[str, Any]] = [
             "Read back YOUR OWN recorded work for this session: sections still open, any blocker and "
             "next step you recorded, and whether the work you finished carries machine-check evidence. "
             "Call it before you finish a task, and when resuming after a handoff. Use it to close a "
-            "section you left open, to recover the next step a previous session recorded, or to notice "
-            "that completed work has no check behind it. Read-only: it never writes to the ledger."
+            "section you left open, to recover the next step a previous session recorded "
+            "(handed_off_sections; pass project_dir to find other sessions' handoffs), or to notice "
+            "that completed work has no check behind it. Without a session in scope, rows belong to "
+            "other sessions and are read-only. Read-only: it never writes to the ledger."
         ),
         "inputSchema": {
             "type": "object",
@@ -420,6 +512,16 @@ TOOLS: list[dict[str, Any]] = [
                     "type": ["string", "null"],
                     "maxLength": 240,
                     "description": "Scope the answer to one session. Omit to use this server's inherited hook context.",
+                },
+                "project_dir": {
+                    "type": ["string", "null"],
+                    "maxLength": 1000,
+                    "description": "Narrow the list to one project. With a session in scope it also lists other sessions' unfinished handoffs there (read-only). Never proves ownership.",
+                },
+                "section_id": {
+                    "type": ["string", "null"],
+                    "maxLength": 120,
+                    "description": "Narrow the list to one section_id. Section ids repeat across sessions, so this never proves ownership.",
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
             },
@@ -575,7 +677,7 @@ _DISPLAY_LINE_BREAKS = str.maketrans({"\t": " ", "\n": " ", "\r": " ", "\v": " "
 _DISPLAY_MEANINGFUL_WHITESPACE = frozenset("\t\n\v\f\r")
 
 
-def _validate_context(context: dict[str, Any], status: str) -> None:
+def _validate_context(context: dict[str, Any], status: str, *, source: str | None = None) -> None:
     """Apply the shared semantic rules to a record this lane is about to store.
 
     The MCP lane builds an event dict rather than a WorkEvent, so the shared
@@ -588,7 +690,9 @@ def _validate_context(context: dict[str, Any], status: str) -> None:
         validate_semantic_record(
             semantic_kind=context.get("sentinel_semantic_kind"),
             status=status,
-            fields=context,
+            # The normalized caller `source` travels with the fields so the
+            # refusal's example call is one the agent can send back verbatim.
+            fields={**context, "source": source} if source is not None else context,
         )
     except SemanticRecordError as exc:
         raise InvalidParams(str(exc)) from exc
@@ -719,6 +823,45 @@ SEMANTIC_RULES_VALIDATED_KEY = "semantic_rules_validated"
 # cannot stamp its own events with it).
 MANGLED_TOOL_CALL_METADATA_KEY = "mangled_tool_call_suspected_fields"
 
+# The git revision a section/check was recorded at, read mechanically from the
+# working tree by the server (never a self-reported SHA — that would invite an
+# invented one). All four are server-authored and listed in
+# RESERVED_CONTEXT_STRIP_KEYS, so a caller cannot smuggle a fake revision
+# through free-form metadata.
+GIT_REVISION_METADATA_KEYS = (
+    "git_commit",
+    "git_branch",
+    "git_dirty",
+    "git_revision_basis",
+    "git_declared_files_absent",
+)
+
+
+def _server_git_context(project_dir: Any, declared_files: Any = None) -> dict[str, Any]:
+    """Server-side git capture stamped onto a recorded section/check. Returns the
+    git keys with ``git_revision_basis='server_captured_at_record'`` when the
+    working tree is a readable repository, or an EMPTY dict when it is not — so a
+    non-repo record carries no revision noise (the receipt reads that as "not
+    captured"). Fail-open: never raises.
+
+    That basis is the whole reason for ``git_declared_files_absent``: HEAD is
+    read when the record ARRIVES, and an agent that records a check before it
+    commits stamps the commit BEFORE its own work. When the check DECLARES files,
+    one ``git ls-tree`` says whether the stamped commit even contains them — a
+    cheap, mechanical contradiction the surfaces can name instead of a receipt
+    quietly asserting a revision that never ran the check.
+    """
+
+    snapshot = capture_git_revision(project_dir)
+    if not snapshot:
+        return {}
+    absent = absent_paths_at_revision(project_dir, snapshot.get("git_commit"), declared_files)
+    return {
+        **snapshot,
+        "git_revision_basis": "server_captured_at_record",
+        "git_declared_files_absent": absent or None,
+    }
+
 # The free-text arguments a mangled parameter can be absorbed into, per tool.
 SECTION_NARRATIVE_KEYS = ("summary", "blocker", "next_step", "section_title", "title")
 MACHINE_CHECK_NARRATIVE_KEYS = ("summary", "before_summary", "after_summary", "resolution_summary", "command")
@@ -832,9 +975,16 @@ RESERVED_CONTEXT_STRIP_KEYS = frozenset(
         "client_transcript_id",
         "parent_client_session_id",
         MANGLED_TOOL_CALL_METADATA_KEY,
+        *GIT_REVISION_METADATA_KEYS,
         *RESERVED_CLIENT_CONTEXT_PROVENANCE_KEYS,
     }
 )
+
+
+def _text_or_none(value: Any) -> str | None:
+    """A stripped string, or None for anything empty or not a string."""
+
+    return value.strip() or None if isinstance(value, str) else None
 
 
 def _metadata_with_context(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -1196,6 +1346,44 @@ class SentinelMCPServer:
         }
         self._attached_client_context_event_id = event_id
 
+    def _check_name_already_in_section(
+        self, recorded: dict[str, Any], *, event_id: Any = None
+    ) -> bool:
+        """True when another STORED check in this section carries the same name.
+
+        Two cards with the same label are two cards a reader cannot tell apart.
+        Scoped exactly like supersession is: same section, same client/session,
+        so a label reused in a different step never raises the note. Read-only
+        and fail-open -- an advisory that cannot be computed is simply not shown,
+        because the record is already stored and nothing here may fail a write.
+        """
+
+        name = _text_or_none(recorded.get("name"))
+        section_id = _text_or_none(recorded.get("section_id"))
+        if name is None or section_id is None:
+            return False
+        scope = _text_or_none(recorded.get("client_session_id")) or _text_or_none(recorded.get("client"))
+        try:
+            events = self.service.list_all_events()
+        except Exception:  # noqa: BLE001 - never fail a stored write for an advisory
+            return False
+        for event in events:
+            if event.get("event_type") != "machine_check":
+                continue
+            if event_id is not None and event.get("event_id") == event_id:
+                continue
+            metadata = event.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            if _text_or_none(metadata.get("section_id")) != section_id:
+                continue
+            if _text_or_none(metadata.get("name")) != name:
+                continue
+            other_scope = _text_or_none(metadata.get("client_session_id")) or _text_or_none(metadata.get("client"))
+            if other_scope == scope:
+                return True
+        return False
+
     def _inherit_attached_client_context(self, context: dict[str, Any], *, keys: tuple[str, ...] = INHERITABLE_CLIENT_CONTEXT_KEYS) -> list[str]:
         """Fill missing session-scoped join keys from the last attached context.
 
@@ -1331,6 +1519,7 @@ class SentinelMCPServer:
                 {
                     "run_id",
                     "name",
+                    "check_key",
                     "before_exit_code",
                     "after_exit_code",
                     "before_summary",
@@ -1362,6 +1551,7 @@ class SentinelMCPServer:
                 key in arguments
                 for key in {
                     "source",
+                    "check_key",
                     "section_id",
                     "work_id",
                     "evidence_type",
@@ -1385,7 +1575,18 @@ class SentinelMCPServer:
             )
             has_outcome_fields = any(key in arguments for key in {"before_exit_code", "after_exit_code", "before_summary", "after_summary"}) or not has_evidence_fields
             run_id = _optional_str(arguments, "run_id", "latest")
-            check_name = _optional_str(arguments, "name", "check")
+            # `name` no longer defaults to the word "check": that value is
+            # refused by GENERIC_CHECK_NAMES the moment it reaches the rules, so
+            # the default only ever manufactured a refusal or an unreadable card.
+            # The run-scoped before/after OUTCOME lane still needs some label for
+            # its own record, and that is the one place the old word survives.
+            # Uncapped, exactly as before: the only length gate `name` ever had
+            # is the metadata size limit, and adding one here would refuse a call
+            # that worked yesterday.
+            check_name = arguments.get("name")
+            if check_name is not None and (not isinstance(check_name, str) or not check_name):
+                raise InvalidParams("name must be a non-empty string")
+            outcome_check_name = check_name or "check"
             before_exit_code = _optional_nullable_int(arguments, "before_exit_code")
             after_exit_code = _optional_nullable_int(arguments, "after_exit_code")
             before_summary = _optional_nullable_str(arguments, "before_summary")
@@ -1394,7 +1595,7 @@ class SentinelMCPServer:
             if has_outcome_fields:
                 payload["outcome"] = self.service.record_machine_check(
                     resolved_run_id,
-                    name=check_name,
+                    name=outcome_check_name,
                     before_exit_code=before_exit_code,
                     after_exit_code=after_exit_code,
                     before_summary=before_summary,
@@ -1411,8 +1612,10 @@ class SentinelMCPServer:
                     _optional_limited_str(arguments, "summary", None, max_length=1200)
                     or after_summary
                     or before_summary
-                    or f"{check_name}: {result}"
                 )
+                # No synthesized summary: a missing one stays absent (the
+                # check is titled by its name, and the result has its own
+                # field), instead of an invented '<name>: <result>' line.
                 resolves_blocked_event_id = _optional_limited_str(
                     arguments, "resolves_blocked_event_id", None, max_length=240
                 )
@@ -1503,11 +1706,12 @@ class SentinelMCPServer:
                     "evidence_type": _optional_choice(arguments, "evidence_type", EVIDENCE_TYPES, "other"),
                     "result": result,
                     "summary": evidence_summary,
-                    # `name` identifies the check and keys supersession, so it is
-                    # collapsed for display (R2); the schema's own 240-character
-                    # cap is measured on the raw value, so measure the collapsed
-                    # one here rather than re-checking a limit already enforced.
-                    "name": _collapse_display_text(check_name),
+                    # `name` is the card's human LABEL, collapsed for display
+                    # (R2). It no longer keys supersession -- `check_key` below
+                    # (or the server-derived command key) does -- so rewording a
+                    # label between runs cannot split a check's history.
+                    "name": _collapse_display_text(check_name) if check_name is not None else None,
+                    "check_key": _optional_limited_str(arguments, "check_key", None, max_length=120),
                     "section_id": _optional_limited_str(arguments, "section_id", None, max_length=120),
                     "work_id": _optional_limited_str(arguments, "work_id", None, max_length=120),
                     "command": evidence_command,
@@ -1532,6 +1736,10 @@ class SentinelMCPServer:
                     # Server-authored; listed even when empty so a caller cannot
                     # stamp the marker through free-form metadata.
                     MANGLED_TOOL_CALL_METADATA_KEY: mangled_fields or None,
+                    # The revision this check was recorded at, read from `git` on
+                    # the server (never a caller-supplied SHA). Turns "a check
+                    # passed" into "this revision passed this check".
+                    **_server_git_context(evidence_project_dir, evidence_files),
                 }
                 # The before/after lane records its exit codes as the evidence,
                 # so pass that shape through to the shared rule.
@@ -1546,6 +1754,14 @@ class SentinelMCPServer:
                         "before_summary": before_summary,
                         "after_summary": after_summary,
                         "exit_code": evidence_exit_code,
+                        # Validation-only marker, never stored: this lane is the
+                        # one an AGENT calls, so a record with no `name` here is
+                        # an incomplete report, not the machine-recorded evidence
+                        # (hook-observed checks, imported activity) that the
+                        # shared rule exempts. Without it, dropping the "check"
+                        # default would have quietly stopped refusing a check
+                        # that identifies nothing at all.
+                        "agent_authored_check": True,
                     },
                     str(result),
                 )
@@ -1561,9 +1777,38 @@ class SentinelMCPServer:
                     trusted_blocker_resolution=resolution_requested,
                     transport="mcp",
                 )
-                recorded_mangled = payload["event"].get("metadata", {}).get(MANGLED_TOOL_CALL_METADATA_KEY) or []
+                recorded_check_metadata = payload["event"].get("metadata")
+                if not isinstance(recorded_check_metadata, dict):
+                    recorded_check_metadata = {}
+                recorded_mangled = recorded_check_metadata.get(MANGLED_TOOL_CALL_METADATA_KEY) or []
                 if recorded_mangled:
                     payload["warnings"] = _mangled_tool_call_warnings(recorded_mangled)
+                # Write-time advisories (never a refusal): measured on the
+                # PERSISTED check, so an idempotent replay advises exactly like
+                # the write that stored it. The record is already stored.
+                advisories = check_advisories(
+                    name=recorded_check_metadata.get("name"),
+                    result=recorded_check_metadata.get("result"),
+                    exit_code=recorded_check_metadata.get("exit_code"),
+                    artifact_ref=recorded_check_metadata.get("artifact_ref"),
+                    artifact_path=recorded_check_metadata.get("artifact_path"),
+                    artifact_url=recorded_check_metadata.get("artifact_url"),
+                    command=recorded_check_metadata.get("command"),
+                    summary=recorded_check_metadata.get("summary"),
+                    # Measured against what is already STORED for this section,
+                    # excluding this record itself (an idempotent replay must
+                    # advise exactly like the write that stored it).
+                    duplicate_name_in_section=self._check_name_already_in_section(
+                        recorded_check_metadata,
+                        event_id=payload["event"].get("event_id"),
+                    ),
+                )
+                if advisories:
+                    payload["advisories"] = advisories
+                    payload["warnings"] = [
+                        *(payload.get("warnings") or []),
+                        *(advisory["hint"] for advisory in advisories),
+                    ]
         elif name == "agentacct_record_event":
             allowed = {
                 "source",
@@ -1696,6 +1941,9 @@ class SentinelMCPServer:
             }
             _reject_unknown_keys(arguments, allowed)
             section_status = _required_choice(arguments, "section_status", {"started", "checkpoint", "completed", "blocked", "handed_off"})
+            # `source` is read before anything is validated, so a refusal's
+            # example call carries the caller's own client name (never "").
+            section_source = _required_limited_str(arguments, "source", max_length=80)
             # Both spellings are validated even when only one is used, so a
             # malformed alias is never silently ignored. section_title wins.
             # Display rules (RULES.md R1/R2): the title is collapsed before it
@@ -1717,7 +1965,9 @@ class SentinelMCPServer:
                 "section_status": section_status,
                 "section_title": resolved_title,
                 "phase": _optional_limited_str(arguments, "phase", None, max_length=80),
-                "kind": _optional_choice(arguments, "kind", WORK_KINDS, "unknown"),
+                # Omitted kind stays absent (never the string "unknown"), so a
+                # checkpoint that does not repeat it keeps the declared kind.
+                "kind": _optional_choice(arguments, "kind", WORK_KINDS, None),
                 "summary": section_summary,
                 "files": _optional_project_relative_files(arguments, project_dir=section_project_dir),
                 "blocker": section_blocker,
@@ -1725,10 +1975,11 @@ class SentinelMCPServer:
                 # Server-authored; listed even when empty so a caller cannot
                 # stamp the marker through free-form metadata.
                 MANGLED_TOOL_CALL_METADATA_KEY: mangled_fields or None,
+                # The revision this section was recorded at, read from `git` on
+                # the server (never a caller-supplied SHA).
+                **_server_git_context(section_project_dir),
                 **_client_context_metadata(arguments, require_client=False, require_session=False),
             }
-            _validate_context(context, section_status)
-            section_source = _required_limited_str(arguments, "source", max_length=80)
             # Inheritance rules: ids are never inherited when the caller
             # supplied either id (the pair must not mix sources), the pair
             # comes from a single inheritance source, and hook-captured
@@ -1768,6 +2019,50 @@ class SentinelMCPServer:
             authored_id_keys = sorted(key for key in CLIENT_CONTEXT_ID_KEYS if context.get(key) is not None)
             if authored_id_keys:
                 context["client_context_keys_authored"] = authored_id_keys
+            # Validated only now, once the section's identity (client and
+            # session, possibly inherited) is resolved: a record that omits a
+            # field describing the SECTION inherits what the same section already
+            # has on record, so closing a step never needs it repeated.
+            #
+            # Three fields inherit, for one reason: they describe the section,
+            # not this status report. Repeating them is the only way to get them
+            # right, and an agent that does not repeat them was silently
+            # CONTRADICTING its own earlier record -- a terminal call that omits
+            # `kind` used to re-label a declared implementation step "unknown".
+            recorded_state = self.service.recorded_section_state(
+                section_id=context["section_id"],
+                client=context.get("client") or section_source,
+                session_scope=context.get("client_session_id") or context.get("client_transcript_id"),
+            )
+            if resolved_title is None:
+                inherited_title = inherited_section_title(None, recorded_state.get("title"))
+                if inherited_title is not None:
+                    context["section_title"] = inherited_title
+                    context["section_title_inherited"] = True
+            if context.get("kind") is None and recorded_state.get("kind"):
+                context["kind"] = recorded_state["kind"]
+                context["kind_inherited"] = True
+            # `files` are sticky for VALIDATION only: the file anchor asks whether
+            # this section ever named what it changed, and naming the paths once
+            # is enough. The inherited paths are deliberately NOT written onto
+            # this record -- a completed status report must not claim to have
+            # touched files it did not send.
+            # Free-form metadata `files` count as an anchor because they are
+            # STORED and displayed (a benign display key the server does not
+            # own). Judging only the validated argument would refuse a record
+            # whose card visibly names the files it changed.
+            caller_metadata = arguments.get("metadata")
+            metadata_files = caller_metadata.get("files") if isinstance(caller_metadata, dict) else None
+            _validate_context(
+                {
+                    **context,
+                    "files_recorded_earlier": bool(recorded_state.get("has_files"))
+                    or bool(isinstance(metadata_files, list) and metadata_files),
+                },
+                section_status,
+                source=section_source,
+            )
+            context[SEMANTIC_RULES_VALIDATED_KEY] = True
             run_id = _optional_run_id(arguments, "run_id")
             size_warnings: list[str] = []
             try:
@@ -1838,6 +2133,26 @@ class SentinelMCPServer:
                     *_context_join_warnings(join_hint_quality),
                 ],
             }
+            # Summary-shape advisory (write-time nudge, never a refusal): for a
+            # terminal section whose PERSISTED summary reads as process/status
+            # rather than an outcome, carry one ignorable hint back in the same
+            # turn so the agent can restate it. The record is already stored.
+            advice = summary_advice(section_status, recorded_metadata.get("summary"))
+            if advice is not None:
+                payload["summary_advice"] = advice
+                payload["warnings"].append(advice["hint"])
+            # Ranked and capped (never a refusal): the measured failure was a
+            # 6-character title overrun being the ONLY advisory a whole session
+            # saw, while that session also left a checkpoint with no
+            # continuation point. section_advisories ranks by reader impact.
+            section_notes = section_advisories(
+                section_title=recorded_metadata.get("section_title"),
+                section_status=recorded_metadata.get("section_status"),
+                next_step=recorded_metadata.get("next_step"),
+            )
+            if section_notes:
+                payload["advisories"] = section_notes
+                payload["warnings"].extend(advisory["hint"] for advisory in section_notes)
             # Describe what was PERSISTED (idempotent replays return the stored
             # event), so payload and store never disagree about inheritance —
             # or about a refusal.
@@ -1944,10 +2259,17 @@ class SentinelMCPServer:
             run_id = _optional_run_id(arguments, "run_id")
             payload = {"events": self.service.list_events(limit=limit, run_id=run_id)}
         elif name == "agentacct_work_status":
-            _reject_unknown_keys(arguments, {"client_session_id", "limit"})
+            _reject_unknown_keys(arguments, {"client_session_id", "project_dir", "section_id", "limit"})
             limit = _optional_int(arguments, "limit", 10, minimum=1, maximum=50)
             requested_session = _optional_limited_str(arguments, "client_session_id", None, max_length=240)
-            payload = self._work_status(requested_session=requested_session, limit=limit)
+            requested_project = _optional_limited_str(arguments, "project_dir", None, max_length=1000)
+            requested_section = _optional_limited_str(arguments, "section_id", None, max_length=120)
+            payload = self._work_status(
+                requested_session=requested_session,
+                limit=limit,
+                project_dir=requested_project,
+                section_id=requested_section,
+            )
         elif name == "agentacct_get_event_summary":
             _reject_unknown_keys(arguments, {"limit", "run_id"})
             limit = _optional_int(arguments, "limit", 200, minimum=1, maximum=200)
@@ -1957,18 +2279,39 @@ class SentinelMCPServer:
             raise ValueError(f"Unknown tool: {name}")
         return {"content": [{"type": "text", "text": json.dumps(payload, indent=2, sort_keys=True)}]}
 
-    def _work_status(self, *, requested_session: str | None, limit: int) -> dict[str, Any]:
+    def _work_status(
+        self,
+        *,
+        requested_session: str | None,
+        limit: int,
+        project_dir: str | None = None,
+        section_id: str | None = None,
+    ) -> dict[str, Any]:
         """What this session has recorded, and what it still owes the ledger.
 
         Built from the same projection the app renders, so an agent sees what the
         user sees. Read-only by construction: it reads the ledger and never
         writes, so calling it can never change recorded work.
+
+        Ownership rule: advice to close a section or record a check is given only
+        when a session is in scope (passed, or inherited from the hook bridge).
+        Without one, every row belongs to some other session: rows are marked
+        read_only with their owner_session and no write advice is given, because
+        following it would put this agent's records on another session's work.
+        ``project_dir`` and ``section_id`` narrow the list; they never prove
+        ownership (section ids repeat across sessions), so they never unlock advice.
         """
-        from .work_ledger import build_work_ledger
+        from .work_ledger import _project_identity, build_work_ledger
 
         events = self.service.list_all_events()
         ledger = build_work_ledger(events)
-        items = [item for item in ledger.get("work_items", []) if isinstance(item, dict)]
+        all_items = [item for item in ledger.get("work_items", []) if isinstance(item, dict)]
+        if project_dir:
+            wanted_project = _project_identity(project_dir)
+            all_items = [item for item in all_items if item.get("project_identity") == wanted_project]
+        if section_id:
+            all_items = [item for item in all_items if str(item.get("section_id") or "") == section_id]
+        items = all_items
 
         session = requested_session
         if session is None:
@@ -1982,14 +2325,29 @@ class SentinelMCPServer:
             item for item in items if str(item.get("latest_status")) in {"started", "checkpoint"}
         ]
         blocked = [item for item in items if str(item.get("latest_status")) == "blocked"]
+        # The receipt's own rule decides who owes a check (step_is_checkable):
+        # a review/research/planning/docs step with no attached check is not
+        # asked for one, so work_status never nags what the receipt excuses.
         completed_without_evidence = [
             item
             for item in items
-            if str(item.get("latest_status")) == "completed" and not item.get("evidence_events")
+            if str(item.get("latest_status")) == "completed"
+            and not item.get("evidence_events")
+            and step_is_checkable(item, item.get("evidence_events"))
         ]
 
+        # What the reviewer will see: each section's Task projected through the
+        # receipt reducer (its verdict headline and every standing attention
+        # item), so an agent reading this before it finishes is told exactly
+        # what the app will show — never a separate rule that can drift.
+        reviewer_view = self._reviewer_view_by_section(items) if items else {}
+
+        def owned(item: Mapping[str, Any]) -> bool:
+            return bool(session) and str(item.get("client_session_id") or "") == session
+
         def brief(item: dict[str, Any]) -> dict[str, Any]:
-            return {
+            view = reviewer_view.get(self._section_ref(item)) or {}
+            row = {
                 key: value
                 for key, value in {
                     "section_id": item.get("section_id"),
@@ -1999,8 +2357,65 @@ class SentinelMCPServer:
                     "next_step": item.get("next_step"),
                     "checks": len(item.get("evidence_events") or []),
                     "joined_to_usage": item.get("join_confidence"),
+                    "task_headline": view.get("headline"),
+                    "standing_attention": [
+                        {"reason_label": row["reason_label"], "label": row["label"]}
+                        for row in view.get("items") or []
+                    ],
                 }.items()
                 if value not in (None, "", [])
+            }
+            if not owned(item):
+                row["owner_session"] = item.get("client_session_id")
+                row["read_only"] = True
+            return row
+
+        # Handed-off sections carry the next step a later session resumes from.
+        # A session's own handoffs are always listed. Other sessions' handoffs
+        # are listed read-only when nothing proves ownership (unscoped) or when
+        # the call names a project to resume in -- and only while no later
+        # completed record of the same section_id exists, so a handoff that
+        # was already picked up and finished stops asking to be resumed.
+        own_handoffs = [item for item in items if item.get("latest_status") == "handed_off"]
+        cross_handoffs: list[dict[str, Any]] = []
+        if session and project_dir:
+            cross_handoffs = [
+                item
+                for item in all_items
+                if item.get("latest_status") == "handed_off" and not owned(item)
+            ]
+
+        def picked_up_and_finished(handoff: Mapping[str, Any]) -> bool:
+            handed_at = handoff.get("updated_at") or 0
+            return any(
+                other is not handoff
+                and str(other.get("section_id") or "") == str(handoff.get("section_id") or "")
+                and other.get("latest_status") == "completed"
+                and (other.get("updated_at") or 0) > handed_at
+                for other in ledger.get("work_items", [])
+                if isinstance(other, dict)
+            )
+
+        handoffs = [
+            item
+            for item in [*own_handoffs, *cross_handoffs]
+            if owned(item) or not picked_up_and_finished(item)
+        ]
+        handoffs.sort(key=lambda item: item.get("updated_at") or 0, reverse=True)
+
+        def handoff_row(item: dict[str, Any]) -> dict[str, Any]:
+            updated = item.get("updated_at")
+            return {
+                "section_id": item.get("section_id"),
+                "title": item.get("title"),
+                "next_step": item.get("next_step"),
+                "owner_session": item.get("client_session_id"),
+                "updated_at": (
+                    datetime.fromtimestamp(float(updated), tz=timezone.utc).isoformat(timespec="seconds")
+                    if isinstance(updated, (int, float))
+                    else None
+                ),
+                "read_only": not owned(item),
             }
 
         status: dict[str, Any] = {
@@ -2010,32 +2425,128 @@ class SentinelMCPServer:
                 "open": len(open_items),
                 "blocked": len(blocked),
                 "completed_without_evidence": len(completed_without_evidence),
+                "handed_off": len(handoffs),
             },
             "open_sections": [brief(item) for item in open_items[:limit]],
             "blocked_sections": [brief(item) for item in blocked[:limit]],
             "completed_without_evidence": [brief(item) for item in completed_without_evidence[:limit]],
+            "handed_off_sections": [handoff_row(item) for item in handoffs[:limit]],
         }
+        # Every Task in scope, once: the headline the reviewer will see and its
+        # standing attention items. A completed section can still leave its
+        # Task a Finding or an unproven claim; this is where the agent sees it.
+        tasks_in_scope: dict[str, dict[str, Any]] = {}
+        for item in items:
+            view = reviewer_view.get(self._section_ref(item))
+            if view and view.get("task_id") not in tasks_in_scope:
+                tasks_in_scope[str(view.get("task_id"))] = view
+        status["tasks"] = [
+            {
+                "task_headline": view.get("headline"),
+                "standing_attention": [
+                    {"reason_label": row["reason_label"], "label": row["label"]}
+                    for row in view.get("items") or []
+                ],
+            }
+            for view in list(tasks_in_scope.values())[:limit]
+        ]
         instructions: list[str] = []
-        if open_items:
+        if not session:
+            # Scope state leads, and nothing below it asks for a write: without
+            # a proven session every listed row belongs to another session.
+            instructions.append(
+                "No session is in scope; the sections below belong to other sessions and are shown "
+                "read-only. Pass client_session_id to see your own work."
+            )
+        if session and open_items:
             instructions.append(
                 "Close each open section with section_status=completed (plus a summary) or "
                 "handed_off (plus a summary and next_step)."
             )
-        if completed_without_evidence:
+        if session and completed_without_evidence:
             instructions.append(
                 "These are recorded as completed with no machine check behind them: record one with "
                 "agentacct_record_machine_check (command or files, plus exit_code) or the claim stays "
                 "unverified."
             )
-        if session is None:
+        standing_kinds = (
+            {
+                row.get("kind")
+                for view in tasks_in_scope.values()
+                for row in view.get("items") or []
+            }
+            if session
+            else set()
+        )
+        if "failed_check" in standing_kinds:
             instructions.append(
-                "No session id is in scope, so this lists work across sessions. Pass "
-                "client_session_id, or install the client hook bridge, to scope it to this session."
+                "A recorded check still shows a failure, so the reviewer sees a Finding. Fix the work and "
+                "re-run the same check under the same name with agentacct_record_machine_check "
+                "(supersedes_check_event_id names the failed run), record a blocker or next_step saying "
+                "why it stands, or ask the user. Never record a check as passed that did not pass."
             )
-        if not items:
+        if "check_not_run" in standing_kinds:
+            instructions.append(
+                "A recorded check could not run, so it proves nothing and the work stays unproven. Make it "
+                "runnable and re-run the same check under the same name, record a blocker or next_step "
+                "saying why it cannot run, or ask the user. Never record it as passed without running it."
+            )
+        if standing_kinds & {"blocker", "failed_step"}:
+            instructions.append(
+                "A recorded blocker or failed step still stands. Resolve it with a real re-run, record the "
+                "next_step, or ask the user."
+            )
+        if handoffs and any(not owned(item) for item in handoffs):
+            instructions.append(
+                "handed_off_sections lists work other sessions handed off with the next step they "
+                "recorded. To resume one, record your own section in this session; never pass another "
+                "session's client_session_id to write on its work."
+            )
+        if session and not items:
             instructions.append("Nothing is recorded for this session yet.")
         status["what_to_do_next"] = instructions
         return status
+
+    @staticmethod
+    def _section_ref(item: Mapping[str, Any]) -> tuple[str, str]:
+        return (
+            str(item.get("client_session_id") or ""),
+            str(item.get("work_id") or item.get("section_id") or ""),
+        )
+
+    def _reviewer_view_by_section(self, items: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+        """Section ref -> the reviewer-facing view of the Task holding it (its
+        headline and standing attention, from the receipt reducer). Empty when
+        the Task projection cannot be built; work_status then simply omits it."""
+
+        from .api import build_store_task_projection
+        from .receipt import build_standing_attention, latest_store_activity, session_start_index
+
+        wanted = {self._section_ref(item) for item in items}
+        try:
+            projection = build_store_task_projection(self.service.store.root)
+        except Exception:  # noqa: BLE001 - a status read must never fail on the projection
+            return {}
+        tasks = [task for task in projection.get("tasks", []) if isinstance(task, Mapping)]
+        latest = latest_store_activity(tasks)
+        starts = session_start_index(tasks)
+        views: dict[tuple[str, str], dict[str, Any]] = {}
+        for task in tasks:
+            refs = {
+                (str(row.get("client_session_id") or ""), str(row.get(field) or ""))
+                for row in task.get("work_items", [])
+                if isinstance(row, Mapping)
+                for field in ("work_id", "section_id")
+                if row.get(field)
+            }
+            hits = refs & wanted
+            if not hits:
+                continue
+            view = build_standing_attention(task, latest_store_activity_at=latest, session_starts=starts)
+            view["task_id"] = str(task.get("public_task_id") or task.get("task_id") or "")
+            for ref in hits:
+                views[ref] = view
+        return views
 
     @staticmethod
     def _response(msg_id: Any, result: dict[str, Any]) -> dict[str, Any]:

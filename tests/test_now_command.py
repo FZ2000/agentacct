@@ -134,19 +134,41 @@ def test_now_human_render_smoke(tmp_path):
     assert "claude-opus-4-8" in out  # top models
 
 
+def test_now_headlines_fresh_tokens_with_cache_reads_named_apart(tmp_path, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "200")
+    service = SentinelService(tmp_path)
+    now = time.time()
+    _record_usage(
+        service, client="codex", model="gpt-5", session_id="f1",
+        input_tokens=1_200_000, output_tokens=34_567, updated_at=int(now - 3600), estimated_cost_usd=1554.67,
+    )
+    result = CliRunner().invoke(app, ["now", "--store-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert "fresh tokens" in out and "cache-read tokens" in out
+    assert "1,234,567" in out  # input + output, thousands-grouped
+    assert "≈$1,554.67" in out
+    # No unqualified "tokens" column header remains.
+    header_cells = [cell.strip() for line in out.splitlines() if "window" in line for cell in line.split("┃")]
+    assert "tokens" not in header_cells
+
+
 def test_now_cost_text_uses_cost_complete():
     # The cost cell logic now lives in the shared snapshot layer that `now`,
     # `limits`, and the TUI all consume.
     from agentacct.usage_snapshot import cost_text
 
-    # complete → plain $; the presence of estimated_cost_usd alone is NOT enough.
-    assert cost_text({"cost_complete": True, "estimated_cost_usd": 4.0, "known_additive_cost_usd": 4.0}) == "$4.00"
+    # complete → the complete figure ($ reported/billed, ≈$ estimate); the
+    # presence of estimated_cost_usd alone is NOT enough.
+    assert cost_text({"cost_complete": True, "estimated_cost_usd": 4.0, "known_additive_cost_usd": 4.0}) == "≈$4.00"
+    assert cost_text({"cost_complete": True, "estimated_cost_usd": 4.0, "known_additive_cost_usd": 4.0,
+                      "cost_confidence": "provider_billed"}) == "$4.00"
     # priced subtotal present but NOT complete (unpriced rows) → partial with ~.
     assert cost_text({"cost_complete": False, "estimated_cost_usd": 4.0, "known_additive_cost_usd": 4.0}) == "~$4.00"
-    # nothing priced → em-dash
-    assert cost_text({"cost_complete": False, "estimated_cost_usd": None, "known_additive_cost_usd": None}) == "—"
-    # non-finite degrades to em-dash (no $nan)
-    assert cost_text({"cost_complete": True, "estimated_cost_usd": float("nan"), "known_additive_cost_usd": float("inf")}) == "—"
+    # nothing priced → a named absence
+    assert cost_text({"rows": 1, "cost_complete": False, "estimated_cost_usd": None, "known_additive_cost_usd": None}) == "unpriced"
+    # non-finite degrades to the named absence (no $nan)
+    assert cost_text({"rows": 1, "cost_complete": True, "estimated_cost_usd": float("nan"), "known_additive_cost_usd": float("inf")}) == "unpriced"
 
 
 def test_now_client_all_is_no_filter(tmp_path):

@@ -78,6 +78,12 @@ Measured against the real ledger before merge, and re-measured after:
 | R4 terminal outcome required | **implemented** | `_require_terminal_outcome`, called before the section context is built |
 | R5 reproducible check | **implemented** | `_require_reproducible_check`, measured on the *stored* files list |
 | R6 identifiable check name | **implemented** | `_check_has_identity` + `_require_check_identity` |
+| D1 identity split from display name | **implemented** | `check_key` on `agentacct_record_machine_check`; server-derived key over (command, evidence_type, section_id) in `work_ledger._evidence_event`. `name` is a LABEL and no longer defaults to `"check"`. A stored row whose name IS the command keeps the historical `(type, name, "")` hash, so nothing already in the store moves. |
+| D2a failure must describe itself | **implemented** | `require_failure_description`; `summary_echoes_check` is the SAME detector `receipt.check_display_summary` uses at read time, so a refusal never rejects text the reader would have kept |
+| D2b stopped section must say where to resume | **implemented** | `section_refusal` (`handed_off` / `blocked` require `next_step`) |
+| D2c terminal section must anchor its files | **implemented** | `_missing_file_anchor`, folded into the one-call `section_refusal` |
+| D3 ranked, capped advisories | **implemented** | `rank_advisories` + `ADVISORY_RESPONSE_LIMIT`; `check_advisories` / `section_advisories` |
+| D4 sticky `kind`, `not_reproduced` result | **implemented** | `latest_recorded_section_state` (MCP and service lanes); `EVIDENCE_RESULTS` + `CHECK_RESULT_LABELS` |
 | R3 `section_id` reuse flag | not yet | needs the read-side group builder |
 | R7 usage aggregation | not yet | needs `build_attention_items` and the timeline projection |
 | R8 server-side actor resolution | partially exists | the inheritance path already resolves hook context; the missing-key marker needs the new rule |
@@ -91,6 +97,24 @@ legitimate and refusing them would lose real evidence:
   the CLI and HTTP repair lane records a fix this way and never names a command.
 - A generic name when a command, file list or artifact already identifies the
   check, and a section that is `started` or `checkpoint` with no prose.
+- A terminal section of a kind that does not change files. D2c's escape is
+  **named, never invented**: `review`, `research`, `planning` and `docs` — the
+  same four kinds `task_outcome` already treats as not check-relevant — close
+  without `files`, and the refusal says so in its own text. Every other kind,
+  including `unknown`, owes one path; `files` are sticky across a section, so
+  naming them on any one record of it is enough. A rule that pushes an agent
+  into fabricating a path would be worse than no rule, which is why the escape
+  is in the message rather than in a doc.
+
+Measured cost of D2a-D2c against the installed ledger (1,893 records replayed
+through the live write path): refusals rise from 15 (0.79%) to 116 (6.13%).
+The breakdown is 109 terminal sections of a file-touching kind that named no
+file anywhere in the section, 1 stopped section with no `next_step`, and 6
+pre-existing R5 refusals; D2a refuses **0** stored checks (no stored failed or
+error check lacks a description, and the echo shape appears 0 times in 418
+checks). D2c is the whole cost, and it is the rule the user chose with that
+number in view. A refusal rejects the CALL: `--replay` still exits 0 and no
+stored record is altered or dropped.
 
 Validation for the implemented rules:
 

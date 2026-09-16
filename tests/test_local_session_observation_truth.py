@@ -81,6 +81,7 @@ def _section(event_id: str, *, session: str | None = None) -> dict:
             "sentinel_semantic_kind": "section",
             "section_id": "observed-work",
             "section_status": "completed",
+            "files": ["src/agentacct/mcp.py"],
             "section_title": "Observed work",
             "client": "codex",
             "client_session_id": session,
