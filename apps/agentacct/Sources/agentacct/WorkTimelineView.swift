@@ -19,6 +19,17 @@ enum WorkTimelinePreferences {
     }
 }
 
+/// WHEN the timeline was last observed, for the export header.
+///
+/// This deliberately is not SwiftUI state. Nothing in `body` reads it — only
+/// `exportReview()` does — but SwiftUI state invalidates its view on every
+/// write regardless, so stamping it on each three-second poll rebuilt the
+/// Activity surface twenty times a minute for a value nobody was looking at.
+/// A reference the view holds keeps the fact and drops the invalidation.
+final class WorkTimelineObservationStamp {
+    var lastObserved: Date?
+}
+
 private struct WorkCompactViewportKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -52,7 +63,7 @@ struct WorkTimelineView: View {
     @State private var activeTaskID: String?
     @State private var loadingInitialSnapshot = false
     @State private var restoredPositionFromCurrentEvidence = false
-    @State private var lastObserved: Date?
+    @State private var observation = WorkTimelineObservationStamp()
     @State private var scrollTarget: String?
     @State private var showingArrivals = false
     @State private var clusterMembers: [WorkTimelineRecord] = []
@@ -583,7 +594,7 @@ struct WorkTimelineView: View {
             let content = WorkTimelineExport.text(taskID: receipt.taskId, title: receipt.title,
                 records: filtered, projection: displayProjection, following: navigation.following,
                 query: navigation.view.query, file: navigation.view.file, generatedAt: Date(),
-                snapshotAt: lastObserved,
+                snapshotAt: observation.lastObserved,
                 failuresOnly: navigation.view.failuresOnly, interval: interval,
                 offlineReceiptAt: dashboard.receiptSavedAt,
                 outcome: receipt.axes.decisionStatus.key,
@@ -1166,7 +1177,7 @@ struct WorkTimelineView: View {
         if dashboard.isOfflineSnapshot { navigation.following = false }
         loadingInitialSnapshot = cached == nil && !SnapshotMode.enabled && !dashboard.isOfflineSnapshot
         timelineError = nil
-        lastObserved = nil
+        observation.lastObserved = nil
         showingArrivals = navigation.history != nil
         scrollTarget = navigation.view.anchorID
         if dashboard.isOfflineSnapshot {
@@ -1196,13 +1207,19 @@ struct WorkTimelineView: View {
                     timeline = page
                     receive(page.projection(taskID: taskID))
                 }
-                timelineError = nil
-                lastObserved = Date()
+                // Writing SwiftUI state invalidates the view whether or not the
+                // value moved, so a three-second poll that re-stamped these on
+                // every tick rebuilt the whole Activity surface — canvas,
+                // record list and inspector — to show what it already showed.
+                // The observation stamp is not state at all: only the export
+                // reads it, never `body`.
+                if timelineError != nil { timelineError = nil }
+                observation.lastObserved = Date()
             } catch {
                 guard !Task.isCancelled, activeTaskID == taskID else { return }
                 timelineError = error.localizedDescription
             }
-            loadingInitialSnapshot = false
+            if loadingInitialSnapshot { loadingInitialSnapshot = false }
             // Missing/filtered evidence focuses the heading, never another row.
             restoreReturnFocusIfReady()
             do { try await Task.sleep(for: .seconds(3)) } catch { return }

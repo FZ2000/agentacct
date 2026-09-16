@@ -51,7 +51,11 @@ struct RecordChecksSection: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("work.record.checks.empty")
         } else {
-            VStack(alignment: .leading, spacing: 0) {
+            // Lazy: a Task whose checks have been re-run many times lists every
+            // run, and building the ones scrolled past costs the same as
+            // building the ones on screen. Nothing is elided — every run still
+            // scrolls into view, earlier ones greyed, exactly as before.
+            ScrollContentStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, check in
                     if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1) }
                     row(check)

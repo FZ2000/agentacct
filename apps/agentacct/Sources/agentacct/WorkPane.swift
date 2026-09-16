@@ -986,7 +986,6 @@ struct WorkPane: View {
                             errorTaskId: dashboard.receiptErrorTaskId,
                             error: dashboard.receiptError
                         ),
-                        isRefreshing: dashboard.receiptLoadingTaskId == receipt.taskId,
                         autoFocusEntry: autoFocusEntry,
                         timelineFocused: timelineFocused,
                         onToggleTimelineFocus: { timelineFocused.toggle() }
@@ -1882,8 +1881,57 @@ private struct WorkTablePage: View {
 
 }
 
+/// Widths already measured, keyed by exactly the inputs that determine one.
+///
+/// The table sizes every data column from the strings its rows will print, so
+/// one body pass measures every cell of every visible row — and the same
+/// handful of strings ("no usage recorded", "1d ago", a named absence) repeat
+/// down dozens of rows. Text layout is not cheap, and the table re-measures on
+/// every keystroke in the filter field. The same inputs always give the same
+/// width, so measuring them twice is pure waste; nothing about the result
+/// changes, no cell wraps differently.
+private final class WorkDataTextWidthCache: @unchecked Sendable {
+    struct Key: Hashable {
+        let text: String
+        let size: CGFloat
+        let bold: Bool
+        let tracking: CGFloat
+    }
+
+    static let shared = WorkDataTextWidthCache()
+    private let lock = NSLock()
+    private var widths: [Key: CGFloat] = [:]
+
+    func width(_ key: Key, measure: (Key) -> CGFloat) -> CGFloat {
+        lock.lock()
+        let cached = widths[key]
+        lock.unlock()
+        if let cached { return cached }
+        let measured = measure(key)
+        lock.lock()
+        // The font face and sizes are fixed by the theme and the reading-size
+        // ramp, so this set is naturally bounded by the strings on screen. The
+        // cap is a backstop against an unbounded store of one-off values.
+        if widths.count >= 8_192 { widths.removeAll(keepingCapacity: true) }
+        widths[key] = measured
+        lock.unlock()
+        return measured
+    }
+}
+
 /// The width, in points, of `text` set in the Work data face (mono) at `size`.
 func workDataTextWidth(_ text: String, size: CGFloat, bold: Bool = false, tracking: CGFloat = 0) -> CGFloat {
+    WorkDataTextWidthCache.shared.width(
+        .init(text: text, size: size, bold: bold, tracking: tracking),
+        measure: workDataTextWidthUncached
+    )
+}
+
+private func workDataTextWidthUncached(_ key: WorkDataTextWidthCache.Key) -> CGFloat {
+    let text = key.text
+    let size = key.size
+    let bold = key.bold
+    let tracking = key.tracking
     var font: NSFont = Face.mono.flatMap { NSFont(name: $0, size: size) }
         ?? NSFont.monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
     if bold, Face.mono != nil {
@@ -2729,11 +2777,36 @@ final class WorkRecordLayers {
     }
 }
 
+/// The retry affordance inside the saved-copy notice.
+///
+/// It owns its own read of the in-flight refresh rather than taking it from
+/// the record page, because the record page is rebuilt whenever anything it
+/// stores changes and the refresh flag flips on every three-second poll. Only
+/// this control needs to react to it, so only this control observes it.
+private struct WorkReceiptRefreshControl: View {
+    let taskId: String
+    @Environment(DashboardStore.self) private var dashboard
+
+    var body: some View {
+        if dashboard.receiptLoadingTaskId == taskId {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel("Retrying receipt refresh")
+        } else {
+            Button("Retry") {
+                Task { await dashboard.fetchReceipt(taskId: taskId) }
+            }
+            .buttonStyle(QuietButtonStyle(tint: Theme.accent))
+            .workFont(.captionSemibold)
+            .accessibilityIdentifier("work.receipt.stale.retry")
+        }
+    }
+}
+
 struct WorkRecordPage: View {
     let receipt: Receipt
     let summary: ReceiptSummary?
     let refreshError: String?
-    let isRefreshing: Bool
     let autoFocusEntry: Bool
     var timelineFocused = false
     var onToggleTimelineFocus: (() -> Void)? = nil
@@ -2812,7 +2885,11 @@ struct WorkRecordPage: View {
                     // tears down the loaded steps or the reader's expansion /
                     // scroll state (which a plain if/else, giving each branch
                     // its own identity, would discard).
-                    VStack(alignment: .leading, spacing: Space.xl) {
+                    // Lazy: the four sections below are the heavy half of the
+                    // page and only the first is on screen when a record
+                    // opens. The ids stay stable, so the reorder above still
+                    // moves sections in place rather than tearing them down.
+                    ScrollContentStack(alignment: .leading, spacing: Space.xl) {
                         ForEach(orderedSections(proxy: proxy)) { $0.view }
                     }
                     .padding(.top, compactViewport ? Space.l : Space.xl)
@@ -3393,18 +3470,7 @@ struct WorkRecordPage: View {
                     .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
             }
             Spacer(minLength: Space.m)
-            if isRefreshing {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Retrying receipt refresh")
-            } else {
-                Button("Retry") {
-                    Task { await dashboard.fetchReceipt(taskId: receipt.taskId) }
-                }
-                .buttonStyle(QuietButtonStyle(tint: Theme.accent))
-                .workFont(.captionSemibold)
-                .accessibilityIdentifier("work.receipt.stale.retry")
-            }
+            WorkReceiptRefreshControl(taskId: receipt.taskId)
         }
         .padding(Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)

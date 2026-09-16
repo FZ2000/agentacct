@@ -26,7 +26,10 @@ struct WorkTimelineRecordList: View {
     @FocusState private var focusedRow: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Lazy: each row formats its own dates and builds its own accessibility
+        // sentence, so an offscreen row is not free. Every record still
+        // renders, in the same order, as it scrolls into view.
+        ScrollContentStack(alignment: .leading, spacing: 0) {
             if records.isEmpty {
                 Text("No activity in this time window")
                     .workFont(.body).foregroundStyle(Theme.muted)

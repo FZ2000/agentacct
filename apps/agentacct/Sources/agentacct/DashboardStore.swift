@@ -239,6 +239,23 @@ final class DashboardStore {
     func sessionSavedAt(client: String, sessionID: String) -> Date? {
         savedWork?.entries["/v1/session?client=\(Self.queryValue(client))&session_id=\(Self.queryValue(sessionID))"]?.receivedAt
     }
+    /// Whether a polled receipt is already the one on screen, byte for byte,
+    /// so republishing it would rebuild the record page to show the same facts.
+    ///
+    /// Every condition here fails OPEN: an absent fingerprint, a task the page
+    /// is not showing, or a fingerprint we have not stored all republish. The
+    /// costly direction (a needless rebuild) is recoverable; the cheap-looking
+    /// one (a real change withheld from the page) is a silent stale receipt,
+    /// which in a product about evidence is the worse failure by far.
+    nonisolated static func receiptIsAlreadyOnScreen(
+        showing: String?, taskId: String,
+        incoming: PayloadFingerprint?, stored: PayloadFingerprint?
+    ) -> Bool {
+        guard showing == taskId else { return false }
+        guard let incoming, let stored else { return false }
+        return incoming == stored
+    }
+
     static func queryValue(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? value
     }
@@ -702,6 +719,10 @@ final class DashboardStore {
     /// of unmounting the record page for the rebuild.
     @ObservationIgnored private var receiptGeneration = 0
     @ObservationIgnored private var receiptListGeneration = 0
+    /// The bytes behind the receipt currently published for each task. A
+    /// repeating poll compares against this so an unchanged answer never
+    /// re-publishes — see `fetchReceipt`.
+    @ObservationIgnored private var receiptPayloadFingerprints: [String: PayloadFingerprint] = [:]
 
     @discardableResult
     private func beginReceiptListLoad() -> Int {
@@ -737,17 +758,36 @@ final class DashboardStore {
         }
         receiptLoadingTaskId = taskId
         defer {
-            if generation == receiptGeneration { receiptLoadingTaskId = nil }
+            if generation == receiptGeneration, receiptLoadingTaskId != nil {
+                receiptLoadingTaskId = nil
+            }
         }
         do {
             let encoded = Self.queryValue(taskId)
-            let payload: Receipt = try await client.getAuthed("/v1/receipt?task=\(encoded)")
+            let (payload, fingerprint): (Receipt, PayloadFingerprint?) =
+                try await client.getAuthedFingerprinted("/v1/receipt?task=\(encoded)")
             guard !Task.isCancelled, generation == receiptGeneration else { return }
-            receipt = payload
+            // A refresh that finds nothing new must cost nothing to render.
+            // The record page is the most expensive surface in the app, and
+            // this route is polled every three seconds while one is open, so
+            // re-publishing a byte-identical receipt would rebuild the whole
+            // page twenty times a minute to show the same facts. Publishing is
+            // skipped only when the raw bytes match what is already on screen —
+            // the page keeps showing exactly what the daemon just returned.
+            let unchanged = Self.receiptIsAlreadyOnScreen(
+                showing: receipt?.taskId, taskId: taskId,
+                incoming: fingerprint, stored: receiptPayloadFingerprints[taskId]
+            )
+            if !unchanged {
+                receipt = payload
+                receiptPayloadFingerprints[taskId] = fingerprint
+            }
             receiptFetchedAt[taskId] = SnapshotMode.currentDate
-            receiptError = nil
-            receiptErrorTaskId = nil
-            receiptLoadingTaskId = nil
+            // Clearing already-clear error state would invalidate every reader
+            // of it for no change, which on this route means the record page.
+            if receiptError != nil { receiptError = nil }
+            if receiptErrorTaskId != nil { receiptErrorTaskId = nil }
+            if receiptLoadingTaskId != nil { receiptLoadingTaskId = nil }
         } catch is CancellationError {
             if generation == receiptGeneration { receiptLoadingTaskId = nil }
             return
@@ -777,7 +817,12 @@ final class DashboardStore {
             try await self.client.getAuthed(path + "&limit=500" + (cursor.map { "&cursor=\(Self.queryValue($0))" } ?? ""))
         }
         try Task.checkCancellation()
-        if let store = try? GlanceClient.storeDir(), let data = try? JSONEncoder().encode(page) {
+        // Re-encoding an unchanged page would spend main-thread JSON work, and
+        // a whole-snapshot rewrite on disk, to save a copy the cache already
+        // holds. The poll asks every three seconds; only a page that actually
+        // moved is worth writing down.
+        if page != previous, let store = try? GlanceClient.storeDir(),
+           let data = try? JSONEncoder().encode(page) {
             await SavedWorkCache.shared.record(path: path, data: data, store: store, requestStartedAt: started)
         }
         return page
