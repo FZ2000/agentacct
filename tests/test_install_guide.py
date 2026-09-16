@@ -427,8 +427,10 @@ def test_mcp_server_instructions_are_directive_honest_and_deferral_aware() -> No
     assert "task_started" not in text
     assert "task_completed" not in text
     # Concise: it costs context tokens every session. Bound the line count.
+    # Raised 10 -> 11 when the whole-job-done capstone bullet (#259) joined the
+    # readable-records contract: 1 header + 1 deferral hint + 9 contract bullets.
     lines = [line for line in text.splitlines() if line.strip()]
-    assert 6 <= len(lines) <= 10, f"MCP instructions have {len(lines)} lines; keep them ~6-10"
+    assert 6 <= len(lines) <= 11, f"MCP instructions have {len(lines)} lines; keep them ~6-11"
     # Low-friction stays narrow (no blanket opt-out), stated once (K63).
     assert "Record every meaningful step; skip only trivial throwaway commands." in text
     assert "beats a gap" not in text and "recording nothing is better" not in text
@@ -484,6 +486,41 @@ def test_recording_contract_directs_a_handoff_status_on_a_clean_stop() -> None:
         assert line in surface
 
 
+def test_recording_contract_directs_a_completion_capstone_when_the_job_is_done() -> None:
+    """DECISION 2: the whole-job-done capstone. The per-task bullet closes each
+    task, but the contract must ALSO cue a session-level `completed` when the user
+    signals the whole deliverable is finished (ship it / a merge), so the outcome
+    is stated rather than left inferable from the sub-task sections. The directive
+    lives once in the shared contract, distinct from the handed_off (not-done)
+    stop above. It deliberately does NOT promise a decision word: the work views
+    grade completion from evidence (verified vs. reported), and a late completed
+    update can re-stale earlier checks, so over-promising 'verified' here would be
+    both inaccurate and counterproductive — evidence stays owned by the
+    machine_check bullet."""
+    capstone_lines = [
+        line
+        for line in install_guide._RECORDING_CONTRACT_LINES
+        if "section_status=completed" in line and "whole" in line
+    ]
+    assert capstone_lines, "recording contract must cue a whole-job completion capstone"
+    line = capstone_lines[0]
+    # It is a completion cue, NOT the handoff (clean-stop) cue.
+    assert "section_status=handed_off" not in line
+    # HONESTY: it must not promise a graded outcome the reducer cannot guarantee.
+    # "verified"/"reported" are evidence-graded decision words, not something a
+    # completed section can claim for itself, so the capstone bullet must not
+    # name them (a late completed update can even demote a verified task).
+    assert "verified" not in line
+    assert "reported" not in line
+    # Shared verbatim across every recording surface.
+    for surface in (
+        install_guide.MCP_SERVER_INSTRUCTIONS,
+        "\n".join(install_guide.WORKFLOW_INSTRUCTION_LINES),
+        install_guide.SESSION_START_ADDITIONAL_CONTEXT,
+    ):
+        assert line in surface
+
+
 def test_recording_contract_directs_a_section_before_the_first_tool_call() -> None:
     """Phase 2.10: the contract is explicit about WHEN — open a section BEFORE
     the first other tool call, not vaguely 'at the start of the session'
@@ -516,8 +553,9 @@ def test_session_start_additional_context_is_directive_honest_and_concise() -> N
     assert "task_started" not in text
     assert "task_completed" not in text
     # Concise: it is injected into every session's context.
+    # Raised 10 -> 11 alongside the MCP bound: same shared contract, one more bullet.
     lines = [line for line in text.splitlines() if line.strip()]
-    assert 6 <= len(lines) <= 10, f"session-start context has {len(lines)} lines; keep it ~6-10"
+    assert 6 <= len(lines) <= 11, f"session-start context has {len(lines)} lines; keep it ~6-11"
     assert "Record every meaningful step; skip only trivial throwaway commands." in text
 
 

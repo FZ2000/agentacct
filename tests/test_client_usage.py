@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+import zstandard
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
@@ -22,6 +23,7 @@ from agentacct.client_usage import (
     discover_claude_code_usage,
     discover_client_usage_with_diagnostics,
     discover_codex_usage,
+    discover_dsh_usage,
     discover_hermes_usage,
     discover_opencode_usage,
     discover_openclaw_usage,
@@ -745,6 +747,60 @@ def _make_openclaw_home(root: Path) -> Path:
     return openclaw_home
 
 
+def _make_dsh_home(root: Path) -> Path:
+    dsh_home = root / "dsh-home"
+    session_dir = dsh_home / "sessions" / "--proj--" / "sess-abc"
+    session_dir.mkdir(parents=True)
+    header = {
+        "type": "session",
+        "version": 3,
+        "id": "sess-abc",
+        "createdAt": 1_769_753_000_000,
+        "cwd": "/home/u/proj",
+        "isSeeded": False,
+        "delegationDepth": 0,
+    }
+    ev1 = {
+        "type": "assistant/message",
+        "seq": 1,
+        "time": 1_769_753_001_000,
+        "data": {
+            "message": {"source": {"provider": "deepseek", "model": "deepseek-chat"}},
+            "usage": {
+                "inputTokens": 1200,
+                "outputTokens": 300,
+                "cacheReadTokens": 5000,
+                "cacheWriteTokens": 40,
+                "reasoningTokens": 80,
+                "totalTokens": 6540,
+            },
+        },
+    }
+    ev2 = {
+        "type": "assistant/message",
+        "seq": 2,
+        "time": 1_769_753_002_000,
+        "data": {
+            "message": {"source": {"provider": "deepseek", "model": "deepseek-reasoner"}},
+            "usage": {"inputTokens": 10, "outputTokens": 20},
+        },
+    }
+    # A non-usage lifecycle row and an attempt row with no usage must be ignored.
+    other = {"type": "turn/end", "seq": 3, "time": 1_769_753_003_000, "data": {}}
+    attempt = {"type": "assistant/attempt", "seq": 4, "time": 1_769_753_004_000, "data": {}}
+    compressor = zstandard.ZstdCompressor(level=3)
+    # dsh appends one Zstandard frame per batch, so a real log is CONCATENATED
+    # frames; split the rows across two frames to exercise multi-frame decoding.
+    frame_a = compressor.compress(
+        (json.dumps(header) + "\n" + json.dumps(ev1) + "\n").encode("utf-8")
+    )
+    frame_b = compressor.compress(
+        (json.dumps(ev2) + "\n" + json.dumps(other) + "\n" + json.dumps(attempt) + "\n").encode("utf-8")
+    )
+    (session_dir / "session.v3.jsonl.zstd").write_bytes(frame_a + frame_b)
+    return dsh_home
+
+
 def _make_hermes_home(root: Path) -> Path:
     hermes_home = root / "hermes-home"
     hermes_home.mkdir()
@@ -1065,6 +1121,48 @@ def test_codex_impossible_last_counter_is_schema_drift_not_amplified_or_fallback
     plan = plan_local_usage_import(events, [])
     assert plan.new_candidates == []
     assert plan.incomplete_source_candidates == events
+
+
+def test_codex_usage_event_carries_rollout_revision_watermark(tmp_path):
+    # Regression: the codex usage event never set source_revision_at, so its
+    # refreshable-usage source_order fell back to whole-second updated_at while
+    # the sibling observation used the rollout file's mtime_ns. Two cumulative
+    # snapshots recorded in the same second then tied on source_order and parked
+    # a permanent existing_conflict (errors=0 conflicts=0 existing_conflicts>0,
+    # degrading every source). The usage event must carry the SAME
+    # high-resolution watermark as the observation.
+    codex_home = _make_codex_home(tmp_path)
+    rollout = (
+        codex_home
+        / "sessions"
+        / "2026"
+        / "06"
+        / "27"
+        / "rollout-2026-06-27T00-00-00-session-abc.jsonl"
+    )
+    revision_ns = 1_700_000_000_123_456_789  # distinct from the DB updated_at=200
+    os.utime(rollout, ns=(revision_ns, revision_ns))
+
+    stats: dict[str, object] = {}
+    observations = []
+    events = client_usage_module._discover_codex_usage_from_home(
+        codex_home=codex_home,
+        limit_sessions=10,
+        _discovery_stats=stats,
+        _session_observations=observations,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.source_revision_at == revision_ns
+    assert event.source_revision_basis == "file_mtime_ns"
+    # It now matches the sibling observation's watermark (the collision fix):
+    assert observations[0].source_revision_at == revision_ns
+    assert event.source_revision_at == observations[0].source_revision_at
+    # And it propagates onto the stored sentinel event that reconcile orders by.
+    metadata = event.to_sentinel_event()["metadata"]
+    assert metadata["source_revision_at"] == revision_ns
+    assert metadata["source_revision_basis"] == "file_mtime_ns"
 
 
 def test_codex_dedupe_signature_distinguishes_missing_from_explicit_zero(tmp_path):
@@ -3139,6 +3237,138 @@ def test_claude_workflow_journal_failed_row_is_ignored(tmp_path):
     assert diagnostic["error_codes"] == []
 
 
+def test_claude_workflow_journal_launched_and_labeled_rows_are_ignored(tmp_path):
+    # The Workflow tool also writes a bare {"type": "launched"} marker and
+    # attaches human-readable "label"/"phase" bookkeeping to lifecycle rows.
+    # These carry no token usage, so the validator must ignore them like the
+    # base shapes. Regression: the exact-keyset check rejected
+    # {agentId,key,label,phase,type} and {type:"launched"} as
+    # claude_workflow_journal_schema_drift, surfacing a false "source adapter
+    # incompatible" and freezing recognition of the journal.
+    claude_home = _make_claude_home(tmp_path)
+    project = claude_home / "projects" / "-tmp-project"
+    journal = (
+        project
+        / "claude-session"
+        / "subagents"
+        / "workflows"
+        / "wf_labeled"
+        / "journal.jsonl"
+    )
+    journal.parent.mkdir(parents=True)
+    journal.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {"type": "launched"},
+                {
+                    "agentId": "agent-a",
+                    "key": "state",
+                    "label": "verify:#218",
+                    "phase": "Verify",
+                    "type": "started",
+                },
+                {"agentId": "agent-a", "key": "state", "type": "failed"},
+                {
+                    "agentId": "agent-b",
+                    "key": "state",
+                    "result": {"ok": True},
+                    "type": "result",
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = discover_client_usage_with_diagnostics(
+        client="claude-code",
+        claude_home=claude_home,
+        limit_sessions=10,
+    )
+
+    assert [event.client_session_id for event in result.events] == ["claude-session"]
+    diagnostic = result.diagnostics["claude-code"]
+    assert diagnostic["ignored_non_transcript_files"] == 1
+    assert diagnostic["error_count"] == 0
+    assert diagnostic["error_codes"] == []
+
+
+def test_claude_workflow_journal_known_type_with_usage_key_still_fails_closed(
+    tmp_path,
+):
+    # Safety: widening the allowlist for label/phase must NOT let a usage-bearing
+    # key ride in on a known lifecycle type. A "started" row carrying a "usage"
+    # key is outside required ∪ {label, phase}, so it must still fail closed as
+    # schema drift rather than be silently ignored.
+    claude_home = _make_claude_home(tmp_path)
+    project = claude_home / "projects" / "-tmp-project"
+    journal = (
+        project
+        / "claude-session"
+        / "subagents"
+        / "workflows"
+        / "wf_sneaky"
+        / "journal.jsonl"
+    )
+    journal.parent.mkdir(parents=True)
+    journal.write_text(
+        json.dumps(
+            {
+                "agentId": "agent-a",
+                "key": "state",
+                "type": "started",
+                "usage": {"input_tokens": 999, "output_tokens": 99},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = discover_client_usage_with_diagnostics(
+        client="claude-code",
+        claude_home=claude_home,
+        limit_sessions=10,
+    )
+
+    # The real session still imports; the sneaky row is quarantined as drift.
+    assert [event.client_session_id for event in result.events] == ["claude-session"]
+    diagnostic = result.diagnostics["claude-code"]
+    assert diagnostic["error_codes"] == ["claude_workflow_journal_schema_drift"]
+
+
+def test_claude_workflow_journal_non_string_type_is_quarantined_not_crash(tmp_path):
+    # Safety: `type` is untrusted JSON. A non-string (unhashable) value such as
+    # a list must fail closed as drift and be quarantined per-file, NOT raise a
+    # TypeError from the row-spec dict lookup that would escape the quarantine
+    # and abort usage import for the whole home.
+    claude_home = _make_claude_home(tmp_path)
+    project = claude_home / "projects" / "-tmp-project"
+    journal = (
+        project
+        / "claude-session"
+        / "subagents"
+        / "workflows"
+        / "wf_weird"
+        / "journal.jsonl"
+    )
+    journal.parent.mkdir(parents=True)
+    journal.write_text(
+        json.dumps({"type": [], "agentId": "agent-a", "key": "state"}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = discover_client_usage_with_diagnostics(
+        client="claude-code",
+        claude_home=claude_home,
+        limit_sessions=10,
+    )
+
+    assert [event.client_session_id for event in result.events] == ["claude-session"]
+    diagnostic = result.diagnostics["claude-code"]
+    assert diagnostic["error_codes"] == ["claude_workflow_journal_schema_drift"]
+
+
 def test_claude_workflow_journal_schema_drift_is_quarantined_not_frozen(tmp_path):
     # A workflow journal with an unknown row shape is non-transcript metadata.
     # It is skipped and flagged, but it must NOT freeze the whole home: the real
@@ -4210,6 +4440,141 @@ def test_discover_openclaw_usage_reads_jsonl_tokens_and_cost(tmp_path):
     assert payload["estimated_cost_usd"] == 0.02
     assert payload["metadata"]["usage_update_semantics"] == "openclaw_assistant_usage_rows"
     assert "content" not in json.dumps(payload).lower()
+
+
+def test_discover_dsh_usage_reads_zstd_jsonl_tokens_and_no_cost(tmp_path):
+    dsh_home = _make_dsh_home(tmp_path)
+
+    events = discover_dsh_usage(dsh_home=dsh_home, limit_sessions=10)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.client == "dsh"
+    assert event.client_session_id == "sess-abc"
+    assert event.provider == "deepseek"
+    # A multi-model session is attributed to the latest model seen.
+    assert event.model == "deepseek-reasoner"
+    # inputTokens is uncached input; totals sum across both assistant/message rows.
+    assert event.input_tokens == 1210
+    assert event.output_tokens == 320
+    assert event.cache_read_input_tokens == 5000
+    assert event.cache_creation_input_tokens == 40
+    assert event.cached_input_tokens == 5040
+    assert event.cache_read_tokens_reported is True
+    assert event.cache_creation_tokens_reported is True
+    # reasoningTokens is a subset of output and is tracked separately, never re-added.
+    assert event.reasoning_output_tokens == 80
+    assert event.turn_count == 2
+    assert event.cwd == "/home/u/proj"
+    # dsh persists no cost, so the row must not fabricate one.
+    assert event.client_reported_cost_usd is None
+    payload = event.to_sentinel_event()
+    assert payload["provider"] == "deepseek"
+    assert payload["cost_confidence"] == "unknown"
+    assert payload["metadata"]["usage_update_semantics"] == "dsh_assistant_usage_rows"
+    assert "content" not in json.dumps(payload).lower()
+
+
+def test_discover_dsh_usage_reports_stable_diagnostic_when_zstd_decoder_missing(
+    tmp_path, monkeypatch
+):
+    dsh_home = _make_dsh_home(tmp_path)  # writes a .zstd session log
+    # Simulate a build without the zstd decoder: a .zstd log must surface a
+    # stable diagnostic code, never a silent empty import.
+    monkeypatch.setattr("agentacct.client_usage.zstandard", None)
+
+    result = discover_client_usage_with_diagnostics(
+        client="dsh",
+        codex_home=tmp_path / "missing-codex",
+        claude_home=tmp_path / "missing-claude",
+        opencode_home=tmp_path / "missing-opencode",
+        hermes_home=tmp_path / "missing-hermes",
+        openclaw_home=tmp_path / "missing-openclaw",
+        dsh_home=dsh_home,
+        cursor_home=tmp_path / "missing-cursor",
+        limit_sessions=10,
+    )
+
+    assert [event for event in result.events if event.client == "dsh"] == []
+    diagnostics = result.diagnostics.get("dsh", {})
+    assert diagnostics.get("error_count", 0) >= 1
+    assert "dsh_zstd_decoder_unavailable" in (diagnostics.get("error_codes") or [])
+
+
+def test_discover_dsh_usage_surfaces_decode_failure_instead_of_silent_empty(tmp_path):
+    dsh_home = _make_dsh_home(tmp_path)  # one good session
+    bad_dir = dsh_home / "sessions" / "--proj--" / "sess-bad"
+    bad_dir.mkdir(parents=True)
+    # A file globbed as an importable dsh session log but corrupt from byte 0.
+    (bad_dir / "session.v1.jsonl.zstd").write_bytes(b"\x00\x01\x02 not a zstd stream " * 8)
+
+    result = discover_client_usage_with_diagnostics(
+        client="dsh",
+        codex_home=tmp_path / "missing-codex",
+        claude_home=tmp_path / "missing-claude",
+        opencode_home=tmp_path / "missing-opencode",
+        hermes_home=tmp_path / "missing-hermes",
+        openclaw_home=tmp_path / "missing-openclaw",
+        dsh_home=dsh_home,
+        cursor_home=tmp_path / "missing-cursor",
+        limit_sessions=10,
+    )
+
+    diagnostics = result.diagnostics.get("dsh", {})
+    # An undecodable-but-present log surfaces a stable code, never a silent empty import.
+    assert "dsh_zstd_decode_failed" in (diagnostics.get("error_codes") or [])
+    assert diagnostics.get("error_count", 0) >= 1
+    # The healthy session in the same home is still imported alongside the corrupt one.
+    assert any(
+        event.client == "dsh" and event.client_session_id == "sess-abc"
+        for event in result.events
+    )
+
+
+def test_dsh_reader_bounds_memory_on_newline_free_payload_and_flags_capped(tmp_path, monkeypatch):
+    # Shrink the budgets so a modest fixture exercises the bomb guard: a readline
+    # loop would materialize the whole line before any cap could fire.
+    monkeypatch.setattr("agentacct.client_usage._DSH_MAX_DECOMPRESSED_BYTES", 2_000_000)
+    monkeypatch.setattr("agentacct.client_usage._DSH_MAX_LINE_CHARS", 500_000)
+    home = tmp_path / "dsh-home"
+    session_dir = home / "sessions" / "--proj--" / "sess-bomb"
+    session_dir.mkdir(parents=True)
+    header = json.dumps({"type": "session", "id": "sess-bomb", "createdAt": 1_769_753_000_000}) + "\n"
+    # A single ~40 MB line with no trailing newline.
+    payload = (header + ("x" * 40_000_000)).encode("utf-8")
+    (session_dir / "session.v3.jsonl.zstd").write_bytes(
+        zstandard.ZstdCompressor(level=3).compress(payload)
+    )
+
+    source = next(
+        candidate
+        for candidate in client_usage_module._dsh_session_paths(home)
+        if candidate.path.parent.name == "sess-bomb"
+    )
+    status = client_usage_module._DshReadStatus()
+    yielded_chars = sum(
+        len(line) for line in client_usage_module._dsh_iter_jsonl_lines(source, status)
+    )
+
+    # The oversized line is dropped and the scan is flagged capped; total yielded
+    # text stays under the budget, so the 40 MB payload never lands in memory.
+    assert status.truncated is True
+    assert yielded_chars < 2_000_000
+
+    result = discover_client_usage_with_diagnostics(
+        client="dsh",
+        codex_home=tmp_path / "missing-codex",
+        claude_home=tmp_path / "missing-claude",
+        opencode_home=tmp_path / "missing-opencode",
+        hermes_home=tmp_path / "missing-hermes",
+        openclaw_home=tmp_path / "missing-openclaw",
+        dsh_home=home,
+        cursor_home=tmp_path / "missing-cursor",
+        limit_sessions=10,
+    )
+    assert "dsh_session_scan_capped" in (
+        result.diagnostics.get("dsh", {}).get("error_codes") or []
+    )
 
 
 def test_discover_hermes_usage_reads_state_db_sessions_and_client_cost(tmp_path):
@@ -6267,6 +6632,67 @@ def test_usage_watch_refresh_skips_unchanged_rows_without_reissuing_event_id(tmp
     assert after_ids == before_ids
 
 
+def test_local_usage_candidate_adopts_missing_source_revision_watermark_once():
+    # A legacy stored row written before this lane emitted source_revision_at
+    # keeps a whole-second source_order forever, so same-second refreshable-usage
+    # snapshots stay tied and park a permanent reconcile conflict. When the
+    # stored row has NO watermark but the candidate now carries one (same usage),
+    # the gate must report a change so the refresh adopts it ONCE. After that the
+    # stored row carries a watermark and an advancing mtime must NOT churn it.
+    base = {"estimated_input_tokens": 100, "estimated_output_tokens": 5}
+    stored_legacy = {**base, "metadata": {"cached_input_tokens": 0}}
+    candidate_wm = {
+        **base,
+        "metadata": {
+            "cached_input_tokens": 0,
+            "source_revision_at": 1_700_000_000_123_456_789,
+            "source_revision_basis": "file_mtime_ns",
+        },
+    }
+    # migrate once: legacy row (no watermark) vs watermarked candidate → change
+    assert (
+        client_usage_module._local_usage_candidate_matches_stored_row(
+            candidate_wm, stored_legacy
+        )
+        is False
+    )
+    # after migration the stored row carries a watermark; a later, advanced
+    # mtime on an otherwise-unchanged session must be treated as unchanged (no
+    # perpetual churn — the property the gate exists to protect).
+    stored_migrated = dict(candidate_wm)
+    advanced = {
+        **base,
+        "metadata": {
+            "cached_input_tokens": 0,
+            "source_revision_at": 1_700_000_009_999_999_999,
+            "source_revision_basis": "file_mtime_ns",
+        },
+    }
+    assert (
+        client_usage_module._local_usage_candidate_matches_stored_row(
+            advanced, stored_migrated
+        )
+        is True
+    )
+    # two legacy rows with no watermark on either side still match — a fix that
+    # only migrates when the candidate actually has a watermark, never spuriously.
+    assert (
+        client_usage_module._local_usage_candidate_matches_stored_row(
+            stored_legacy, dict(stored_legacy)
+        )
+        is True
+    )
+    # a candidate that regressed to no watermark must NOT churn a stored row that
+    # already carries one — keep the stored watermark, report unchanged.
+    candidate_no_wm = {**base, "metadata": {"cached_input_tokens": 0}}
+    assert (
+        client_usage_module._local_usage_candidate_matches_stored_row(
+            candidate_no_wm, stored_migrated
+        )
+        is True
+    )
+
+
 def test_usage_reconcile_failure_is_fail_open_degraded_then_noop_self_heals(
     tmp_path,
     monkeypatch,
@@ -6791,8 +7217,12 @@ def test_usage_row_compare_ignores_revision_watermark_but_not_usage_changes(
         is True
     )
 
-    # Pre-watermark stored rows lack both fields entirely; the candidate's
-    # new watermark alone is still not a content change.
+    # A pre-watermark stored row lacks both fields entirely. Adopting the
+    # candidate's watermark ONCE (a bounded, one-time refresh) is what lets
+    # refreshable-usage source_order stop tying legacy same-second snapshots into
+    # a permanent reconcile conflict, so this MUST report a change. After that
+    # write the stored row carries a watermark and an advancing mtime no longer
+    # churns it (asserted above).
     watermark_missing = json.loads(json.dumps(candidate))
     del watermark_missing["metadata"]["source_revision_at"]
     del watermark_missing["metadata"]["source_revision_basis"]
@@ -6800,7 +7230,7 @@ def test_usage_row_compare_ignores_revision_watermark_but_not_usage_changes(
         client_usage_module._local_usage_candidate_matches_stored_row(
             candidate, watermark_missing
         )
-        is True
+        is False
     )
 
     # A real metadata difference still forces the refresh.

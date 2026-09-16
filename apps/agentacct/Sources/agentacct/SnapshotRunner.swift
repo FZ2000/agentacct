@@ -195,6 +195,12 @@ enum SnapshotRunner {
         case .sources:
             return !dashboard.isRefreshingIngestion
                 && (dashboard.ingestion != nil || dashboard.ingestionError != nil)
+        case .worksets:
+            // The groupings lane has one fetch and an empty list is a settled
+            // state (no groups recorded yet), so the in-flight flag is the whole
+            // condition — `worksetsLastUpdated` is deliberately nil under
+            // SnapshotMode and would never settle here.
+            return !dashboard.isLoadingWorksets
         }
     }
 

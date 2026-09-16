@@ -8,25 +8,163 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- DeepSeek Harness (dsh) local usage import. agentacct now reads dsh's
+  Zstandard-compressed JSONL session logs under `$DSH_HOME`/`~/.dsh`
+  (`session.vN.jsonl.zstd`), summing input/output/cache/reasoning tokens per
+  session into the Work, Usage, and Sources views. Drive it with `agentacct
+  usage import-local --client dsh` (also `usage watch`, `usage sources`, and a
+  `--dsh-home` override). dsh records no cost in its logs, so imported rows stay
+  cost-unknown unless `--estimate-costs` applies agentacct's local pricing
+  table (never a provider invoice). Adds a `zstandard` dependency for the
+  compressed logs. Experimental tier: the session-log schema was verified
+  against dsh source and two independent third-party parsers, not yet a
+  live-client smoke on the maintainer's machine.
+- dsh MCP self-reporting onboarding. `agentacct onboard --agent dsh` writes the
+  `@deepseek-ai/dsh-mcp-client` registration into `$DSH_HOME/cordis.patch.yml`
+  (the home patch layer applied over every profile the dsh CLI boots — the plain
+  `dsh` command has no default profile) and the record-your-work directive into
+  `$DSH_HOME/AGENTS.md`, so a dsh session records its own work over MCP like
+  Codex or OpenCode. Writes are idempotent and non-destructive (existing user
+  patches are preserved). `agentacct setup mcp --agent dsh` previews the same
+  registration, and the macOS app's guided setup flow offers DeepSeek Harness as
+  a client. A live dsh 0.1.5-rc.1 session confirmed the loop end to end — the
+  bundled plugin resolves in-box (no `dsh plugin add` needed) and a work section
+  recorded with `source=dsh` — so the dsh MCP self-reporting lanes are marked
+  `verified_partial` (single-machine live observation) rather than experimental;
+  onboarding still prints the `dsh plugin add` fallback for environments where the
+  plugin does not resolve. Usage-import lanes remain synthetic-fixture verified.
+
+### Changed
+
+- The recording instructions given to every agent (the MCP server instructions,
+  the SessionStart hook context, and the `CLAUDE.md`/`AGENTS.md` workflow block)
+  now cue a session-level completion: when the user signals the whole deliverable
+  is done ("ship it", a merge), the agent records a final `section_status=completed`
+  summarizing the whole deliverable and leaves no section open, so the session's
+  outcome is stated rather than left inferable from the sub-task sections. No new
+  status word and no UI change — the completion is still graded from evidence,
+  surfacing as "Verified" or "Reported", never as an un-graded "Completed".
+
+## [0.10.11] — 2026-09-15
+
+Drains the codex reconcile conflicts left over from before 0.10.10, so sources
+recover from Degraded instead of staying stuck.
+
+### Fixed
+
+- Legacy usage rows written before their lane emitted a revision watermark now
+  adopt one on the next refresh, so refreshable-usage `source_order` can order
+  same-second codex snapshots instead of parking a permanent `existing_conflict`
+  that kept every source Degraded. One-time and additivity-safe; already-
+  watermarked rows are untouched. (#254)
+
+## [0.10.10] — 2026-09-14
+
+Fixes source-recording faults that surfaced once 0.10.9 made the Sources panel
+reachable: claude-code falsely reporting an incompatible adapter, and every
+source showing Degraded from a single codex reconcile conflict.
+
+### Fixed
+
+- claude-code no longer reports "source adapter incompatible" for the Workflow
+  tool's current journal shapes: the metadata-journal validator recognizes the
+  `launched` marker and the `label`/`phase` bookkeeping keys, while still
+  failing closed on any real usage row. (#239)
+- codex usage snapshots recorded within the same second no longer collide into
+  a permanent reconcile conflict that degraded every source — the usage event
+  now carries the same high-resolution rollout revision watermark as the
+  session observation, so `source_order` can order them. (#250)
+- Work pane no longer shows stale receipts after a background event-log poll:
+  the Work cache is invalidated on every successful rebuild. (#238)
+
+## [0.10.9] — 2026-09-14
+
+Fixes a regression where the macOS app could report the recorder unreachable
+even though the daemon was healthy.
+
+### Fixed
+
+- The macOS app no longer reports the recorder unreachable when the local
+  event ledger's write-ahead cache has been checkpointed away: it now reads the
+  ledger read-only with an immutable fallback instead of failing on the missing
+  shared-memory sidecar. (#229)
+- When the app cannot carry its recorder to a newer version on launch, it now
+  records why the upgrade was skipped instead of skipping silently. (#228)
+
+## [0.10.8] — 2026-09-14
+
+Recording moves inside the macOS app and Work becomes a time-anchored activity
+timeline, with each task shown as an inline receipt document.
+
+### Added
+
+- Recording setup now runs inside the macOS app: pick a coding client (Claude
+  Code, Codex, OpenCode, Hermes), review a read-only plan of the exact config
+  files that will change, run setup, and watch a fresh event confirm capture,
+  with a jump straight to the recorded task. (#190)
+- A recording-health notice stack that names connection, endpoint, and ingestion
+  problems and offers recovery, plus a saved-work view so retained work stays
+  readable while the recorder is offline. (#190)
+- Plain-text export of the current work review — records, filters, coverage, and
+  source identities — with an explicit note that no token or cost total is
+  computed. (#190)
+- A "Launch at login" toggle in the menu, registered through macOS Login
+  Items. (#190)
+- `agentacct setup preview --agent <codex|claude-code|opencode|hermes> --user`
+  prints the proposed managed setup (MCP registration, hooks, instructions) for a
+  client without writing files or opening a store. (#190)
+- `GET /v1/task-timeline`: a token-guarded, cursor-paged, immutable per-task
+  timeline snapshot that backs the native activity canvas, with a `client` filter
+  on `GET /v1/sessions` and a `latest_event_id` on each step projection. (#190)
 - Two worked examples, generated from the real receipt engine and shown as macOS
   app screenshots: comparing Claude Code and Codex on one task by outcome,
   evidence and cost, and a "when an agent says done" trajectory where a re-run and
   a later edit leave a passing check outdated. Linked from the README, with a
-  drift-guard test that regenerates and compares them.
+  drift-guard test that regenerates and compares them. (#192)
 - A per-agent coverage matrix (`docs/coverage-matrix.md`), generated from the
   capability manifest, showing each lane's state without flattening `verified`,
-  `verified_partial`, and `experimental` into one badge.
+  `verified_partial`, and `experimental` into one badge. (#192)
 - `agentacct receipt <task> --markdown` renders a receipt, including its event
   timeline, as Markdown to paste into a PR or doc (a shared renderer the docs
-  generators reuse).
+  generators reuse). (#192)
 
 ### Changed
 
+- Work is rebuilt around a single time-anchored activity timeline in place of
+  per-task rows: dragging the canvas or overview pans through time, the scroll
+  wheel and pinch zoom the visible span around the pointer, and selecting an
+  event opens its details in an inline panel below the timeline instead of a
+  floating popover. (#190)
+- Task details now read as a visible receipt document — a totals strip (Checks,
+  Tool calls, Cost, Sessions, Coverage) above always-shown Usage, Sessions, and
+  Recording sections, with a single counted fold only for genuinely long lists —
+  replacing the nested disclosures. (#190)
+- Tool-call usage is shown as one 100% stacked bar with a wrapping legend and
+  per-segment tooltips, falling back to exact counts rather than a proportional
+  bar when the total cannot be reconciled. (#190)
+- Record comparison — the A/B "compare in slot" feature, its drag targets, and
+  saved slots — was removed from the Work timeline. (#190)
 - README: surface the worked examples and coverage matrix; state what agentacct
   records and what it does not; scope the cost-sigil grammar to the compact
   surfaces (the receipt names its basis instead); stop grouping OpenCode with
   Claude Code and Codex as a verified usage/cost peer; link the previously
-  unlinked adapter capability evidence doc.
+  unlinked adapter capability evidence doc. (#192)
+
+### Fixed
+
+- `_fmt_time` now rejects out-of-range (year-10000 and beyond) timestamps before
+  local-timezone conversion, so a boundary epoch no longer renders as a bogus
+  9999 date in UTC-negative timezones. (#191)
+- Retained older important events in the receipt and text timelines are kept in
+  source-time order instead of a reversed prefix. (#190)
+- The weekly-plan absence now reads "not applicable for this client" instead of a
+  leaked "undefined for this client" across the receipt and plan-cost
+  surfaces. (#190)
+- The packaged macOS app builds and codesigns correctly on the release
+  toolchain: the embedded Python framework keeps the canonical symlinks a
+  signable framework requires (validated in place as relative and in-payload),
+  and the new activity-timeline view compiles under the release compiler. (#212,
+  #216)
 
 ## [0.10.7] — 2026-09-10
 
@@ -1047,7 +1185,11 @@ across all of them. Ships alongside the first signed, notarized macOS app.
   `agentacct-claude`, and `agentacct-codex` console scripts. Local-first,
   observe-only, no telemetry, no provider API keys. Python ≥ 3.11 on macOS / Linux.
 
-[Unreleased]: https://github.com/mikehasa/agentacct/compare/v0.10.7...HEAD
+[Unreleased]: https://github.com/mikehasa/agentacct/compare/v0.10.11...HEAD
+[0.10.11]: https://github.com/mikehasa/agentacct/releases/tag/v0.10.11
+[0.10.10]: https://github.com/mikehasa/agentacct/releases/tag/v0.10.10
+[0.10.9]: https://github.com/mikehasa/agentacct/releases/tag/v0.10.9
+[0.10.8]: https://github.com/mikehasa/agentacct/releases/tag/v0.10.8
 [0.10.7]: https://github.com/mikehasa/agentacct/releases/tag/v0.10.7
 [0.10.6]: https://github.com/mikehasa/agentacct/releases/tag/v0.10.6
 [0.10.5]: https://github.com/mikehasa/agentacct/releases/tag/v0.10.5

@@ -155,9 +155,10 @@ struct MainWindow: View {
                     Group {
                         switch selection.pane {
                         case .dashboard: DashboardPane()
+                        case .worksets: WorksetsPane()
                         case .work: WorkPane()
                         case .usage: UsagePane()
-                        case .sources: SourcesPane(onSetup: { openRecordingSetup() })
+                        case .sources: SourcesPane(onSetup: { client in openRecordingSetup(client: client) })
                         }
                     }
                     .id(selection.pane)
@@ -307,11 +308,14 @@ struct MainWindow: View {
         activationClient = target
     }
 
-    private func openRecordingSetup(cause: RecordingHealthCause? = nil) {
+    private func openRecordingSetup(cause: RecordingHealthCause? = nil, client: SetupClient? = nil) {
         selection.prepareWorkReturnFocus()
         activationClient = nil
         openWorkAfterSetup = false
         savedWork = SavedWorkSnapshot.current()
+        // A per-agent Connect/Re-sync pre-selects that agent in the wizard (its
+        // picker initializes from setup.selectedClient).
+        if let client { setup.selectClientForSetup(client) }
         switch RecordingSetupRoute.project(
             selectedCause: cause,
             currentCauses: health.causes,
@@ -468,10 +472,10 @@ struct TopBar: View {
     /// The ONE way this window changes section, shared by the tabs, the
     /// destination picker and the View menu's ⌘1–⌘4 (K114).
     ///
-    /// The Work tab always lands on the receipts table: without clearing, a
-    /// stale taskId makes the tab a no-op while a record is open and
-    /// resurrects the last record on the next visit. Row and deep links still
-    /// open records through open(.task).
+    /// The Sessions tab (case `.work`) always lands on the receipts table:
+    /// without clearing, a stale taskId makes the tab a no-op while a record
+    /// is open and resurrects the last record on the next visit. Row/deep
+    /// links still open records via open(.task).
     private func openSection(_ pane: MainPane) {
         if pane == .work {
             selection.open(.work)
@@ -879,6 +883,7 @@ extension MainPane {
     func icon(selected: Bool) -> String {
         switch self {
         case .dashboard: return selected ? "square.grid.2x2.fill" : "square.grid.2x2"
+        case .worksets: return selected ? "folder.fill" : "folder"
         case .work: return "checklist"
         case .usage: return "chart.bar.xaxis"
         case .sources: return "point.3.connected.trianglepath.dotted"

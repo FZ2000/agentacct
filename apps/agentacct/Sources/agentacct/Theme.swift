@@ -347,6 +347,29 @@ enum Theme {
         // Chroma-floor "fails" are by design — this slot is the neutral.
         static let chartNeutral = AdaptiveColor(lightHex: 0x484F54, darkHex: 0xB0BABE)
 
+        // Source identity on the Work timeline ONLY: a scoped categorical
+        // encoding so a cross-source folder reads at a glance. Every agent
+        // agentacct captures gets a hue; distinct from the rationed semantic
+        // palette — it never means good/bad, only "which tool".
+        //
+        // These are `chart*` tokens on purpose. They paint a legend swatch, a
+        // lane bar and a lane label: data marks, so K04 applies and the
+        // AccentReservationTests floor (OKLab ΔE ≥ 12 from the resting accent,
+        // both schemes) must hold. The `chart` prefix is what makes
+        // `testEveryDeclaredChartTokenIsCovered` demand that. Claude Code used
+        // to be painted in the bare accent and Codex in 0x6A4BC0/0xB6A2F0 —
+        // ΔE 9.6 light / 7.0 dark from the accent, i.e. inside the accent's own
+        // shade family. Both now clear the floor:
+        //   Claude ΔE 15.6/17.4, Codex 28.6/24.8, Opencode 17.3/12.5,
+        //   Hermes 23.4/15.3; mutually ≥ 15.4 in both schemes.
+        // They echo chartBar (violet) and chartCatExecute (pink) at a distance,
+        // which is harmless: the Worksets timeline draws no chart* token, so
+        // the two sets never share a surface.
+        static let chartSourceClaude = AdaptiveColor(lightHex: 0x682AA0, darkHex: 0x9E5CE6)
+        static let chartSourceCodex = AdaptiveColor(lightHex: 0x741146, darkHex: 0xD24B93)
+        static let chartSourceOpencode = AdaptiveColor(lightHex: 0x0E8494, darkHex: 0x53C6D6)
+        static let chartSourceHermes = AdaptiveColor(lightHex: 0xA5457F, darkHex: 0xE39AC8)
+
         // Copy that sits ON a filled accent (primary buttons): white in light,
         // near-black on the lighter dark-mode cobalt.
         static let onAccent = AdaptiveColor(lightHex: 0xFFFFFF, darkHex: 0x0D1215)
@@ -418,6 +441,32 @@ enum Theme {
     /// (programmatic) selection never dims the chart.
     static func periodBarColor(isActive: Bool, hasUserSelection: Bool) -> Color {
         hasUserSelection && !isActive ? chartBarDim : chartBar
+    }
+
+    // MARK: source identity (Work timeline only)
+
+    static let chartSourceClaude = Palette.chartSourceClaude.color
+    static let chartSourceCodex = Palette.chartSourceCodex.color
+    static let chartSourceOpencode = Palette.chartSourceOpencode.color
+    static let chartSourceHermes = Palette.chartSourceHermes.color
+
+    /// Which agent a session came from → its bar color on the Work timeline.
+    /// A scoped categorical encoding for "which tool", never a semantic claim.
+    /// Every agent agentacct captures gets a hue; an unknown source stays muted.
+    ///
+    /// Claude Code gets `chartSourceClaude`, never the bare `accent` (K04): the
+    /// value paints a legend swatch, two lane bars and a lane label, and the
+    /// reservation is about the reader's learned "cobalt = I can press this",
+    /// not about whether the encoding is semantic. Scoping it to one surface
+    /// does not buy an exemption — the reader carries the association across.
+    static func sourceColor(_ client: String?) -> Color {
+        switch (client ?? "").lowercased() {
+        case "claude-code", "claude", "claude code": return chartSourceClaude
+        case "codex", "openai-codex", "codex-cli": return chartSourceCodex
+        case "opencode", "open-code": return chartSourceOpencode
+        case "hermes": return chartSourceHermes
+        default: return muted
+        }
     }
 
     /// Session/task lifecycle → decision-axis colors, routed through the ONE
@@ -1509,6 +1558,8 @@ struct PanelTile: View {
             RoundedRectangle(cornerRadius: Metrics.radius)
                 .strokeBorder(Theme.cardLine, lineWidth: Metrics.borderW)
         )
+        // One VoiceOver stop per tile ("label, value, detail") instead of three.
+        .accessibilityElement(children: .combine)
     }
 }
 

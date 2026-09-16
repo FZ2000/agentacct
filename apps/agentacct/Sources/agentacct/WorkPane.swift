@@ -795,6 +795,8 @@ struct VerdictHeroTypeRamp {
     let consequence: WorkFontRole
     let titleTracking: CGFloat
     let consequenceTracking: CGFloat
+    /// The source monogram beside the heading tracks the title's step.
+    let monogramSize: CGFloat
 
     init(dense: Bool) {
         if dense {
@@ -802,11 +804,13 @@ struct VerdictHeroTypeRamp {
             consequence = .titleCard
             titleTracking = Type.titleSectionTracking
             consequenceTracking = 0
+            monogramSize = 28
         } else {
             title = .titlePage
             consequence = .titleSection
             titleTracking = Type.titlePageTracking
             consequenceTracking = Type.titleSectionTracking
+            monogramSize = 40
         }
     }
 }
@@ -2736,6 +2740,7 @@ struct WorkRecordPage: View {
     @Environment(AppSelection.self) var selection
     @Environment(DashboardStore.self) var dashboard
     @Environment(\.workCompactViewport) private var compactViewport
+    @Environment(\.savedWorkReconnect) private var reconnectSavedWork
     @FocusState private var backFocused: Bool
     @AccessibilityFocusState private var backAccessibilityFocused: Bool
     @AccessibilityFocusState private var headingAccessibilityFocused: Bool
@@ -2746,6 +2751,14 @@ struct WorkRecordPage: View {
     private var labels: ReceiptFieldLabels { receipt.fieldLabels ?? ReceiptFieldLabels() }
     /// The anchor a freshly opened record scrolls to: the top of the page.
     static let topAnchor = "work.record.top"
+
+    // The primary session's steps power the step spine, so the page owns the
+    // one load and hands the detail to it. (No page-level claim is drawn from
+    // this load: the verdict hero's coverage meter is computed from the
+    // payload already in hand, so the record's headline proof stands offline.)
+    @State private var sessionDetail: V1SessionDetail?
+    @State private var sessionLoading = false
+    @State private var sessionFailed = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -2790,41 +2803,36 @@ struct WorkRecordPage: View {
                         RecordChecksSection(receipt: receipt, layers: layers)
                     }
                     .padding(.top, denseHeader ? Space.m : Space.l)
-                    WorkTimelineView(receipt: receipt,
-                        layers: layers,
-                        // Reveal the inspector without pushing the canvas off-screen.
-                        onRevealInspector: { proxy.scrollTo("work.timeline.inspector", anchor: .bottom) },
-                        onRevealRecords: { proxy.scrollTo("work.timeline.records", anchor: .top) },
-                        onRevealHeading: { proxy.scrollTo("work.timeline.heading", anchor: .top) })
-                        .padding(.top, Space.m)
-                    // Below the timeline, the receipt's second half is a
-                    // visible document — not a fold. Sections are always shown
-                    // (verdict → totals → history → the record); only a
-                    // genuinely long list collapses, one level deep, with the
-                    // count in its trigger.
+                    // Below the verdict and the runs that prove it, the record
+                    // body: the step spine, the activity timeline inline (never
+                    // behind a tab), the other sessions, then the supporting
+                    // ledgers. "Focus timeline" only lifts the timeline to the
+                    // top. Both orderings render the SAME sections keyed by a
+                    // stable id, so the toggle reorders them in place: it never
+                    // tears down the loaded steps or the reader's expansion /
+                    // scroll state (which a plain if/else, giving each branch
+                    // its own identity, would discard).
                     VStack(alignment: .leading, spacing: Space.xl) {
-                        ReceiptSection(
-                            title: "Usage", identifier: "usage",
-                            help: "Counts describe captured tool calls, not progress or success. Related paths are recorded associations, not modified files. Current receipts have no ordered action ledger, so captured call counts cannot be linked to results or timing."
-                        ) {
-                            RecordDimensionsCard(receipt: receipt, included: [.actions, .cost],
-                                                 showsProvenance: false, compactDigest: true)
-                        }
-                        ReceiptSection(title: "Sessions", identifier: "sessions") {
-                            sessionsIndex
-                        }
-                        ReceiptSection(title: "Recording", identifier: "recording",
-                                       help: recordingHelp) {
-                            recordingDetails
-                        }
+                        ForEach(orderedSections(proxy: proxy)) { $0.view }
                     }
-                    .padding(.top, Space.xl)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("work.all-captured-details")
+                    .padding(.top, compactViewport ? Space.l : Space.xl)
                 }
                 .padding(denseHeader ? Space.m : Space.gutter)
                 .modifier(WorkRecordPageFrame(unbounded: timelineFocused))
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .task(id: primaryKey) {
+                    // Load the primary session's steps, re-keyed on the member so
+                    // a primary-session change (role enrichment during live
+                    // recording) supersedes the prior load and reloads. A re-key
+                    // must NOT gate on !sessionLoading — the previous load is now
+                    // stale — so drop it and reload; loadSessionSteps guards its
+                    // own assignment on the key. Snapshot mode keeps the
+                    // deterministic preloaded fast-path (no network).
+                    guard !SnapshotMode.enabled, let key = primaryKey else { return }
+                    sessionDetail = nil
+                    sessionFailed = false
+                    if effectiveSessionDetail == nil { await loadSessionSteps(for: key) }
+                }
             }
             .id(receipt.taskId)  // reset the drill-down's expansion state per Task
             // One Escape route for the whole record, layer by layer (K116).
@@ -2858,6 +2866,189 @@ struct WorkRecordPage: View {
             PayloadAbsence.text(receipt.axes.orthogonalityNote),
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    /// The activity timeline band, inline (never tabbed). Kept as a function so
+    /// both orderings (steps-first, or timeline-first under "Focus timeline")
+    /// share the one scroll proxy that drives its reveal callbacks.
+    private func timelineView(proxy: ScrollViewProxy) -> some View {
+        WorkTimelineView(receipt: receipt,
+            layers: layers,
+            // Reveal the inspector without pushing the canvas off-screen.
+            onRevealInspector: { proxy.scrollTo("work.timeline.inspector", anchor: .bottom) },
+            onRevealRecords: { proxy.scrollTo("work.timeline.records", anchor: .top) },
+            onRevealHeading: { proxy.scrollTo("work.timeline.heading", anchor: .top) })
+    }
+
+    /// The root of the primary group is the record's main narrative.
+    private var primarySessionMember: ReceiptSessionMember? {
+        guard let groups = receipt.sessions, let first = groups.first else { return nil }
+        return first.members.first { $0.role == "root" } ?? first.members.first
+    }
+
+    /// Everything else — the primary group's subagents, then any continuation
+    /// groups and their members — kept out of the spine and shown below.
+    private var otherSessionMembers: [ReceiptSessionMember] {
+        guard let groups = receipt.sessions else { return [] }
+        var result: [ReceiptSessionMember] = []
+        if let first = groups.first {
+            let primaryID = primarySessionMember?.id
+            result += first.members.filter { $0.id != primaryID }
+        }
+        for group in groups.dropFirst() { result += group.members }
+        return result
+    }
+
+    /// The readable core: the primary session's steps rendered directly as the
+    /// numbered spine, failed and blocked steps open by default.
+    private var stepsSection: some View {
+        ReceiptSection(title: "Steps", identifier: "steps") {
+            stepsContent
+        }
+    }
+
+    private var primaryKey: String? {
+        primarySessionMember.map { "\($0.client)::\($0.clientSessionId)" }
+    }
+
+    private var effectiveSessionDetail: V1SessionDetail? {
+        if let sessionDetail { return sessionDetail }
+        if let key = primaryKey { return dashboard.preloadedSessions[key] }
+        return nil
+    }
+
+    private func loadSessionSteps(for key: String) async {
+        guard let member = primarySessionMember, primaryKey == key else { return }
+        sessionLoading = true
+        defer { if primaryKey == key { sessionLoading = false } }
+        do {
+            let detail = try await dashboard.loadSession(client: member.client, sessionId: member.clientSessionId)
+            guard primaryKey == key else { return }  // a re-key superseded this load
+            sessionDetail = detail
+            sessionFailed = false
+        } catch {
+            // A cancelled (superseded) load must not strand the section on a
+            // false failure; only the still-current member records a failure.
+            guard primaryKey == key, !Task.isCancelled else { return }
+            sessionFailed = true
+        }
+    }
+
+    /// The step spine, or an honest load / empty / failed / offline state.
+    @ViewBuilder private var stepsContent: some View {
+        if primarySessionMember == nil {
+            Text("Session details aren't available for this receipt.")
+                .workFont(.caption).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if let detail = effectiveSessionDetail {
+            if detail.steps.isEmpty {
+                Text("No recorded steps are linked to this session.")
+                    .workFont(.caption).foregroundStyle(Theme.muted)
+            } else {
+                let items = SessionStepItem.make(detail.steps)
+                SessionStepSpine(items: items, openedIDs: openedStepIDs(items))
+            }
+        } else if dashboard.isOfflineSnapshot {
+            stepsOfflineNotice
+        } else if sessionFailed {
+            stepsRetryRow
+        } else {
+            stepsLoadingRow
+        }
+    }
+
+    private func openedStepIDs(_ items: [SessionStepItem]) -> Set<String> {
+        if SnapshotMode.enabled { return SessionStepItem.snapshotOpenedIDs(items) }
+        return Set(items.filter {
+            $0.step.latestStatus == "blocked" || $0.step.latestStatus == "failed" || $0.step.evidenceStatus == "failed"
+        }.map(\.id))
+    }
+
+    private var stepsLoadingRow: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Loading steps…").workFont(.caption).foregroundStyle(Theme.muted)
+        }
+        .accessibilityElement(children: .ignore).accessibilityLabel("Loading steps")
+    }
+
+    private var stepsRetryRow: some View {
+        HStack(spacing: Space.s) {
+            Text(sessionLoading ? "Retrying steps…" : "Steps couldn't be loaded.")
+                .workFont(.caption).foregroundStyle(Theme.amber)
+            Button {
+                if !sessionLoading, let key = primaryKey { Task { await loadSessionSteps(for: key) } }
+            } label: {
+                Text(sessionLoading ? "Retrying…" : "Retry")
+                    .workFont(.captionSemibold)
+                    .frame(minWidth: ButtonFeedback.minimumHitDimension, minHeight: ButtonFeedback.minimumHitDimension)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(SurfaceButtonStyle(focusInset: 2)).disabled(sessionLoading)
+        }
+    }
+
+    @ViewBuilder private var stepsOfflineNotice: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            Text("These steps weren't saved on this Mac. Reconnect the recorder to load them.")
+                .workFont(.caption).foregroundStyle(Theme.amber)
+            if let reconnectSavedWork {
+                Button("Back to recovery", action: reconnectSavedWork)
+                    .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+            }
+        }
+    }
+
+    /// The task's other sessions — subagents and continuations — below the
+    /// timeline so they never bury the record; omitted when there are none.
+    @ViewBuilder
+    private var subagentsSection: some View {
+        if !otherSessionMembers.isEmpty {
+            let allSubagents = otherSessionMembers.allSatisfy { $0.role != "root" }
+            ReceiptSection(title: allSubagents ? "Subagents" : "Sessions", identifier: "subagents") {
+                RecordSubagentsSection(members: otherSessionMembers)
+            }
+        }
+    }
+
+    /// One reorderable section of the record body, carried with a stable id so
+    /// the "Focus timeline" reorder preserves each section's view identity (and
+    /// thus its @State) instead of rebuilding it.
+    private struct OrderedSection: Identifiable {
+        let id: String
+        let view: AnyView
+    }
+
+    /// Steps → timeline → subagents → supporting, or timeline first under
+    /// "Focus timeline". Same views, same ids, only the order changes.
+    private func orderedSections(proxy: ScrollViewProxy) -> [OrderedSection] {
+        let steps = OrderedSection(id: "steps", view: AnyView(stepsSection))
+        let timeline = OrderedSection(id: "timeline", view: AnyView(timelineView(proxy: proxy)))
+        let subagents = OrderedSection(id: "subagents", view: AnyView(subagentsSection))
+        let supporting = OrderedSection(id: "supporting", view: AnyView(supportingSections))
+        return timelineFocused
+            ? [timeline, steps, subagents, supporting]
+            : [steps, timeline, subagents, supporting]
+    }
+
+    /// Supporting captured detail, below the steps and the timeline: each fact
+    /// once, no duplication of the summary strip above.
+    private var supportingSections: some View {
+        VStack(alignment: .leading, spacing: Space.xl) {
+            ReceiptSection(
+                title: "Usage", identifier: "usage",
+                help: "Counts describe captured tool calls, not progress or success. Related paths are recorded associations, not modified files. Current receipts have no ordered action ledger, so captured call counts cannot be linked to results or timing."
+            ) {
+                RecordDimensionsCard(receipt: receipt, included: [.actions, .cost],
+                                     showsProvenance: false, compactDigest: true)
+            }
+            ReceiptSection(title: "Recording", identifier: "recording",
+                           help: recordingHelp) {
+                recordingDetails
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("work.all-captured-details")
     }
 
     /// An unmistakable back control (the old caps "WORK" read as a static path
@@ -3159,10 +3350,21 @@ struct WorkRecordPage: View {
             .foregroundStyle(Theme.ink).lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
-        if SnapshotMode.enabled {
-            title
-        } else {
-            title.accessibilityFocused($headingAccessibilityFocused)
+        // The recording client's monogram beside the heading (from main's
+        // title block): identity at a glance, in the neutral fill — it is a
+        // label, not a data mark, and the meta line still spells the client.
+        HStack(alignment: .top, spacing: Space.m) {
+            SourceMonogram(
+                client: primarySessionMember?.client ?? summary?.primaryRoot?.client,
+                size: ramp.monogramSize
+            )
+            .padding(.top, 2)
+            if SnapshotMode.enabled {
+                title
+            } else {
+                title.accessibilityFocused($headingAccessibilityFocused)
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -3229,6 +3431,13 @@ struct WorkRecordPage: View {
             client: summary?.primaryRoot?.client,
             project: project,
             trailing: [
+                // Two facts main's meta line carried that ours did not: the
+                // model the work ran on, and how long it ran. They sit before
+                // the recency, so the line reads identity → run → recency.
+                PayloadAbsence.text(receipt.dimensions.actors.models?.first),
+                receipt.durationSeconds.flatMap { (secs: Double) -> String? in
+                    secs > 0 ? "ran \(durationText(secs))" : nil
+                },
                 agoText(summary?.lastActivityAt).map { "updated \($0)" },
                 // The date bound on the counts (`Counts since Sep 14`) — meta,
                 // not a second statement of the ratio.
@@ -3245,68 +3454,6 @@ struct WorkRecordPage: View {
 
     private var topicDivider: some View {
         Rectangle().fill(Theme.hairline).frame(height: 1)
-    }
-
-    /// A session index, not a second copy of the timeline: one quiet row per
-    /// session. Steps stay on the activity canvas.
-    @ViewBuilder
-    private var sessionsIndex: some View {
-        if let groups = receipt.sessions, !groups.isEmpty {
-            let labelled = groups.count > 1
-            VStack(alignment: .leading, spacing: 0) {
-                // The primary group is always visible; any further groups
-                // (continuations, extra roots) collapse under one counted
-                // trigger so a long roster never buries the primary session.
-                sessionGroup(groups[0], labelled: labelled)
-                if groups.count > 1 {
-                    let rest = Array(groups.dropFirst())
-                    let restCount = rest.reduce(0) { $0 + $1.members.count }
-                    OverflowDisclosure(
-                        label: "\(restCount) more session\(restCount == 1 ? "" : "s")",
-                        identifier: "work.overflow.sessions"
-                    ) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(rest) { group in
-                                sessionGroup(group, labelled: true)
-                            }
-                        }
-                    }
-                    .padding(.top, 6)
-                }
-            }
-        } else {
-            Text("Session details aren't available for this receipt.")
-                .workFont(.caption)
-                .foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
-        }
-    }
-
-    /// One session group: an optional role header and its member rows.
-    @ViewBuilder
-    private func sessionGroup(_ group: ReceiptSessionGroup, labelled: Bool) -> some View {
-        let members = group.members
-        VStack(alignment: .leading, spacing: 0) {
-            if labelled {
-                HStack(spacing: Space.s) {
-                    CapsLabel(text: group.role == "continuation" ? "Continuation" : "Primary")
-                    if let count = group.supportingCount, count > 0 {
-                        Text("\(count) subagent\(count == 1 ? "" : "s")")
-                            .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                    }
-                }
-                .padding(.top, Space.s).padding(.bottom, 2)
-            }
-            ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
-                SessionIndexRow(
-                    member: member,
-                    preloadedStepCount: dashboard.preloadedSessions["\(member.client)::\(member.clientSessionId)"]?.steps.count,
-                    taskTitle: receipt.title
-                )
-                if index < members.count - 1 { topicDivider }
-            }
-        }
     }
 
     /// The provenance sources as the reducer labels them; an older payload
@@ -3468,6 +3615,47 @@ private struct WorkRecordPageFrame: ViewModifier {
     }
 }
 
+/// The task's other sessions — the primary group's subagents and any
+/// continuation sessions — each an expandable row that loads its own steps on
+/// demand. Kept out of the Steps spine and below the timeline so a task with
+/// many subagents never buries the record; a short preview shows first, the
+/// rest fold under one counted trigger.
+private struct RecordSubagentsSection: View {
+    let members: [ReceiptSessionMember]
+    private static let previewLimit = 6
+
+    private var preview: [ReceiptSessionMember] { Array(members.prefix(Self.previewLimit)) }
+    private var overflow: [ReceiptSessionMember] { Array(members.dropFirst(Self.previewLimit)) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(preview.enumerated()), id: \.element.id) { index, member in
+                SessionDrillRow(member: member)
+                if index < preview.count - 1 { hairline }
+            }
+            if !overflow.isEmpty {
+                hairline
+                OverflowDisclosure(
+                    label: "\(overflow.count) more session\(overflow.count == 1 ? "" : "s")",
+                    identifier: "work.overflow.subagents"
+                ) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(overflow.enumerated()), id: \.element.id) { index, member in
+                            SessionDrillRow(member: member)
+                            if index < overflow.count - 1 { hairline }
+                        }
+                    }
+                }
+                .padding(.top, 6)
+            }
+        }
+    }
+
+    private var hairline: some View {
+        Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, 2)
+    }
+}
+
 /// A caps eyebrow paired with a hairline rule: the visible header for one
 /// section of the receipt document. Static — a heading, never a focus stop.
 /// The optional help button is the section's one place for explanation.
@@ -3616,50 +3804,6 @@ private struct CopyableValue: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.12)) { copied = false }
         }
-    }
-}
-
-/// A quiet session row for the Sessions topic: identity and, when already
-/// loaded, a step count. Steps themselves live on the activity canvas.
-private struct SessionIndexRow: View {
-    let member: ReceiptSessionMember
-    let preloadedStepCount: Int?
-    /// The Task's own title: a session title that only restates it is not
-    /// repeated; the row names the session by its client and id instead.
-    var taskTitle: String? = nil
-
-    private var label: String {
-        if let title = member.title, !title.isEmpty,
-           title.caseInsensitiveCompare(taskTitle ?? "") != .orderedSame {
-            return title
-        }
-        return "\(member.client) · \(sessionDistinguishingID(member.clientSessionId))"
-    }
-
-    /// One quiet meta line: recording client, kind (only when it qualifies the
-    /// row), project when it differs from the task context, and step count
-    /// when the session is already loaded.
-    private var meta: String {
-        var parts = [member.client]
-        if member.role == "subagent" { parts.append(member.sessionKind ?? "subagent") }
-        if let project = member.project, !project.isEmpty { parts.append("project \(project)") }
-        if let count = preloadedStepCount { parts.append("\(count) step\(count == 1 ? "" : "s")") }
-        return parts.joined(separator: " · ")
-    }
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.s) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).workFont(.body).foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-                Text(meta).workFont(.caption).foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: Space.s)
-        }
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label), \(meta)")
     }
 }
 
@@ -3883,19 +4027,13 @@ struct SessionDrillRow: View {
                     // one un-checked step (so an honest "no passing check" step is
                     // visible too); the live app opens every step collapsed.
                     let opened: Set<String> = SnapshotMode.enabled
-                        ? Set(
-                            stepItems.filter { !($0.step.checks?.isEmpty ?? true) }.prefix(2).map(\.id)
-                            + stepItems.filter { ($0.step.checks?.isEmpty ?? true) }.prefix(1).map(\.id)
-                          )
+                        ? SessionStepItem.snapshotOpenedIDs(stepItems)
                         : []
+                    // The SAME spine the record page's Steps section renders, so
+                    // a step reads identically on both surfaces (one row, one
+                    // tally wording, one tier grammar).
                     ScrollContentStack(alignment: .leading, spacing: 6) {
-                        ForEach(stepItems) { item in
-                            StepCard(
-                                step: item.step,
-                                initiallyExpanded: opened.contains(item.id),
-                                accessibilityContext: item.id
-                            )
-                        }
+                        SessionStepSpine(items: stepItems, openedIDs: opened)
                     }
                 }
                 // The Task's subagents are already listed once, flat and

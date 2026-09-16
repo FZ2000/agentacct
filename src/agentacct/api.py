@@ -21,10 +21,12 @@ from . import version as version_info
 from .activation import ActivationStateStore
 from .agent_capabilities import agent_capability_manifest
 from .client_usage import (
+    SUPPORTED_CLIENTS,
     ClientUsageDiscoveryResult,
     ClientUsageEvent,
     discover_client_usage_with_diagnostics,
 )
+from .connections import CONNECTIONS_SCHEMA_VERSION, build_connections
 from .capture import CaptureContext, DEFAULT_CAPTURE_REGISTRY, render_hook_manifest
 from .capture.registry import DEFAULT_MAX_PAYLOAD_BYTES
 from .capture_runtime import capture_hook_payload
@@ -140,6 +142,18 @@ from .usage_cube import (
 from .usage_truth import CODEX_REPLAY_QUARANTINE_STATE
 from .work_ledger import WorkLedgerCache, _project_identity, _safe_project_label, build_work_ledger
 from .work_events import WORK_EVENT_KINDS, WORK_EVENT_STATUSES, WorkEvent
+from .worksets import (
+    WorksetConflict,
+    WorksetError,
+    WorksetNotFound,
+    reduce_worksets,
+    summarize_members,
+    workset_candidates,
+    workset_member_entries,
+    workset_session_lane,
+)
+
+WORKSET_SCHEMA_VERSION = "agentacct.workset.v1"
 
 DASHBOARD_USAGE_LIMIT_SESSIONS = 500
 # Recent-activity feed on the overview shows a newest-first slice; the full
@@ -201,6 +215,7 @@ class UsageDiscoveryConfig:
     opencode_home: Path | None = None
     hermes_home: Path | None = None
     openclaw_home: Path | None = None
+    dsh_home: Path | None = None
     cursor_home: Path | None = None
 
     @classmethod
@@ -217,6 +232,7 @@ class UsageDiscoveryConfig:
             opencode_home=root / ".local" / "share" / "opencode",
             hermes_home=root / ".hermes",
             openclaw_home=root / ".openclaw",
+            dsh_home=root / ".dsh",
             cursor_home=root / "Library" / "Application Support" / "Cursor",
         )
 
@@ -386,6 +402,7 @@ def _human_client(value: Any) -> str:
         "hermes": "Hermes",
         "opencode": "OpenCode",
         "openclaw": "OpenClaw",
+        "dsh": "DeepSeek Harness",
         "cursor": "Cursor",
     }
     text = str(value or "").strip()
@@ -475,6 +492,7 @@ def _discover_local_usage(
         opencode_home=config.opencode_home,
         hermes_home=config.hermes_home,
         openclaw_home=config.openclaw_home,
+        dsh_home=config.dsh_home,
         cursor_home=config.cursor_home,
     )
     return result if include_diagnostics else result.events
@@ -489,6 +507,7 @@ def _discover_local_usage_sources(config: UsageDiscoveryConfig) -> list[UsageSou
         opencode_home=config.opencode_home,
         hermes_home=config.hermes_home,
         openclaw_home=config.openclaw_home,
+        dsh_home=config.dsh_home,
         cursor_home=config.cursor_home,
     )
 
@@ -3038,6 +3057,7 @@ def create_local_api_app(
             "receipt_schema": RECEIPT_SCHEMA_VERSION,
             "attention_schema": V1_ATTENTION_SCHEMA_VERSION,
             "ingestion_schema": V1_INGESTION_SCHEMA_VERSION,
+            "workset_schema": WORKSET_SCHEMA_VERSION,
             "pid": os.getpid(),
             "store_dir": str(store_dir),
             "store_scope": store_scope,
@@ -3651,6 +3671,182 @@ def create_local_api_app(
             "event_id": recorded.get("event_id"),
         }
 
+    # A generous safety cap on lanes per card so one enormous folder cannot
+    # balloon a response; every real curated group is far below it, and the
+    # summary count stays exact regardless.
+    _WORKSET_LANE_CAP = 200
+
+    def _workset_rollup() -> Any:
+        events, fingerprint = _dashboard_events()
+        ledger = _derived_work_ledger(events, fingerprint=fingerprint)
+        return events, ledger.get("session_rollup")
+
+    def _workset_lanes(rollup: Any, project_identity: str) -> list[dict[str, Any]]:
+        lanes = [workset_session_lane(entry) for entry in workset_member_entries(rollup, project_identity)]
+        lanes.sort(
+            key=lambda lane: (
+                lane.get("first_activity_at") is None,
+                lane.get("first_activity_at") or 0.0,
+                str(lane.get("session_key") or ""),
+            )
+        )
+        return lanes
+
+    def _workset_card(state: Any, rollup: Any) -> dict[str, Any]:
+        summary = summarize_members(workset_member_entries(rollup, state.project_identity))
+        lanes = _workset_lanes(rollup, state.project_identity)
+        return {
+            **state.to_dict(),
+            "summary": summary,
+            "sessions_total": len(lanes),
+            "sessions": lanes[:_WORKSET_LANE_CAP],
+            "sessions_truncated": len(lanes) > _WORKSET_LANE_CAP,
+        }
+
+    def _grouped_identities(events: list[dict[str, Any]]) -> dict[str, str]:
+        """project_identity -> workset_id for every live (non-deleted) grouping,
+        so the picker can hide an already-grouped folder and a duplicate create
+        can be refused."""
+
+        projection = reduce_worksets(events)
+        return {state.project_identity: state.workset_id for state in projection.active()}
+
+    @app.get("/v1/workset-candidates")
+    def v1_workset_candidates(request: Request) -> dict[str, Any]:
+        """The folders agentacct has seen, for the "point at a folder" picker.
+
+        Each candidate is one cross-source ``project_identity`` (a CC session and
+        a Codex session in the same repo share it) with its friendly leaf label,
+        root-session count, and the sources present — never a raw absolute path.
+        ``existing_workset_id`` marks a folder that already has a group, so the
+        picker never offers a duplicate. Sessions that wandered directories
+        mid-run have no single folder and are omitted.
+        """
+
+        _require_v1_token(request)
+        events, rollup = _workset_rollup()
+        grouped = _grouped_identities(events)
+        candidates = workset_candidates(rollup)
+        for candidate in candidates:
+            candidate["existing_workset_id"] = grouped.get(candidate.get("project_identity"))
+        return {
+            "schema": WORKSET_SCHEMA_VERSION,
+            "candidates": candidates,
+        }
+
+    @app.get("/v1/worksets")
+    def v1_worksets(request: Request) -> dict[str, Any]:
+        """The user's folder-anchored Work groupings, newest activity first.
+
+        Each is a live overlay: its member sessions are re-queried by folder
+        identity every read, so a new session in the folder joins on its own.
+        The summary is a labeled SUM of independently-attributed sessions, never
+        a combined verdict; each card carries a bounded session preview.
+        """
+
+        _require_v1_token(request)
+        events, rollup = _workset_rollup()
+        projection = reduce_worksets(events)
+        worksets = [_workset_card(state, rollup) for state in projection.active()]
+        return {"schema": WORKSET_SCHEMA_VERSION, "worksets": worksets, "total": len(worksets)}
+
+    @app.get("/v1/workset")
+    def v1_workset_detail(
+        request: Request, id: str = Query(..., min_length=1, max_length=120)
+    ) -> dict[str, Any]:
+        """One workset with its full member-session timeline lanes. 404 when the
+        id is unknown or the grouping was deleted — never an empty fabrication."""
+
+        _require_v1_token(request)
+        events, rollup = _workset_rollup()
+        projection = reduce_worksets(events)
+        workset_id = id.strip()
+        state = projection.states.get(workset_id)
+        # A poisoned chain is hidden exactly like the list hides it (the list
+        # builds from active(), which excludes invalid ids) — never serve a
+        # detail the list won't show.
+        if state is None or state.deleted or workset_id in projection.invalid:
+            raise HTTPException(status_code=404, detail="unknown workset for this store")
+        return {"schema": WORKSET_SCHEMA_VERSION, **_workset_card(state, rollup)}
+
+    @app.post("/v1/worksets")
+    def v1_worksets_write(
+        request: Request, payload: dict[str, Any] = Body(...)
+    ) -> dict[str, Any]:
+        """Create, rename, redirect, or delete one folder-anchored Work grouping.
+
+        The second user-originated write on the /v1 lane, modeled on
+        ``/v1/disposition``: bearer-gated, optimistic ``expected_revision`` (a
+        concurrent change is a 409, never a silent overwrite), server-stamped so
+        a raw caller cannot forge a grouping. The write never rewrites any
+        session's Task identity, receipt, or evidence — it is a human overlay.
+        The ``directory`` is a ``project_identity`` from /v1/workset-candidates,
+        not a raw path.
+        """
+
+        _require_v1_token(request)
+        action = str(payload.get("action") or "").strip()
+        workset_id = str(payload.get("workset_id") or "").strip()
+        raw_name = payload.get("name")
+        name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else None
+        raw_directory = payload.get("directory")
+        directory = raw_directory.strip() if isinstance(raw_directory, str) and raw_directory.strip() else None
+        expected_revision = payload.get("expected_revision")
+        if (
+            isinstance(expected_revision, bool)
+            or not isinstance(expected_revision, int)
+            or expected_revision < 0
+        ):
+            raise HTTPException(
+                status_code=400, detail="expected_revision must be a non-negative integer"
+            )
+        if not workset_id:
+            raise HTTPException(status_code=400, detail="workset_id is required")
+        idempotency_key = str(payload.get("idempotency_key") or "").strip()
+        if idempotency_key.startswith("v1:"):
+            raise HTTPException(
+                status_code=400, detail="idempotency_key may not use the reserved v1: prefix"
+            )
+        if not idempotency_key:
+            idempotency_key = f"v1:workset:{workset_id}:{action}:{expected_revision}"
+        # One group per folder: refuse a create/redirect onto a folder another
+        # live group already owns (a retry of THIS same group's create still
+        # replays idempotently below). Best-effort read; the store stays the
+        # integrity authority.
+        if action in {"create", "redirect"} and directory:
+            existing_id = _grouped_identities(service.list_all_events()).get(directory)
+            if existing_id is not None and existing_id != workset_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="a work group for this folder already exists",
+                )
+        try:
+            recorded = service.record_workset_action(
+                action=action,
+                workset_id=workset_id,
+                name=name,
+                project_identity=directory,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        except WorksetNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except WorksetConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorksetError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        metadata = recorded.get("metadata") if isinstance(recorded.get("metadata"), Mapping) else {}
+        return {
+            "ok": True,
+            "workset_id": metadata.get("workset_id"),
+            "action": metadata.get("action"),
+            "revision": metadata.get("revision"),
+            "name": metadata.get("name"),
+            "project_identity": metadata.get("project_identity"),
+            "deleted": metadata.get("action") == "delete",
+            "event_id": recorded.get("event_id"),
+        }
+
     @app.get("/v1/ingestion")
     def v1_ingestion(request: Request) -> dict[str, Any]:
         """Source/ingestion health for the native shell's Sources surface —
@@ -3664,6 +3860,34 @@ def create_local_api_app(
         return {
             "schema": V1_INGESTION_SCHEMA_VERSION,
             "ingestion": _ingestion_snapshot(),
+        }
+
+    @app.get("/v1/connections")
+    def v1_connections(request: Request) -> dict[str, Any]:
+        """One honest row per supported agent for the Diagnostics/Connections
+        surface: its kind (active/semi/passive), whether agentacct set it up
+        (the activation record), whether it is recording (ingestion health), and
+        the per-agent action (connect / re-sync / resolve). A pure read of the
+        activation + ingestion stores — never claims connected/recording without
+        their evidence."""
+
+        _require_v1_token(request)
+        # A locked/corrupt activation file must not 500 this endpoint while
+        # /v1/ingestion (which never reads activation) stays healthy — an
+        # asymmetric failure would leave the app showing a stale connections
+        # array as if live. Degrade to "nothing configured": active agents then
+        # read as not_connected (honest under-claim), never as recording.
+        try:
+            activation = ActivationStateStore(store_dir).snapshot() or {}
+        except Exception:
+            activation = {}
+        return {
+            "schema": CONNECTIONS_SCHEMA_VERSION,
+            "connections": build_connections(
+                supported_clients=SUPPORTED_CLIENTS,
+                configured_clients=activation.get("clients") or (),
+                ingestion_snapshot=ingestion_health.snapshot(),
+            ),
         }
 
     @app.get("/")

@@ -33,6 +33,13 @@ final class AccentReservationTests: XCTestCase {
         ("chartCatExecute", Theme.Palette.chartCatExecute),
         ("chartCatEdit", Theme.Palette.chartCatEdit),
         ("chartNeutral", Theme.Palette.chartNeutral),
+        // The source-identity hues the Worksets timeline paints its lanes with.
+        // They are categorical data marks, so they sit under the same accent
+        // floor as every other chart token.
+        ("chartSourceClaude", Theme.Palette.chartSourceClaude),
+        ("chartSourceCodex", Theme.Palette.chartSourceCodex),
+        ("chartSourceOpencode", Theme.Palette.chartSourceOpencode),
+        ("chartSourceHermes", Theme.Palette.chartSourceHermes),
     ]
 
     func testNoDataMarkTokenWearsTheInteractiveVoice() {

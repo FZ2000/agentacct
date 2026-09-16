@@ -85,8 +85,66 @@ struct V1IngestionIssue: Decodable, Identifiable {
     let code: String?
     let source: String?
     let action: String?
+    /// error | attention | advisory | transient. Absent → treated as error, so a
+    /// new issue is never silently demoted to a quiet note.
+    let severity: String?
+
+    // Explicit init so `severity` defaults to nil at call sites (test fixtures)
+    // without dropping the synthesized Decodable conformance.
+    init(code: String?, source: String?, action: String?, severity: String? = nil) {
+        self.code = code
+        self.source = source
+        self.action = action
+        self.severity = severity
+    }
 
     var id: String { "\(code ?? "?")-\(source ?? "*")" }
+
+    /// Only errors and attention items belong in the loud card; advisories and
+    /// self-healing transients are quiet notes that never paint the panel red.
+    var isAlert: Bool { (severity ?? "error") == "error" || severity == "attention" }
+
+    var tint: Color {
+        switch severity {
+        case "attention": return Theme.amber
+        case "advisory", "transient": return Theme.muted
+        default: return Theme.coral
+        }
+    }
+}
+
+/// One honest per-agent connection row from /v1/connections: whether agentacct
+/// set it up (activation) joined with whether it is recording (ingestion), plus
+/// its kind and the point-to-point action. The backend never claims connected/
+/// recording without evidence; the view renders exactly what it vouches for.
+struct V1ConnectionsPayload: Decodable {
+    let schema: String
+    let connections: [V1Connection]
+}
+
+struct V1Connection: Decodable, Identifiable {
+    let id: String
+    let displayName: String
+    let kind: String            // active | semi | passive
+    let configured: Bool
+    let recordingState: String?
+    let scope: String?
+    let lastSuccessAt: Double?
+    let issues: [V1IngestionIssue]
+    let status: String          // recording | connected_idle | not_connected | needs_attention | reading | read_only
+    let primaryAction: String?  // connect | connect_manual | resync | resolve | nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, configured, scope, issues, status
+        case displayName = "display_name"
+        case recordingState = "recording_state"
+        case lastSuccessAt = "last_success_at"
+        case primaryAction = "primary_action"
+    }
+
+    /// The wizard client for an active agent (nil for semi/passive, which have
+    /// no one-click setup path).
+    var setupClient: SetupClient? { SetupClient(rawValue: id) }
 }
 
 /// Only this backend code is a store-wide cause projected onto each source.
@@ -153,7 +211,9 @@ struct SourceHealthPresentation {
 // MARK: - Pane
 
 struct SourcesPane: View {
-    var onSetup: (() -> Void)? = nil
+    /// Opens the setup wizard; a non-nil client pre-selects that agent (a
+    /// per-row Connect/Re-sync), nil opens the general chooser.
+    var onSetup: ((SetupClient?) -> Void)? = nil
     @Environment(DashboardStore.self) var dashboard
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .caption) private var scaledMonogramSize: CGFloat = 36
@@ -167,6 +227,14 @@ struct SourcesPane: View {
 
     private var presentation: SourceHealthPresentation {
         SourceHealthPresentation(refreshError: dashboard.ingestionError)
+    }
+    /// The connections card is "retained" (last-reported, unconfirmed) when
+    /// EITHER store is stale: the ingestion snapshot it reads health from, or
+    /// the connections array itself. Gating only on ingestion would let a stale
+    /// connections array (a failed /v1/connections while /v1/ingestion still
+    /// succeeds) render as live green.
+    private var connectionsRetained: Bool {
+        dashboard.ingestionError != nil || dashboard.connectionsError != nil
     }
 
     var body: some View {
@@ -191,7 +259,7 @@ struct SourcesPane: View {
     private var header: some View {
         adaptiveRow(spacing: Space.l) {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Evidence sources")
+            Text("Diagnostics")
                 .workFont(.titlePage).tracking(Type.titlePageTracking)
                 .foregroundStyle(Theme.ink)
             Text("Recording connections and local import health")
@@ -203,15 +271,22 @@ struct SourcesPane: View {
         // refreshIngestion), so this page carried an identical, unlabelled
         // icon whose narrower scope only a hover tooltip could explain (K83).
         // The narrow retry survives as a NAMED button, and only in the state
-        // where it does something the reviewer is waiting for.
+        // where it does something the reviewer is waiting for. Its action is
+        // main's widened one: after the Connections view landed this page
+        // draws two feeds, so the retry re-requests both.
         if dashboard.ingestionError != nil {
-            Button(Self.retrySourceHealthTitle) { Task { await dashboard.refreshIngestion() } }
+            Button(Self.retrySourceHealthTitle) {
+                Task {
+                    await dashboard.refreshIngestion()
+                    await dashboard.refreshConnections()
+                }
+            }
                 .buttonStyle(QuietButtonStyle(tint: Theme.accent, horizontalPadding: 8))
                 .disabled(dashboard.isRefreshingIngestion || dashboard.isOfflineSnapshot || SnapshotMode.enabled)
                 .accessibilityIdentifier("sources.refresh")
         }
         if let onSetup {
-            Button("Connections", action: onSetup).buttonStyle(NativeSetupActionStyle())
+            Button("Connections") { onSetup(nil) }.buttonStyle(NativeSetupActionStyle())
                 .accessibilityIdentifier("sources.connections")
         }
         }
@@ -224,7 +299,19 @@ struct SourcesPane: View {
                 retainedHealthBanner(error).padding(.bottom, Space.l)
             }
             issuesCard(snapshot.issues ?? []).padding(.bottom, (snapshot.issues ?? []).isEmpty ? 0 : Space.l)
-            connectedCard(snapshot)
+            if let conns = dashboard.connections {
+                // Surface a connections-only staleness (its endpoint failed while
+                // ingestion stayed healthy) so the rows below read as unconfirmed
+                // rather than silently live. When ingestion is also stale, the
+                // banner above already covers it.
+                if let connectionsError = dashboard.connectionsError, dashboard.ingestionError == nil {
+                    retainedConnectionsBanner(connectionsError).padding(.bottom, Space.l)
+                }
+                connectionsCard(conns, snapshot: snapshot)
+            } else {
+                // An older daemon without /v1/connections: the per-source card.
+                connectedCard(snapshot)
+            }
             watcherCard(snapshot.watcher).padding(.top, Space.xl)
             verificationDisclosure.padding(.top, Space.xl)
             scopeCard.padding(.top, Space.xl)
@@ -363,6 +450,178 @@ struct SourcesPane: View {
         }
     }
 
+    // MARK: connections (per-agent)
+
+    private func retainedConnectionsBanner(_ error: String) -> some View {
+        Card(padding: Space.l) {
+            HStack(alignment: .top, spacing: Space.m) {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.amber)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: Space.s) {
+                    Text("Current connection status unavailable").workFont(.rowLabel).foregroundStyle(Theme.ink)
+                    Text("Showing the last reported agents. Statuses below are unconfirmed until the connections refresh succeeds.")
+                        .workFont(.body).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(error).workFont(.caption).foregroundStyle(Theme.muted).textSelection(.enabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("connections-retained-health")
+    }
+
+    private func connectionsCard(_ connections: [V1Connection], snapshot: V1IngestionSnapshot) -> some View {
+        let watcherRunning = presentation.watcherIsCurrentlyRunning(snapshot.watcher)
+        return Card(padding: 0) {
+            VStack(spacing: 0) {
+                adaptiveRow(spacing: Space.s) {
+                    HStack(spacing: Space.s) {
+                        Text(connectionsRetained ? "Last reported agents" : "Agents").workFont(.titleCard).foregroundStyle(Theme.ink)
+                        Text("\(connections.count)").workFont(.dataSmall).foregroundStyle(Theme.muted)
+                    }
+                    if !stacksRows { Spacer() }
+                    if let overall = snapshot.state {
+                        overallLozenge(overall, title: SourceHealthPresentation.overallTitle(snapshot), watcherRunning: watcherRunning)
+                    }
+                }
+                .padding(.horizontal, Space.xl).padding(.vertical, Space.m)
+                .frame(minHeight: 52).frame(maxWidth: .infinity, alignment: .leading)
+                Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, Space.xl)
+                ForEach(Array(connections.enumerated()), id: \.element.id) { index, conn in
+                    if index > 0 {
+                        Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, Space.xl)
+                    }
+                    connectionRow(conn)
+                }
+            }
+        }
+    }
+
+    private func connectionRow(_ conn: V1Connection) -> some View {
+        adaptiveRow(spacing: Space.l) {
+            HStack(alignment: .top, spacing: Space.l) {
+                RoundedRectangle(cornerRadius: Metrics.radius)
+                    .fill(Theme.tintNeutral)
+                    .frame(width: monogramSize, height: monogramSize)
+                    .overlay(
+                        Text(Self.monogram(conn.id))
+                            .workFont(.dataSmallSemibold).foregroundStyle(Theme.muted)
+                    )
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(conn.displayName).workFont(.rowLabel).foregroundStyle(Theme.ink)
+                    Text(connectionDetail(conn))
+                        .workFont(.dataSmall).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let note = connectionActionNote(conn) {
+                        Text(note).workFont(.caption).foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    }
+                }
+            }
+            if !stacksRows { Spacer() }
+            HStack(spacing: Space.s) {
+                connectionStatusLozenge(conn)
+                connectionActionButton(conn)
+            }
+        }
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.s)
+        .frame(minHeight: Metrics.rowSource)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(conn.displayName), \(connectionDetail(conn))")
+    }
+
+    private func connectionDetail(_ conn: V1Connection) -> String {
+        switch conn.kind {
+        case "passive":
+            return conn.status == "needs_attention"
+                ? "Read-only source — needs attention"
+                : "Read-only — agentacct just reads its logs"
+        case "semi":
+            // Describe only what we observe (the automatic log import). The
+            // manual MCP-registration step is surfaced as guidance in the note
+            // below, never asserted here as already done.
+            return conn.status == "needs_attention"
+                ? "Imported from its logs — needs attention"
+                : "Imported from its logs automatically"
+        default:  // active
+            switch conn.status {
+            case "recording": return "Connected and recording"
+            case "connected_idle": return "Connected — no data captured yet"
+            case "needs_attention": return "Connected, but its recording needs a fix"
+            case "not_connected": return "Not connected — agentacct isn't recording this agent yet"
+            default: return conn.status.replacingOccurrences(of: "_", with: " ")
+            }
+        }
+    }
+
+    /// A per-agent guidance/fix note under the row (never fabricated — the
+    /// resolve text comes from the source's own ingestion issue).
+    private func connectionActionNote(_ conn: V1Connection) -> String? {
+        switch conn.primaryAction {
+        case "resolve":
+            // Remediation comes from the source's own ingestion issue; if that
+            // issue was suppressed (a source outside the live watcher's scope),
+            // fall back to a generic next step so a coral row is never a
+            // dead-end with no instruction.
+            return conn.issues.first?.action
+                ?? "This source reported a problem. Refresh Diagnostics, or check the agent's logs and read permissions."
+        case "connect_manual":
+            // A semi agent's MCP self-reporting is a manual terminal step; state
+            // it as an available action, never as already done.
+            return "MCP self-reporting is a manual step — add its MCP server in your terminal for richer receipts."
+        default:
+            return nil
+        }
+    }
+
+    @ViewBuilder
+    private func connectionStatusLozenge(_ conn: V1Connection) -> some View {
+        // Tones, not raw tints: StateLozenge now takes a Tone so the green /
+        // amber / coral / neutral reservation lives in one place. The mapping
+        // is main's own, unchanged (green+filled -> .connected, coral ->
+        // .failure, muted+hollow -> .quiet).
+        //
+        // KNOWN GAP: these words are Swift-authored. /v1/connections carries
+        // no `status_title`, so there is no payload string to pass through
+        // yet — unlike source/watcher/overall state, which do carry one. Fix
+        // belongs in the Python reducer, not here.
+        if connectionsRetained {
+            StateLozenge(text: "Last reported", tone: .quiet)
+        } else {
+            switch conn.status {
+            case "recording", "reading":
+                StateLozenge(text: conn.status == "reading" ? "Reading" : "Recording", tone: .connected)
+            case "connected_idle":
+                StateLozenge(text: "Connected", tone: .quiet)
+            case "needs_attention":
+                StateLozenge(text: "Needs a fix", tone: .failure)
+            case "read_only":
+                StateLozenge(text: "Read-only", tone: .quiet)
+            case "not_connected":
+                StateLozenge(text: "Not connected", tone: .quiet)
+            default:
+                StateLozenge(text: conn.status.replacingOccurrences(of: "_", with: " ").capitalized, tone: .quiet)
+            }
+        }
+    }
+
+    /// Only ACTIVE agents get a one-click Connect/Re-sync (its own idempotent
+    /// `onboard --agent X`). Semi/passive agents have no wizard path, so their
+    /// row shows guidance/health instead of a button.
+    @ViewBuilder
+    private func connectionActionButton(_ conn: V1Connection) -> some View {
+        if let onSetup, !connectionsRetained, let client = conn.setupClient,
+           conn.primaryAction == "connect" || conn.primaryAction == "resync" {
+            Button(conn.primaryAction == "resync" ? "Re-sync" : "Connect") { onSetup(client) }
+                .buttonStyle(NativeSetupActionStyle())
+                .disabled(dashboard.isOfflineSnapshot || SnapshotMode.enabled)
+                .accessibilityIdentifier("connections.\(conn.id).action")
+        }
+    }
+
     private func sourceRow(_ source: V1IngestionSource, watcherRunning: Bool) -> some View {
         adaptiveRow(spacing: Space.l) {
             HStack(alignment: .top, spacing: Space.l) {
@@ -460,8 +719,14 @@ struct SourcesPane: View {
             switch state {
             case "healthy" where watcherRunning:
                 StateLozenge(text: title, tone: .connected)
-            case "degraded":
+            // main separated the roll-up's two unhappy states: `attention` is
+            // amber, `degraded` is the more severe coral. That severity split
+            // is kept; the WORDS stay the reducer's `state_title`, never a
+            // Swift-authored "Attention"/"Needs a fix"/state.capitalized.
+            case "attention":
                 StateLozenge(text: title, tone: .warning)
+            case "degraded":
+                StateLozenge(text: title, tone: .failure)
             default:
                 StateLozenge(text: title, tone: .quiet)
             }
@@ -519,26 +784,64 @@ struct SourcesPane: View {
 
     @ViewBuilder
     private func issuesCard(_ issues: [V1IngestionIssue]) -> some View {
-        if !issues.isEmpty {
-            let groups = SourceIssueGroup.group(issues)
-            Card(padding: Space.xl) {
-                VStack(alignment: .leading, spacing: 0) {
-                    adaptiveRow(spacing: Space.s, alignment: .firstTextBaseline) {
-                        Text("\(presentation.isRetained ? "Previously reported" : "Needs attention") (\(groups.count))")
-                            .workFont(.titleCard).foregroundStyle(Theme.ink)
-                        Text("\(issues.count) diagnostic \(issues.count == 1 ? "report" : "reports")")
-                            .workFont(.caption).foregroundStyle(Theme.muted)
-                    }
-                    Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, Space.m)
-                    VStack(alignment: .leading, spacing: Space.xl) {
-                        ForEach(groups) { group in
-                            if group.isGlobalReconciliation {
-                                sharedReconciliationIssue(group)
-                            } else if let issue = group.issues.first {
-                                originalDiagnostic(issue)
-                            }
+        // Loud (error/attention) vs quiet (advisory/transient): the alarming card
+        // is only for things that actually need action; everything else is a
+        // calm note so a self-healing system never reads as broken.
+        let alerts = issues.filter { $0.isAlert }
+        let notes = issues.filter { !$0.isAlert }
+        VStack(alignment: .leading, spacing: Space.l) {
+            if !alerts.isEmpty { alertsCard(alerts) }
+            // Only reassure that imports are fine when there's no real alert
+            // sitting right above saying otherwise.
+            if !notes.isEmpty { notesCard(notes, reassure: alerts.isEmpty) }
+        }
+    }
+
+    private func alertsCard(_ issues: [V1IngestionIssue]) -> some View {
+        let groups = SourceIssueGroup.group(issues)
+        return Card(padding: Space.xl) {
+            VStack(alignment: .leading, spacing: 0) {
+                adaptiveRow(spacing: Space.s, alignment: .firstTextBaseline) {
+                    Text("\(presentation.isRetained ? "Previously reported" : "Needs attention") (\(groups.count))")
+                        .workFont(.titleCard).foregroundStyle(Theme.ink)
+                    Text("\(issues.count) diagnostic \(issues.count == 1 ? "report" : "reports")")
+                        .workFont(.caption).foregroundStyle(Theme.muted)
+                }
+                Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, Space.m)
+                VStack(alignment: .leading, spacing: Space.xl) {
+                    ForEach(groups) { group in
+                        if group.isGlobalReconciliation {
+                            sharedReconciliationIssue(group)
+                        } else if let issue = group.issues.first {
+                            originalDiagnostic(issue)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// Quiet, non-alarming notes: cosmetic advisories (e.g. a dev version
+    /// mismatch) and self-healing transients. Never red; reassures that data
+    /// is still importing.
+    private func notesCard(_ notes: [V1IngestionIssue], reassure: Bool) -> some View {
+        Card(padding: Space.xl) {
+            VStack(alignment: .leading, spacing: Space.m) {
+                Text("Notes").workFont(.titleCard).foregroundStyle(Theme.ink)
+                ForEach(notes) { note in
+                    HStack(alignment: .top, spacing: Space.s) {
+                        Image(systemName: "info.circle").workFont(.caption).foregroundStyle(Theme.muted)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(issueTitle(note)).workFont(.rowLabel).foregroundStyle(Theme.ink)
+                            Text(note.action ?? "Nothing to do — this clears on its own.")
+                                .workFont(.caption).foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                if reassure {
+                    Text("Your data is still importing normally.")
+                        .workFont(.caption).foregroundStyle(Theme.muted)
                 }
             }
         }
@@ -577,7 +880,7 @@ struct SourcesPane: View {
     private func originalDiagnostic(_ issue: V1IngestionIssue) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
             Text(issueTitle(issue))
-                .workFont(.rowLabel).foregroundStyle(presentation.isRetained ? Theme.muted : Theme.amber)
+                .workFont(.rowLabel).foregroundStyle(presentation.isRetained ? Theme.muted : issue.tint)
             Text(issue.code ?? "code not supplied").workFont(.dataSmall).foregroundStyle(Theme.muted)
             Text(issue.action ?? "See agentacct doctor for source diagnostics.")
                 .workFont(.caption).foregroundStyle(Theme.muted)

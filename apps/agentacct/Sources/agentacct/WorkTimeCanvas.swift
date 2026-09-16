@@ -662,6 +662,11 @@ struct WorkTimeWindowScroller: View {
                 accessibilityIdentifier: "work.timeline.overview.navigation",
                 accessibilityLabel: "Timeline overview") {
             ZStack(alignment: .leading) {
+                // The track alone. main drew the density histogram here, under
+                // the window thumb; this side keeps that histogram but moved it
+                // to `marks` below, ON TOP of the thumb (F4) — so the track is
+                // drawn at full hairline strength rather than halved, and the
+                // histogram is never painted twice.
                 RoundedRectangle(cornerRadius: 4).fill(Theme.hairline)
                 Button { onWindow(window) } label: {
                     RoundedRectangle(cornerRadius: 4)
@@ -713,8 +718,12 @@ struct WorkTimeWindowScroller: View {
             let peak = max(bins.max() ?? 0, 1)
             for (index, value) in bins.enumerated() where value > 0 {
                 let h = max(3, Double(value) / Double(peak) * 20)
-                context.fill(Path(CGRect(x: Double(index) * size.width / Double(bins.count), y: size.height - h - 3,
-                    width: max(size.width / Double(bins.count) - 1, 1), height: h)), with: .color(Theme.chartNeutral))
+                // Widths and heights are taken as Double explicitly (main's
+                // refinement): the mixed CGFloat/Double arithmetic that stood
+                // here is an inference burden with no payoff.
+                let w = Double(size.width)
+                context.fill(Path(CGRect(x: Double(index) * w / Double(bins.count), y: Double(size.height) - h - 3,
+                    width: max(w / Double(bins.count) - 1, 1), height: h)), with: .color(Theme.chartNeutral))
             }
         }
         .accessibilityHidden(true)  // the window control beside it speaks the range

@@ -18,14 +18,17 @@ enum RecordingHealthAction: String, Equatable, Codable {
     case setup, sources, refresh
 
     /// One verb per destination, and every destination is a place that
-    /// exists: "Connections" is the setup flow this action opens (reachable
-    /// from Sources and from the health popover), and "Sources" is the tab.
-    /// The pair used to read "Open Connections" / "View Sources", two verbs
-    /// for two places, one of which a reviewer could not find (K53).
+    /// exists under its current name: "Connections" is the setup flow this
+    /// action opens (reachable from Diagnostics and from the health
+    /// popover), and "Diagnostics" is the tab — `DashboardTab.sources`
+    /// keeps `.sources` as its internal case but displays as "Diagnostics".
+    /// The pair used to read "Open Connections" / "View Diagnostics", two
+    /// verbs for two places, which is what a reviewer read as two different
+    /// kinds of destination (K53).
     var title: String {
         switch self {
-        case .setup: return "Open recording setup"
-        case .sources: return "Open Sources"
+        case .setup: return "Open Connections"
+        case .sources: return "Open Diagnostics"
         case .refresh: return "Check again"
         }
     }
@@ -171,7 +174,7 @@ struct RecordingHealthSnapshot: Equatable {
             let hasIssues = !(ingestion.issues ?? []).isEmpty || ingestion.state == "degraded"
             dimensions.append(.init(id: "coverage", title: "Evidence coverage", value: hasIssues ? "Needs review" : ingestion.issues == nil ? "Not assessed" : "No issues reported", detail: hasIssues ? "Reported import or attribution issues may affect coverage. New capture does not repair missing or conflicting history." : "A health snapshot cannot establish complete historical coverage.", tone: hasIssues ? .caution : .neutral))
             if ingestion.state == "degraded", (ingestion.issues ?? []).isEmpty {
-                causes.append(.init(id: "ingestion:degraded", scope: .ingestion, title: "Import coverage needs review", detail: "The recorder reports degraded ingestion without a specific cause. Review Sources for the reported source states.", tone: .caution, action: .sources, affectedSources: [], recoveryDetail: "The recorder no longer reports degraded ingestion. Historical completeness is still not established."))
+                causes.append(.init(id: "ingestion:degraded", scope: .ingestion, title: "Import coverage needs review", detail: "The recorder reports degraded ingestion without a specific cause. Open Diagnostics for the reported source states.", tone: .caution, action: .sources, affectedSources: [], recoveryDetail: "The recorder no longer reports degraded ingestion. Historical completeness is still not established."))
             }
         } else {
             dimensions.append(.init(id: "imports", title: "Imports and coverage", value: "Not confirmed", detail: ingestion == nil ? "Waiting for source health." : "The last source snapshot is retained, but current health cannot be confirmed while the recorder is unreachable.", tone: .neutral))

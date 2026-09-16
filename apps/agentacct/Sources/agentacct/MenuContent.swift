@@ -391,7 +391,7 @@ struct MenuContent: View {
                     .font(Type.caption)
                     .foregroundStyle(Theme.muted)
                 if hiddenCount > 0 {
-                    Button("+\(hiddenCount) in Work") {
+                    Button("+\(hiddenCount) in Sessions") {
                         openMain(selecting: .work)
                     }
                     .buttonStyle(QuietButtonStyle(horizontalPadding: 3, verticalPadding: 0))
