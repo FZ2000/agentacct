@@ -4199,6 +4199,12 @@ def _work_event(event: dict[str, Any]) -> dict[str, Any] | None:
         "files": files,
         "blocker": _optional_str(metadata.get("blocker")),
         "next_step": _optional_str(metadata.get("next_step")),
+        # The task-level goal. This builder reads metadata DIRECTLY rather than
+        # going through WorkEvent, so carrying the field there was not enough:
+        # the goal reached the event object and the receipt read for it, and the
+        # page still said none was recorded, because THIS dict is what the ledger
+        # actually folds into a work item.
+        "task_goal": _optional_str(metadata.get("task_goal")),
     }
 
 

@@ -255,3 +255,44 @@ def test_a_task_with_no_goal_says_so_instead_of_borrowing_a_step_title() -> None
     assert dimension["goal"] is None
     assert dimension["goal_absent_text"], "an absent goal must be a NAMED state"
     assert "Accept accounting negatives" not in (dimension["goal_absent_text"] or "")
+
+
+def test_the_goal_survives_the_real_ledger_builder_not_just_a_hand_made_item() -> None:
+    """Run the ACTUAL builder, because the first version of this fix did not.
+
+    `task_goal` was added to WorkEvent and to the work item, and an end-to-end
+    check was declared passing -- against a hand-built item dict. The real path
+    never touches WorkEvent: `work_ledger._work_event` reads the metadata
+    directly, and it was the one serializer of four that still dropped the
+    field. Three links carried it, the fourth did not, and the page still said
+    no goal was recorded.
+
+    So this asserts through `build_work_ledger`. A hand-made item proves only
+    that the reader works on an input the writer never produces.
+    """
+    from agentacct.receipt import _task_dimension
+    from agentacct.work_ledger import build_work_ledger
+
+    goal = "Amounts pasted out of the export reach the ledger or are refused outright."
+    events = [
+        {
+            "event_id": "evt_goal_start",
+            "event_type": "section_started",
+            "created_at": 1789600000.0,
+            "source": "claude-code",
+            "metadata": {
+                "section_id": "import-contract",
+                "section_status": "started",
+                "section_title": "Make every helper refuse junk the same way",
+                "task_goal": goal,
+            },
+        }
+    ]
+    ledger = build_work_ledger(events)
+    items = [item for item in ledger["work_items"] if item.get("section_id") == "import-contract"]
+    assert items, "the builder produced no work item for the recorded section"
+    assert items[0].get("task_goal") == goal, (
+        "build_work_ledger dropped the goal -- every serializer on the write path "
+        "must carry it, not only WorkEvent"
+    )
+    assert _task_dimension({"work_items": items}, "t")["goal"] == goal
