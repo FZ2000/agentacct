@@ -134,14 +134,71 @@ final class WorkEvidenceRenderingTests: XCTestCase {
 
     // MARK: - the opening surface (B2)
 
-    func testABurstOpensAsAListBecauseATimeAxisCannotRenderIt() {
-        // task_7bb028c1: three records inside a third of a second.
-        XCTAssertTrue(WorkTimelineView.listSuitsData(recordCount: 3, span: 0.33))
-        XCTAssertTrue(WorkTimelineView.listSuitsData(recordCount: 16, span: 2))
-        // A long, populated task keeps the canvas as its opening view.
-        XCTAssertFalse(WorkTimelineView.listSuitsData(recordCount: 48, span: 180_000))
+    /// A list ORDERS; a canvas POSITIONS. So the opening surface turns on one
+    /// question — does the time axis separate these records — and never on how
+    /// many there are.
+    func testAShortSpanKeepsTheCanvasBecausePositionStillCarriesTheShape() {
+        // Three records at :12, :14, :17 — bunched, then a pause. Ordering
+        // destroys that shape, so a third of a second still earns the canvas.
+        XCTAssertFalse(WorkTimelineView.listSuitsData(records: Self.stamped([12, 14, 17])))
+        // Two records a third of a second apart are still two positions.
+        XCTAssertFalse(WorkTimelineView.listSuitsData(records: Self.stamped([100, 100.33])))
+        // A long, populated task keeps the canvas too — same reason, not count.
+        XCTAssertFalse(WorkTimelineView.listSuitsData(records: Self.stamped([0, 90_000, 180_000])))
+    }
+
+    func testRecordsThatShareOneStampAreAListAtAnyN() {
+        for count in [1, 5, 20, 200] {
+            XCTAssertTrue(
+                WorkTimelineView.listSuitsData(records: Self.stamped(Array(repeating: 1_700, count: count))),
+                "\(count) records sharing one stamp cannot be separated on a time axis"
+            )
+        }
+        // A single record is one position, so a time axis buys nothing.
+        XCTAssertTrue(WorkTimelineView.listSuitsData(records: Self.stamped([1_700])))
+        // Unusable stamps leave no positions at all, however many records.
+        XCTAssertTrue(WorkTimelineView.listSuitsData(records: Self.stamped(Array(repeating: Double?.none, count: 20))))
+        XCTAssertTrue(WorkTimelineView.listSuitsData(records: Self.stamped([Double.infinity, Double.nan, 0, -5])))
         // Nothing loaded is not a reason to choose either surface.
-        XCTAssertFalse(WorkTimelineView.listSuitsData(recordCount: 0, span: nil))
+        XCTAssertFalse(WorkTimelineView.listSuitsData(records: []))
+    }
+
+    /// The reading surface a reviewer asked for outlives the task they asked on
+    /// it: widest scope loses, so the per-task override beats the app-wide
+    /// default, which beats the data.
+    func testTheSurfaceResolvesPerTaskThenAppWideThenFromTheData() {
+        let burst = Self.stamped([1_700, 1_700, 1_700])   // data says list
+        let spread = Self.stamped([1_700, 1_760])         // data says canvas
+
+        // A per-task override wins over both the app default and the data.
+        XCTAssertFalse(WorkTimelineView.usesRecordList(chosenForTask: false, appDefault: true, records: burst))
+        XCTAssertTrue(WorkTimelineView.usesRecordList(chosenForTask: true, appDefault: false, records: spread))
+
+        // With no override, the app-wide default wins over the data — this is
+        // what stops a reviewer re-pressing "Show timeline" on every task.
+        XCTAssertFalse(WorkTimelineView.usesRecordList(chosenForTask: nil, appDefault: false, records: burst))
+        XCTAssertTrue(WorkTimelineView.usesRecordList(chosenForTask: nil, appDefault: true, records: spread))
+
+        // With neither, the data decides.
+        XCTAssertTrue(WorkTimelineView.usesRecordList(chosenForTask: nil, appDefault: nil, records: burst))
+        XCTAssertFalse(WorkTimelineView.usesRecordList(chosenForTask: nil, appDefault: nil, records: spread))
+    }
+
+    /// `@AppStorage` cannot hold `Bool?`, and the third state is load-bearing:
+    /// "never chosen" must stay distinguishable from "chose the list".
+    func testTheAppWideDefaultKeepsNeverChosenDistinctFromChoseTheList() {
+        XCTAssertNil(WorkTimelineSurfaceDefault.choice(WorkTimelineSurfaceDefault.unset))
+        XCTAssertEqual(WorkTimelineSurfaceDefault.choice(WorkTimelineSurfaceDefault.stored(true)), true)
+        XCTAssertEqual(WorkTimelineSurfaceDefault.choice(WorkTimelineSurfaceDefault.stored(false)), false)
+    }
+
+    private static func stamped(_ starts: [Double?]) -> [WorkTimelineRecord] {
+        starts.enumerated().map { index, start in
+            var record = Self.record(id: "r\(index)", kind: .step, resultTone: nil)
+            record.start = start
+            record.end = nil
+            return record
+        }
     }
 
     // MARK: - the captured action ledger (B4d)

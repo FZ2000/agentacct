@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The recorded check table, on screen.
@@ -23,6 +24,13 @@ struct RecordChecksSection: View {
     /// recorded event in the activity surface below.
     var layers: WorkRecordLayers? = nil
     @State private var expandedID: String?
+    /// One reveal per press. A press that OPENS a row bumps the request; the
+    /// probe reports the value it served. A row rebuilt later (scrolled away
+    /// and back, a refreshed receipt) therefore sees nothing to do and never
+    /// re-scrolls the page on its own, while re-opening the same row asks for
+    /// its own fresh reveal.
+    @State private var revealRequest = 0
+    @State private var revealsServed = 0
 
     private var evidence: ReceiptEvidenceDim { receipt.dimensions.evidence }
 
@@ -133,9 +141,31 @@ struct RecordChecksSection: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(SurfaceButtonStyle())
+            // A check row is the page's primary evidence control — expanding it
+            // is how a reviewer reads the proof — so it is a Tab stop, and
+            // Return runs the same `activate` a click runs.
+            .keyboardStop { activate(check) }
             .accessibilityIdentifier("work.record.checks.row.\(check.id)")
             .accessibilityLabel(spokenLabel(check))
             if expanded { detail(check) }
+        }
+        // The row and the detail it just opened, measured together: the page
+        // scrolls the minimum needed to hold BOTH, and not at all when they
+        // already fit.
+        .background(reveal(expanded: expanded))
+    }
+
+    /// Keeps a freshly expanded row and its detail on screen.
+    ///
+    /// The static renderer has no scroll view to measure against, so it gets
+    /// nothing — the reference images are unchanged.
+    @ViewBuilder
+    private func reveal(expanded: Bool) -> some View {
+        if !SnapshotMode.enabled || SnapshotMode.interactiveFixture {
+            // Zero is "nothing to do": this row is closed, or the press that
+            // opened it has already been served.
+            let pending = expanded && revealRequest > revealsServed
+            KeepRegionOnScreen(request: pending ? revealRequest : 0) { revealsServed = revealRequest }
         }
     }
 
@@ -205,8 +235,107 @@ struct RecordChecksSection: View {
     /// the activity surface, so the table and the canvas/list never disagree
     /// about what the reviewer is looking at.
     private func activate(_ check: ReceiptCheck) {
-        expandedID = expandedID == check.id ? nil : check.id
+        let opening = expandedID != check.id
+        expandedID = opening ? check.id : nil
+        // Only an opening press may move the page, and then only as far as the
+        // detail it opened. Collapsing leaves the reading position alone.
+        if opening { revealRequest += 1 }
         if let event = PayloadAbsence.text(check.eventId) { layers?.selectEvent(event) }
+    }
+}
+
+/// The minimum document scroll that brings a region fully on screen.
+///
+/// Expanding a row in place is not a reason to move the reviewer: this moves
+/// the page only when the region would not fit, and then only as far as it
+/// must. A region TALLER than the viewport shows its top — the row that was
+/// pressed — never its far end.
+enum RegionReveal {
+    /// The scroll position to move an enclosing clip view to, or `nil` to leave
+    /// it exactly where it is. `region` and `visible` are both in the clip
+    /// view's coordinates; `flipped` is that clip view's own orientation, and
+    /// decides which edge of an oversized region is its top.
+    static func contentOffset(region: CGRect, visible: CGRect, document: CGSize,
+                              flipped: Bool, margin: CGFloat = Space.s) -> CGPoint? {
+        guard region.height > 0, visible.height > 0,
+              region.minY.isFinite, region.maxY.isFinite,
+              visible.minY.isFinite, document.height.isFinite else { return nil }
+        // Already on screen: the reading position is the reviewer's.
+        if region.minY >= visible.minY, region.maxY <= visible.maxY { return nil }
+        let target: CGFloat
+        if region.height + margin * 2 >= visible.height {
+            target = flipped ? region.minY - margin : region.maxY + margin - visible.height
+        } else if region.minY < visible.minY {
+            target = region.minY - margin
+        } else {
+            target = region.maxY + margin - visible.height
+        }
+        let limit = max(document.height - visible.height, 0)
+        let y = min(max(target, 0), limit)
+        guard abs(y - visible.minY) > 0.5 else { return nil }
+        return CGPoint(x: visible.minX, y: y)
+    }
+}
+
+/// Scrolls the region it backs into view once per armed request.
+///
+/// It measures on demand, never observes scrolling, and asks
+/// `RegionReveal` — which declines to move an already-visible region — so it
+/// cannot displace a reviewer who can already see what they opened.
+/// Internal, not private: `KeyboardStop` reveals a freshly focused control with
+/// this same probe, so the app has ONE reveal policy rather than one per caller.
+struct KeepRegionOnScreen: NSViewRepresentable {
+    /// A positive value that CHANGES arms exactly one reveal; 0 never arms.
+    var request: Int
+    /// Called after the reveal is attempted, so the request is consumed once.
+    var onRevealed: () -> Void
+
+    func makeNSView(context: Context) -> ProbeView { ProbeView() }
+
+    func updateNSView(_ nsView: ProbeView, context: Context) {
+        nsView.onRevealed = onRevealed
+        nsView.arm(request)
+    }
+
+    final class ProbeView: NSView {
+        var onRevealed: (() -> Void)?
+        private var handled = 0
+        private var scheduled = false
+
+        func arm(_ request: Int) {
+            guard request > 0, request != handled else { return }
+            handled = request
+            guard !scheduled else { return }
+            scheduled = true
+            // Two hops: the first lands after the detail is inserted, the
+            // second after it has been laid out at its real height — so the
+            // region measured is the one the reviewer will see.
+            DispatchQueue.main.async { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    scheduled = false
+                    reveal()
+                    onRevealed?()
+                }
+            }
+        }
+
+        private func reveal() {
+            var current = superview
+            while let view = current {
+                if let scroll = view as? NSScrollView {
+                    let clip = scroll.contentView
+                    guard let offset = RegionReveal.contentOffset(
+                        region: convert(bounds, to: clip), visible: clip.bounds,
+                        document: scroll.documentView?.bounds.size ?? .zero,
+                        flipped: clip.isFlipped) else { return }
+                    clip.scroll(to: offset)
+                    scroll.reflectScrolledClipView(clip)
+                    return
+                }
+                current = view.superview
+            }
+        }
     }
 }
 

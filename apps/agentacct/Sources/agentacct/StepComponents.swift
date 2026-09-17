@@ -395,6 +395,7 @@ struct StepCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Button { expanded.toggle() } label: { header }
             .buttonStyle(SurfaceButtonStyle(focusInset: 2))
+            .keyboardStop { expanded.toggle() }
             // NOT `.accessibilityElement(children: .ignore)`: a Button already
             // speaks as ONE element, and that modifier REPLACES it — the
             // control loses its button role and its press action with it
@@ -636,6 +637,7 @@ struct StepCard: View {
                             )
                         }
                         .buttonStyle(SurfaceButtonStyle(focusInset: 2))
+                        .keyboardStop { showAllAttention.toggle() }
                         .accessibilityValue(showAllAttention ? "Expanded" : "Collapsed")
                     }
                 }
@@ -665,6 +667,7 @@ struct StepCard: View {
                             )
                         }
                         .buttonStyle(SurfaceButtonStyle(focusInset: 2))
+                        .keyboardStop { showAllCurrentChecks.toggle() }
                         .accessibilityValue(showAllCurrentChecks ? "Expanded" : "Collapsed")
                     }
                 }
@@ -681,6 +684,7 @@ struct StepCard: View {
                         )
                     }
                     .buttonStyle(SurfaceButtonStyle(focusInset: 2))
+                    .keyboardStop { showHistory.toggle() }
                     .accessibilityValue(showHistory ? "Expanded" : "Collapsed")
 
                     if showHistory {

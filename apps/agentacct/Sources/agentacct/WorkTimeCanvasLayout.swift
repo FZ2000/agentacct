@@ -154,6 +154,18 @@ struct WorkTimeCanvasLayout {
         return items.filter { $0.frame.maxX >= -margin && $0.frame.minX <= width + margin }
     }
 
+    /// Does the clip actually show any of this card?
+    ///
+    /// `visibleCards` deliberately returns cards a full card-width OUTSIDE the
+    /// plot so an edge card is drawn whole; one that lies entirely in that
+    /// margin shows nothing at all, and must not be a keyboard stop (K130). A
+    /// non-finite width means "not measured yet": assume on screen rather than
+    /// silently dropping every card out of the key loop.
+    static func isOnScreen(_ frame: CGRect, in width: Double) -> Bool {
+        guard width.isFinite, width > 0, frame.minX.isFinite, frame.maxX.isFinite else { return true }
+        return frame.maxX > 0 && frame.minX < width
+    }
+
     /// Items whose recorded extent crosses the window while their card sits
     /// far offscreen. Their span lines still run through the viewport, marking
     /// activity that continues beyond an edge — without pinning a fake card.

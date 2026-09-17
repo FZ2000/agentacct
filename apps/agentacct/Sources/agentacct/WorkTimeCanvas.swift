@@ -126,7 +126,16 @@ struct WorkTimeCanvas: View {
                     drawing(layout: layout, items: visibleCards, crossing: crossingSpans, ticks: tickMarkings.times, width: width, indexedRecords: indexedRecords).allowsHitTesting(false)
                     axisLabels(ticks: tickMarkings, plotWindow: plotWindow, width: width, axisY: layout.axisY).allowsHitTesting(false)
                     ForEach(visibleCards) { item in
-                        itemButton(item, indexedRecords: indexedRecords)
+                        // `visibleCards` keeps a card's width of margin beyond
+                        // each edge so a card centred on the first or last
+                        // record in view is DRAWN in full (K18). A card that
+                        // falls entirely in that margin is clipped away
+                        // completely — yet it stayed in the key loop, so Tab
+                        // landed on a card at x=254, behind the 20…380 sidebar,
+                        // with nothing on screen to show for it (K130). Focus
+                        // follows what the clip actually shows.
+                        itemButton(item, indexedRecords: indexedRecords,
+                                   onScreen: WorkTimeCanvasLayout.isOnScreen(item.frame, in: width))
                             .frame(width: item.frame.width, height: item.frame.height)
                             .position(x: item.frame.midX, y: item.frame.midY)
                     }
@@ -403,7 +412,7 @@ struct WorkTimeCanvas: View {
         .accessibilityHidden(true)
     }
 
-    private func itemButton(_ item: WorkTimeCanvasLayout.Item, indexedRecords: [String: WorkTimelineRecord]) -> some View {
+    private func itemButton(_ item: WorkTimeCanvasLayout.Item, indexedRecords: [String: WorkTimelineRecord], onScreen: Bool = true) -> some View {
         let members = item.recordIDs.compactMap { indexedRecords[$0] }
         let selected = selectedID.map(item.recordIDs.contains) ?? false
         return Button { activate(item, members: members) } label: {
@@ -467,8 +476,11 @@ struct WorkTimeCanvas: View {
             .clipShape(RoundedRectangle(cornerRadius: Metrics.radius))
             .contentShape(Rectangle())
         }
-        .buttonStyle(SurfaceButtonStyle(focusInset: 2))
-        .focusable()
+        // The card states its own focus rather than leaving it to the ambient
+        // `\.isFocused`, which a style body never sees under the card's OWN
+        // `.focusable()` — so the inset ring below simply never drew.
+        .buttonStyle(SurfaceButtonStyle(focusInset: 2, isFocused: onScreen && focusedItem == item.id))
+        .focusable(onScreen)
         // The style draws its own inset focus ring; the system effect is drawn
         // by the AppKit host OUTSIDE this canvas's rounded container (K99).
         .focusEffectDisabled()

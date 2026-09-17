@@ -641,6 +641,7 @@ struct AgentOutcomeSummary: View {
                 Button(expanded ? "Show less" : "Show full summary") { expanded.toggle() }
                     .buttonStyle(QuietButtonStyle(tint: Theme.accent))
                     .workFont(.captionSemibold)
+                    .keyboardStop { expanded.toggle() }
                     .hangingLeading()
                     .accessibilityIdentifier("work.outcome-summary.toggle")
             }
@@ -2173,7 +2174,12 @@ private struct WorkTableRow: View {
         }
         .buttonStyle(SurfaceButtonStyle(
             cornerRadius: 0,
-            focusInset: 2
+            focusInset: 2,
+            // The TABLE is the keyboard stop, not the row (K77): it draws one
+            // ring around itself and marks the roving row with the selection
+            // cue above. Left to the ambient environment, the container's focus
+            // ringed every visible row at once (K130).
+            isFocused: false
         ))
         .accessibilityIdentifier("work.table.task.\(task.taskId)")
         .accessibilityLabel(presentation.accessibilityLabel)
@@ -2345,7 +2351,9 @@ private struct WorkAccessibleTableRow: View {
             .background(isRovingRow ? Theme.selected.opacity(0.5) : .clear)
             .contentShape(Rectangle())
         }
-        .buttonStyle(SurfaceButtonStyle(cornerRadius: 0, focusInset: 2))
+        // As in the fixed table: the container is the one keyboard stop, so the
+        // row never draws its own ring (K130).
+        .buttonStyle(SurfaceButtonStyle(cornerRadius: 0, focusInset: 2, isFocused: false))
         .accessibilityIdentifier("work.table.task.\(task.taskId)")
         .accessibilityLabel(presentation.accessibilityLabel)
         .workRowAccessibilityFields(presentation.accessibilityFields)
@@ -3139,6 +3147,7 @@ struct WorkRecordPage: View {
                     Label(timelineFocused ? "Show task list" : "Focus timeline", systemImage: timelineFocused ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
                         .workFont(.captionSemibold)
                 }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                .keyboardStop(activate: onToggleTimelineFocus)
                 .accessibilityIdentifier("work.focus-timeline")
             }
         }
@@ -3210,6 +3219,7 @@ struct WorkRecordPage: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(QuietButtonStyle(horizontalPadding: 6, verticalPadding: 3))
+        .keyboardStop(activate: leaveRecord)
         .focused($backFocused)
         .help("Back to all tasks (Esc)")
         .accessibilityLabel("All tasks")
@@ -3785,9 +3795,7 @@ struct OverflowDisclosure<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) { expanded.toggle() }
-            } label: {
+            Button(action: toggle) {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right")
                         .workFont(.icon)
@@ -3802,6 +3810,7 @@ struct OverflowDisclosure<Content: View>: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(SurfaceButtonStyle())
+            .keyboardStop { toggle() }
             .onHover { inside in
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.12)) { hovering = inside }
             }
@@ -3810,6 +3819,13 @@ struct OverflowDisclosure<Content: View>: View {
             .accessibilityIdentifier(identifier ?? "work.overflow")
             if expanded { content() }
         }
+    }
+
+    /// Named so the click and the Return key run the SAME fold, animation
+    /// included; a keyboard path that skipped the animation would be a second
+    /// behaviour for one control.
+    private func toggle() {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) { expanded.toggle() }
     }
 }
 

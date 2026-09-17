@@ -191,6 +191,9 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         }
     }
     let hosting: WorkTimeCanvasHostingView<WorkTimeCanvasHostedContent<Content>>
+    /// The focus indicator, drawn by a sibling ABOVE `hosting`. See
+    /// `WorkTimeCanvasFocusOverlay`.
+    private let focusOverlay = WorkTimeCanvasFocusOverlay()
     private var dragStart: NSPoint?
     private var lastDragX: CGFloat = 0
     private var dragging = false
@@ -212,6 +215,15 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         hosting.layer?.masksToBounds = true
         hosting.autoresizingMask = [.width, .height]
         addSubview(hosting)
+        // ABOVE the host, because the host is OPAQUE: its SwiftUI root fills
+        // these bounds with `Theme.well`, so a ring stroked in this view's own
+        // `draw(_:)` was painted first and then covered — AX reported the canvas
+        // focused and an audit photographing both states could not tell them
+        // apart (K130). A sibling added after `hosting` draws the same stroke on
+        // top of it; it is transparent and never hit-tested, so nothing else
+        // about the canvas changes.
+        focusOverlay.autoresizingMask = [.width, .height]
+        addSubview(focusOverlay, positioned: .above, relativeTo: hosting)
         hosting.routeScroll = { [weak self] in self?.scrollWheel(with: $0) }
         hosting.routeMagnify = { [weak self] in self?.magnify(with: $0) }
         setAccessibilityElement(true)
@@ -234,22 +246,27 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
 
     override func accessibilityPerformPress() -> Bool { window?.makeFirstResponder(self) ?? false }
 
-    override func becomeFirstResponder() -> Bool { needsDisplay = true; return true }
-    override func resignFirstResponder() -> Bool { needsDisplay = true; return true }
+    override func becomeFirstResponder() -> Bool {
+        syncFocusRing(true)
+        // A ring below the fold is the same defect as no ring: the key loop
+        // reaches this canvas from the controls above it, so it brings itself
+        // into view the way every other stop on the page does (K130).
+        scrollToVisible(bounds)
+        return true
+    }
+    override func resignFirstResponder() -> Bool { syncFocusRing(false); return true }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        if window?.firstResponder === self {
-            NSColor.keyboardFocusIndicatorColor.setStroke()
-            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 4, yRadius: 4)
-            ring.lineWidth = 2
-            ring.stroke()
-        }
+    /// Hand the overlay the one fact it draws from. Called on both responder
+    /// transitions and on layout, so a ring never survives a rebuild.
+    private func syncFocusRing(_ focused: Bool) {
+        focusOverlay.showsRing = focused
     }
 
     override func layout() {
         super.layout()
         hosting.frame = bounds
+        focusOverlay.frame = bounds
+        syncFocusRing(window?.firstResponder === self)
         window?.invalidateCursorRects(for: self)
     }
 
@@ -425,6 +442,48 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         else if let region = configuration.cursorRegions.first(where: { $0.rect.contains(point) }) { region.cursor.set() }
         else if configuration.interactiveRegions.contains(where: { $0.contains(point) }) { NSCursor.arrow.set() }
         else { NSCursor.openHand.set() }
+    }
+}
+
+/// The canvas's focus indicator, and nothing else.
+///
+/// It exists because the canvas's content is an opaque AppKit child: the
+/// enclosing view cannot draw over its own subview, so the ring had to become a
+/// sibling drawn after it. It paints the app's ONE focus treatment — a
+/// `Metrics.focusW` accent stroke set `Metrics.focusGap` inside the edge, at
+/// `Metrics.radius` — never the system's `keyboardFocusIndicatorColor`, which
+/// is a second, off-palette focus colour. Accent is right here for the same
+/// reason it is right in `FocusRing`: it is the interactive voice, and a ring
+/// says "you can act here".
+///
+/// It is transparent, hit-tests to nothing, and accepts no responder status, so
+/// it changes no gesture, no cursor rect, and no accessibility tree.
+final class WorkTimeCanvasFocusOverlay: NSView {
+    var showsRing = false {
+        didSet { if showsRing != oldValue { needsDisplay = true } }
+    }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override var acceptsFirstResponder: Bool { false }
+    override var isOpaque: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+
+    /// The ring's stroke is centred on the path, so the path sits half a line
+    /// width further in than the gap — the same arithmetic `FocusRing` does.
+    static func ringPath(in bounds: NSRect) -> NSBezierPath {
+        let inset = Metrics.focusGap + Metrics.focusW / 2
+        let rect = bounds.insetBy(dx: inset, dy: inset)
+        let path = NSBezierPath(roundedRect: rect, xRadius: Metrics.radius, yRadius: Metrics.radius)
+        path.lineWidth = Metrics.focusW
+        return path
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard showsRing, bounds.width > 0, bounds.height > 0 else { return }
+        NSColor(Theme.accent).setStroke()
+        Self.ringPath(in: bounds).stroke()
     }
 }
 

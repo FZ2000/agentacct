@@ -41,6 +41,20 @@ enum WorkTimelineRangeNavigation {
         return WorkTimeCanvasLayout.clampedWindow(focused, to: full)
     }
 
+    /// The window that must be shown when the request to select a record came
+    /// from ELSEWHERE on the record page — the Checks table — rather than from
+    /// a click inside the surface itself.
+    ///
+    /// `nil` means the visible window already draws that record's card, so the
+    /// selection re-frames nothing: a reviewer who can already see the mark
+    /// keeps their zoom. Re-framing is internal to the canvas/list either way;
+    /// the document never moves for it (F9).
+    static func reframed(_ window: WorkTimelineInterval,
+                         toShow record: WorkTimelineRecord) -> WorkTimelineInterval? {
+        guard !holdsACard(window, records: [record]) else { return nil }
+        return focused(on: record)
+    }
+
     /// Select only a visible recorded mark. An empty gap is not evidence.
     static func hitRecord(_ records: [WorkTimelineRecord], laneID: String, x: Double, width: Double,
                           within full: WorkTimelineInterval, tolerance: Double = 6) -> WorkTimelineRecord? {

@@ -1221,6 +1221,7 @@ struct DispositionControls: View {
                             Text("Resolve…").workFont(.captionSemibold).foregroundStyle(Theme.accent)
                         }
                         .buttonStyle(QuietButtonStyle())
+                        .keyboardStop { resolvePopoverShown = true }
                         .modifier(OptionalHelp(text: resolvedEffect))
                         .accessibilityHint(resolvedEffect ?? "")
                         .accessibilityIdentifier("disposition.resolve.\(kind)")
@@ -1255,6 +1256,7 @@ struct DispositionControls: View {
             Text(label).workFont(.captionSemibold).foregroundStyle(Theme.accent)
         }
         .buttonStyle(QuietButtonStyle())
+        .keyboardStop(activate: action)
         .modifier(OptionalHelp(text: effect))
         .accessibilityHint(effect ?? "")
         .accessibilityIdentifier("disposition.\(label.lowercased().replacingOccurrences(of: " ", with: "-")).\(kind)")

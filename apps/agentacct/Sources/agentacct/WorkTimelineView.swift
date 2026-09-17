@@ -19,6 +19,34 @@ enum WorkTimelinePreferences {
     }
 }
 
+/// The reading surface a reviewer prefers, across every task.
+///
+/// The per-task bookmark holds the WINDOW, which is genuinely about one task.
+/// Which SURFACE to read records on is a habit, not a fact about a task, so
+/// storing it per task meant a reviewer who wants the canvas had to ask for it
+/// on every task, forever. `@AppStorage` cannot hold `Bool?`, and the third
+/// state matters — "never chosen" must stay distinguishable from "chose the
+/// list" so the data still decides the opening view for a reviewer who has
+/// never pressed the switch — so it travels as an Int.
+enum WorkTimelineSurfaceDefault {
+    static let key = "work.timeline.surface.default.v1"
+    static let unset = 0
+    private static let list = 1
+    private static let canvas = 2
+
+    /// The stored value read back as a choice, or nil when nobody has chosen.
+    static func choice(_ stored: Int) -> Bool? {
+        switch stored {
+        case list: return true
+        case canvas: return false
+        default: return nil
+        }
+    }
+
+    /// The value to store for an explicit press of the switch.
+    static func stored(_ usesRecordList: Bool) -> Int { usesRecordList ? list : canvas }
+}
+
 /// WHEN the timeline was last observed, for the export header.
 ///
 /// This deliberately is not SwiftUI state. Nothing in `body` reads it — only
@@ -55,6 +83,8 @@ struct WorkTimelineView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workCompactViewport) private var compactViewport
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The app-wide reading-surface preference (see `WorkTimelineSurfaceDefault`).
+    @AppStorage(WorkTimelineSurfaceDefault.key) private var storedSurfaceDefault = WorkTimelineSurfaceDefault.unset
     @State private var navigation = WorkTimelineNavigation()
     @State private var feed = WorkTimelineFeed()
     @State private var followWindowSpan: Double = 30 * 60
@@ -389,35 +419,59 @@ struct WorkTimelineView: View {
     }
 
     /// Whether the ordered list, rather than the time canvas, is the reading
-    /// surface. A reviewer's own choice always wins; until one is made the
-    /// DATA decides, because a proportional time axis cannot render a burst:
-    /// on the fail → pass task three records sit inside a third of a second.
+    /// surface. Resolution order, widest-scope last: this task's own override,
+    /// then the reviewer's app-wide preference (written on every explicit
+    /// press, so choosing the canvas once does not have to be repeated on
+    /// every task forever), and only then the data.
     private var usesRecordList: Bool {
-        if let chosen = navigation.view.recordListChosen { return chosen }
-        return Self.listSuitsData(recordCount: displayProjection.records.count,
-                                  span: displayProjection.interval?.span)
+        Self.usesRecordList(chosenForTask: navigation.view.recordListChosen,
+                            appDefault: WorkTimelineSurfaceDefault.choice(storedSurfaceDefault),
+                            records: displayProjection.records)
     }
 
-    /// The opening-view rule, kept testable and away from the view body: a
-    /// short loaded span, or few enough records that a time axis buys nothing.
-    static func listSuitsData(recordCount: Int, span: Double?) -> Bool {
-        guard recordCount > 0 else { return false }
-        if recordCount <= 4 { return true }
-        guard let span, span.isFinite else { return true }
-        return span < 5
+    /// The resolution order itself, away from the view body so a test can pin
+    /// it: per-task override, then app-wide default, then the data.
+    static func usesRecordList(chosenForTask: Bool?, appDefault: Bool?,
+                               records: [WorkTimelineRecord]) -> Bool {
+        if let chosenForTask { return chosenForTask }
+        if let appDefault { return appDefault }
+        return listSuitsData(records: records)
+    }
+
+    /// The opening-view rule, kept testable and away from the view body.
+    ///
+    /// A list ORDERS; a canvas POSITIONS. So the only question that separates
+    /// the two surfaces is whether the time axis distinguishes these records
+    /// at all — never how many there are. Three records at 8:13:12/:14/:17
+    /// have a shape (bunched, then a pause) that ordering destroys, and twenty
+    /// records sharing one stamp are a list at any N. A record is drawn at its
+    /// recorded start, so those starts are the stamps that decide it: with one
+    /// distinct stamp or none, or a span that is not a positive finite number,
+    /// position carries nothing and the list is right.
+    static func listSuitsData(records: [WorkTimelineRecord]) -> Bool {
+        guard !records.isEmpty else { return false }
+        let stamps = Set(records.compactMap { WorkTimelineProjection.validTime($0.start) })
+        guard stamps.count > 1, let lower = stamps.min(), let upper = stamps.max() else { return true }
+        let span = upper - lower
+        guard span.isFinite, span > 0 else { return true }
+        return false
     }
 
     /// The presentation switch. Both surfaces read the same records, the same
-    /// filters and the same window, so moving between them loses nothing.
+    /// filters and the same window, so moving between them loses nothing —
+    /// which is why this deliberately does NOT call `hold()`. Changing how
+    /// records are DRAWN is not an investigation: the window, the filters and
+    /// live follow all survive the press.
     private var surfacePicker: some View {
         Button {
-            hold()
-            navigation.view.recordListChosen = !usesRecordList
+            let wantsList = !usesRecordList
+            navigation.view.recordListChosen = wantsList
+            storedSurfaceDefault = WorkTimelineSurfaceDefault.stored(wantsList)
         } label: {
             Label(usesRecordList ? "Show timeline" : "Show list",
                   systemImage: usesRecordList ? "chart.bar.doc.horizontal" : "list.bullet")
         }
-        .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+        .buttonStyle(QuietButtonStyle(horizontalPadding: 8, resting: true))
         .accessibilityIdentifier("work.timeline.surface")
         .help("Switch between the ordered record list and the time canvas. Both show the same records and honour the same filters.")
     }
@@ -557,8 +611,11 @@ struct WorkTimelineView: View {
             if showsPartialWindow {
                 // The one control that answers the count — in the heading
                 // beside it, not behind the ellipsis menu.
+                // The control that UNDOES a narrowed window earns a resting
+                // affordance for the same reason the surface switch does: with
+                // no chrome it reads as part of the count's prose.
                 Button("Show all time") { showAllTime() }
-                    .buttonStyle(QuietButtonStyle(horizontalPadding: 8))
+                    .buttonStyle(QuietButtonStyle(horizontalPadding: 8, resting: true))
                     .accessibilityIdentifier("work.timeline.show-all-time")
                     .help("Widen the visible window to every loaded record")
             }
@@ -1013,10 +1070,15 @@ struct WorkTimelineView: View {
         scrollRequest += 1
     }
 
-    private func inspect(_ record: WorkTimelineRecord, focusInspector: Bool = true) {
+    /// `revealsRegion` is the page's permission to scroll the DOCUMENT so the
+    /// selection region comes into view. A click inside this surface grants it
+    /// — the reviewer is looking here. A request from another part of the
+    /// record page does not: see `inspectEvent` (F9).
+    private func inspect(_ record: WorkTimelineRecord, focusInspector: Bool = true,
+                         revealsRegion: Bool = true) {
         hold()
         // A user asked for these details, so the page may scroll to show them.
-        revealArmed = true
+        revealArmed = revealsRegion
         navigation.view.selectedID = record.id
         navigation.view.anchorID = record.id
         appSelection.workReturnFocus.remember(taskID: receipt.taskId, recordID: record.id)
@@ -1115,8 +1177,23 @@ struct WorkTimelineView: View {
         scrollTarget = selected.id
         scrollRequest += 1
     }
+    /// A selection asked for by the Checks table above. The reviewer is reading
+    /// the row they pressed — several screens up — so this path re-frames the
+    /// canvas/list INTERNALLY and leaves the document exactly where it is.
+    ///
+    /// It used to take the ordinary `inspect` route, which arms the reveal
+    /// probe, and the probe then scrolled the whole record page down to the
+    /// Activity region: one press threw the document ~2,600 pt PAST the detail
+    /// it had just expanded, and the expanded row was never seen (F9).
     private func inspectEvent(_ eventID: String) {
-        if let record = displayProjection.records.first(where: { $0.eventID == eventID }) { inspect(record) }
+        guard let record = displayProjection.records.first(where: { $0.eventID == eventID }) else { return }
+        if let window = interval,
+           let reframed = WorkTimelineRangeNavigation.reframed(window, toShow: record) {
+            navigation.view.interval = reframed
+        }
+        // No inspector focus either: moving the VoiceOver cursor to a region
+        // three screens away is the same displacement by another route.
+        inspect(record, focusInspector: false, revealsRegion: false)
     }
     private func cancelDeferredFocus() {
         appSelection.workReturnFocus.cancel()

@@ -1606,6 +1606,87 @@ extension View {
     }
 }
 
+/// Puts a control in the Tab key loop, and makes Return press it.
+///
+/// macOS ships with Full Keyboard Access OFF, and under that default a plain
+/// SwiftUI `Button` is NOT focusable: Tab walks text fields and the handful of
+/// containers that asked for focus, so a document made of buttons is
+/// unreachable without a mouse — an audit tabbed the whole record page and got
+/// ten stops, none of them on it (K130). Every control a reviewer must be able
+/// to reach says so here.
+///
+/// It adds no second focus treatment: the ring comes from the control's own
+/// button style, which reads `\.isFocused` from the environment this modifier
+/// sets, and the system's effect is disabled so exactly one indicator is drawn.
+/// Return is bound explicitly because the key press is answered by THIS
+/// focusable wrapper, not by the button inside it.
+/// A ring nobody can see is the same defect as no ring at all, so a stop that
+/// arrives off screen scrolls itself into view — through the app's ONE reveal
+/// policy, `KeepRegionOnScreen`, which declines to move a control that already
+/// fits and otherwise moves the page the minimum distance.
+struct KeyboardStop: ViewModifier {
+    var enabled: Bool = true
+    /// What Return does — the same action a click performs. Pass nil only for a
+    /// control that answers keys itself (a `Menu`, or a view with its own
+    /// `onKeyPress`).
+    var activate: (() -> Void)?
+
+    @FocusState private var focused: Bool
+    @State private var revealRequest = 0
+
+    func body(content: Content) -> some View {
+        // The offscreen renderer draws resting labels and has no key loop.
+        if SnapshotMode.enabled && !SnapshotMode.interactiveFixture {
+            content
+        } else {
+            content
+                // Stated, not inferred: `\.isFocused` stays false for a style
+                // body under its OWN `.focusable()`, so the ring needs the
+                // answer handed to it.
+                .environment(\.keyboardStopIsFocused, focused && enabled)
+                .focusable(enabled)
+                .focusEffectDisabled()
+                .focused($focused)
+                .onChange(of: focused) { _, isFocused in
+                    guard isFocused else { return }
+                    revealRequest += 1
+                }
+                .background(KeepRegionOnScreen(request: revealRequest) {})
+                .onKeyPress(.return) {
+                    guard enabled, let activate else { return .ignored }
+                    activate()
+                    return .handled
+                }
+        }
+    }
+}
+
+extension View {
+    /// Make this control a Tab stop that Return activates. See `KeyboardStop`.
+    func keyboardStop(_ enabled: Bool = true, activate: (() -> Void)? = nil) -> some View {
+        modifier(KeyboardStop(enabled: enabled, activate: activate))
+    }
+}
+
+/// Does the control under this view hold the keyboard focus?
+///
+/// SwiftUI's own `\.isFocused` answers only for a focusable ANCESTOR — put
+/// `.focusable()` on a styled `Button` itself and the style's body still reads
+/// false, so the ring never drew (which is why the canvas cards, focusable
+/// since K99, photographed identically focused and not). `KeyboardStop`
+/// therefore states the answer, and every button style that draws a ring reads
+/// it alongside `\.isFocused`.
+private struct KeyboardStopFocusKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var keyboardStopIsFocused: Bool {
+        get { self[KeyboardStopFocusKey.self] }
+        set { self[KeyboardStopFocusKey.self] = newValue }
+    }
+}
+
 /// A quiet macOS action: no fill at rest unless it is the local primary
 /// action, then short color-only hover and press feedback. These non-spatial
 /// acknowledgements remain enabled when Reduce Motion is on.
@@ -1619,6 +1700,14 @@ struct QuietButtonStyle: ButtonStyle {
     var prominent = false
     var horizontalPadding: CGFloat = 7
     var verticalPadding: CGFloat = 6
+    /// Draws a hairline `Theme.cardLine` capsule at rest, for a control that
+    /// must read as a switch even before it is hovered. A heading full of
+    /// chrome-less quiet buttons reads as prose, which is how a reviewer came
+    /// to experience the surface switch as a deleted feature; the affordance is
+    /// a hairline rather than a fill because accent is the interactive VOICE
+    /// and a resting switch should not shout. The hover and press wash follows
+    /// the same shape so nothing pokes out past the outline.
+    var resting = false
 
     func makeBody(configuration: Configuration) -> some View {
         QuietButtonBody(
@@ -1626,7 +1715,8 @@ struct QuietButtonStyle: ButtonStyle {
             tint: tint,
             prominent: prominent,
             horizontalPadding: horizontalPadding,
-            verticalPadding: verticalPadding
+            verticalPadding: verticalPadding,
+            resting: resting
         )
     }
 }
@@ -1637,10 +1727,15 @@ private struct QuietButtonBody: View {
     let prominent: Bool
     let horizontalPadding: CGFloat
     let verticalPadding: CGFloat
+    let resting: Bool
 
     @State private var hovering = false
-    @Environment(\.isFocused) private var isFocused
+    @Environment(\.isFocused) private var ambientFocus
+    @Environment(\.keyboardStopIsFocused) private var stopFocus
     @Environment(\.isEnabled) private var isEnabled
+
+    /// A focusable ancestor, or this control's own `KeyboardStop`.
+    private var isFocused: Bool { ambientFocus || stopFocus }
 
     private var phase: ButtonInteractionPhase {
         buttonInteractionPhase(
@@ -1655,12 +1750,16 @@ private struct QuietButtonBody: View {
             .modifier(OptionalForeground(color: ButtonFeedback.labelColor(tint: tint)))
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
-            .background(
-                (tint ?? Theme.accent).opacity(ButtonFeedback.quietFillOpacity(for: phase, prominent: prominent)),
-                in: RoundedRectangle(cornerRadius: Metrics.radius)
-            )
+            .modifier(QuietButtonChrome(
+                fill: (tint ?? Theme.accent).opacity(ButtonFeedback.quietFillOpacity(for: phase, prominent: prominent)),
+                resting: resting
+            ))
             .opacity(ButtonFeedback.labelOpacity(for: phase))
-            .focusRing(isFocused && isEnabled)
+            // The ONE focus indicator, following the resting shape: a radius
+            // SwiftUI clamps to half the height, so the ring is a capsule
+            // around a capsule rather than a rounded box around a pill.
+            .focusRing(isFocused && isEnabled,
+                       cornerRadius: resting ? Metrics.buttonH / 2 : Metrics.radius)
             .contentShape(Rectangle())
             .onHover { inside in
                 withAnimation(Motion.hover) {
@@ -1668,6 +1767,24 @@ private struct QuietButtonBody: View {
                 }
             }
             .animation(Motion.feedback, value: phase)
+    }
+}
+
+/// A quiet button's fill, and — for a control that must read as a switch at
+/// rest — its hairline capsule. Both share one shape, so the wash never pokes
+/// out past the outline.
+private struct QuietButtonChrome: ViewModifier {
+    let fill: Color
+    let resting: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if resting {
+            content
+                .background(fill, in: Capsule())
+                .overlay(Capsule().strokeBorder(Theme.cardLine, lineWidth: Metrics.borderW))
+        } else {
+            content.background(fill, in: RoundedRectangle(cornerRadius: Metrics.radius))
+        }
     }
 }
 
@@ -1705,6 +1822,25 @@ struct SurfaceButtonStyle: ButtonStyle {
     /// or a card inside a clipping canvas. Everything else takes the standard
     /// outset ring.
     var focusInset: CGFloat? = nil
+    /// Who decides this row has keyboard focus.
+    ///
+    /// nil — the default — reads the ambient `\.isFocused`, which is right for a
+    /// button that is itself the focusable element. Pass an explicit value when
+    /// an ANCESTOR holds the focus: `\.isFocused` is an ENVIRONMENT value, so a
+    /// focusable container sets it for every descendant and each of them draws
+    /// its own ring. The task table is deliberately ONE keyboard stop (K77);
+    /// before this, entering it ringed every visible row at once — ~4,054
+    /// accent border pixels where one ring belongs (K130) — and the roving row
+    /// was indistinguishable from the rest. Those rows pass `false` and wear
+    /// the reduced-weight selection cue instead.
+    var isFocused: Bool? = nil
+
+    /// The call site's answer when it gave one, else whichever focus source
+    /// actually holds the keyboard: a focusable ancestor (`ambient`) or this
+    /// control's own `KeyboardStop`.
+    static func resolvedFocus(declared: Bool?, ambient: Bool, stop: Bool = false) -> Bool {
+        declared ?? (ambient || stop)
+    }
 
     @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
@@ -1717,7 +1853,8 @@ struct SurfaceButtonStyle: ButtonStyle {
                 configuration: configuration,
                 tint: tint,
                 cornerRadius: cornerRadius,
-                focusInset: focusInset
+                focusInset: focusInset,
+                declaredFocus: isFocused
             )
         }
     }
@@ -1728,10 +1865,18 @@ private struct SurfaceButtonBody: View {
     let tint: Color
     let cornerRadius: CGFloat
     let focusInset: CGFloat?
+    let declaredFocus: Bool?
 
     @State private var hovering = false
-    @Environment(\.isFocused) private var isFocused
+    @Environment(\.isFocused) private var ambientFocus
+    @Environment(\.keyboardStopIsFocused) private var stopFocus
     @Environment(\.isEnabled) private var isEnabled
+
+    private var isFocused: Bool {
+        SurfaceButtonStyle.resolvedFocus(
+            declared: declaredFocus, ambient: ambientFocus, stop: stopFocus
+        )
+    }
 
     private var phase: ButtonInteractionPhase {
         buttonInteractionPhase(
@@ -1913,8 +2058,12 @@ private struct SegmentedChoiceButtonBody: View {
     /// shared `ButtonFeedback` ramp rather than a second named tint token.
     private let interactive = Theme.accent
     @State private var hovering = false
-    @Environment(\.isFocused) private var isFocused
+    @Environment(\.isFocused) private var ambientFocus
+    @Environment(\.keyboardStopIsFocused) private var stopFocus
     @Environment(\.isEnabled) private var isEnabled
+
+    /// A focusable ancestor, or this control's own `KeyboardStop`.
+    private var isFocused: Bool { ambientFocus || stopFocus }
 
     private var phase: ButtonInteractionPhase {
         buttonInteractionPhase(
@@ -1968,8 +2117,12 @@ private struct TransparentButtonBody: View {
     let cornerRadius: CGFloat
 
     @State private var hovering = false
-    @Environment(\.isFocused) private var isFocused
+    @Environment(\.isFocused) private var ambientFocus
+    @Environment(\.keyboardStopIsFocused) private var stopFocus
     @Environment(\.isEnabled) private var isEnabled
+
+    /// A focusable ancestor, or this control's own `KeyboardStop`.
+    private var isFocused: Bool { ambientFocus || stopFocus }
 
     private var phase: ButtonInteractionPhase {
         buttonInteractionPhase(
@@ -2027,8 +2180,12 @@ private struct PrimaryButtonBody: View {
     let height: CGFloat
 
     @State private var hovering = false
-    @Environment(\.isFocused) private var isFocused
+    @Environment(\.isFocused) private var ambientFocus
+    @Environment(\.keyboardStopIsFocused) private var stopFocus
     @Environment(\.isEnabled) private var isEnabled
+
+    /// A focusable ancestor, or this control's own `KeyboardStop`.
+    private var isFocused: Bool { ambientFocus || stopFocus }
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var phase: ButtonInteractionPhase {
@@ -2098,6 +2255,11 @@ struct IconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(QuietButtonStyle(tint: tint, horizontalPadding: 0, verticalPadding: 0))
+        // A glyph-only control is the easiest one to lose: it carries no words,
+        // so a reader who cannot use a pointer has nothing to find it by unless
+        // it is in the key loop. These are the status legend, every section's
+        // help, and every "Copy …" glyph.
+        .keyboardStop(activate: action)
         .help(help ?? label)
         .accessibilityLabel(label)
         .modifier(OptionalAccessibilityIdentifier(identifier: identifier))
