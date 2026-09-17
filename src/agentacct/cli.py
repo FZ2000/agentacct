@@ -9601,9 +9601,23 @@ def now(
     # leads with. Cache reads get their own named column, never folded in.
     windows_table = Table(title=None)
     windows_table.add_column("window")
-    windows_table.add_column("fresh tokens", justify="right")
-    windows_table.add_column("cache-read tokens", justify="right")
-    windows_table.add_column("cost", justify="right")
+    # no_wrap on both token columns is load-bearing, not cosmetic. These two
+    # headers share their noun and differ only in the qualifier, so WRAPPING
+    # them is the one degradation that destroys the distinction: at 80 columns
+    # "fresh tokens" and "cache-read tokens" each split across two lines and the
+    # header's last line reads "tokens │ tokens" — two adjacent columns with
+    # identical names. Truncation degrades the other way, keeping the qualifier
+    # and dropping the shared tail ("fresh toke…" vs "cache-read…"), which stays
+    # unambiguous. So we forbid the wrap and accept the ellipsis.
+    windows_table.add_column("fresh tokens", justify="right", no_wrap=True)
+    windows_table.add_column("cache-read tokens", justify="right", no_wrap=True)
+    # Money is no_wrap for a different reason: a wrapped or truncated figure
+    # loses its magnitude. "≈$1,554…" could be $1,554.67 or $1,554,000 — an
+    # actively misleading cell, which is worse than an ambiguous header. Six
+    # columns do not fit in 80, so this fixes the sacrifice order: the columns
+    # that give way are `sessions` and `cost basis`, whose truncation is
+    # visible and whose meaning survives it.
+    windows_table.add_column("cost", justify="right", no_wrap=True)
     windows_table.add_column("cost basis")
     windows_table.add_column("sessions", justify="right")
     for entry in snapshot.windows:
@@ -9628,9 +9642,10 @@ def now(
     if by_client:
         client_table = Table(title=f"by client · {snapshot.breakdown_window}")
         client_table.add_column("client")
-        client_table.add_column("fresh tokens", justify="right")
-        client_table.add_column("cache-read tokens", justify="right")
-        client_table.add_column("cost", justify="right")
+        # See the windows table above: wrapping collapses both headers to "tokens".
+        client_table.add_column("fresh tokens", justify="right", no_wrap=True)
+        client_table.add_column("cache-read tokens", justify="right", no_wrap=True)
+        client_table.add_column("cost", justify="right", no_wrap=True)
         client_table.add_column("sessions", justify="right")
         for row in sorted(by_client, key=lambda r: -(r.get("fresh_tokens") or 0)):
             client_table.add_row(
@@ -9647,9 +9662,10 @@ def now(
         model_table = Table(title=f"top models · {snapshot.breakdown_window}")
         model_table.add_column("model")
         model_table.add_column("client")
-        model_table.add_column("fresh tokens", justify="right")
-        model_table.add_column("cache-read tokens", justify="right")
-        model_table.add_column("cost", justify="right")
+        # See the windows table above: wrapping collapses both headers to "tokens".
+        model_table.add_column("fresh tokens", justify="right", no_wrap=True)
+        model_table.add_column("cache-read tokens", justify="right", no_wrap=True)
+        model_table.add_column("cost", justify="right", no_wrap=True)
         top_models = sorted(by_model, key=lambda r: -(r.get("fresh_tokens") or 0))[:8]
         for row in top_models:
             model_table.add_row(
