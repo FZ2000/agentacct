@@ -434,3 +434,43 @@ private struct EnvironmentProbe: View {
         return Color.clear
     }
 }
+
+/// The two scroll gestures, stated as a contract. A reviewer on a mouse has no
+/// two-finger horizontal swipe, so Shift+wheel — which AppKit reports as a
+/// horizontal delta — is the ONLY way they can pan. If that ever stops working,
+/// panning becomes trackpad-only and the hint the canvas renders becomes a lie.
+final class WorkTimeCanvasScrollContractTests: XCTestCase {
+    func testOptionScrollZoomsAndPlainScrollDoesNot() {
+        XCTAssertNotNil(WorkTimeCanvasInputIntent.zoomScroll(
+            deltaX: 0, deltaY: 12, precise: true, modifiers: .option))
+        XCTAssertNil(WorkTimeCanvasInputIntent.zoomScroll(
+            deltaX: 0, deltaY: 12, precise: true, modifiers: []),
+            "a plain wheel must reach the page, not zoom the canvas")
+    }
+
+    func testShiftWheelPansSoAMouseIsNotLockedOut() {
+        // AppKit reports Shift+wheel in the X axis; that is what a mouse user's
+        // pan actually looks like when it arrives here.
+        let pixels = WorkTimeCanvasInputIntent.panScroll(
+            deltaX: 12, deltaY: 0, precise: true, modifiers: .shift)
+        XCTAssertNotNil(pixels, "Shift+wheel must pan, or a mouse cannot pan at all")
+        XCTAssertEqual(pixels ?? 0, 12, accuracy: 0.001)
+    }
+
+    func testTwoFingerHorizontalPansWithoutAModifier() {
+        XCTAssertNotNil(WorkTimeCanvasInputIntent.panScroll(
+            deltaX: 12, deltaY: 0, precise: true, modifiers: []))
+    }
+
+    func testVerticalDominantScrollNeverPans() {
+        XCTAssertNil(WorkTimeCanvasInputIntent.panScroll(
+            deltaX: 2, deltaY: 30, precise: true, modifiers: []),
+            "vertical-dominant input belongs to the page")
+    }
+
+    func testTheZoomAndPanModifiersDoNotOverlap() {
+        XCTAssertNil(WorkTimeCanvasInputIntent.panScroll(
+            deltaX: 12, deltaY: 0, precise: true, modifiers: .option),
+            "Option is the zoom modifier and must never also pan")
+    }
+}

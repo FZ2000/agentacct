@@ -233,85 +233,17 @@ struct ReceiptActionSynopsis: Decodable, Equatable {
 
 // MARK: - Record summary strip
 
-/// The record page's context strip: Tool calls · Est. cost · Elapsed · Sessions,
-/// each a caps caption over an 18/700 mono value with 1px verticals
-/// between the cells. Absent facts are named ("not recorded"), never zeroed.
-/// Check runs live in the decision summary above this strip, beside the distinct
-/// claim-coverage measure; duplicating the fraction here made those concepts
-/// look interchangeable.
-struct RecordSummaryStrip: View {
-    let receipt: Receipt
-    let summary: ReceiptSummary?
+/// The record page's tile strip is DELETED, and with it `RecordSummaryStrip`.
+///
+/// Five tiles, 198 px on every record, and each one answered a question that
+/// already had a better home: COVERAGE and CHECKS are the Evidence section's
+/// heading line, TOOL CALLS and COST are two nouns in its one absence line, and
+/// SESSIONS read `1` on four of the five records measured — a figure set in the
+/// metric face for a number that never varied.
+///
+/// `RecordSummaryPresentation` (V1Model.swift) is NOT deleted: it is the model
+/// the task list still reads, and its tests still pin it.
 
-    private var presentation: RecordSummaryPresentation {
-        RecordSummaryPresentation(receipt: receipt, summary: summary)
-    }
-
-    var body: some View {
-        // Tiles reflow into fewer equal columns when narrow (never smaller
-        // type): a value or its named absence never breaks mid-phrase, the
-        // qualifier wraps cleanly under it, and every tile shares one height.
-        RecordSummaryTileGrid(columnGap: 2 * Space.l + 1, rowGap: Space.l) {
-            ForEach(Array(presentation.items.enumerated()), id: \.element.id) { index, item in
-                if index > 0 {
-                    Rectangle().fill(Theme.hairline)
-                        .frame(width: 1)
-                        .layoutValue(key: RecordSummaryTileGrid.IsDivider.self, value: true)
-                        .accessibilityHidden(true)
-                }
-                cell(item)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Receipt summary")
-        .accessibilityIdentifier("receipt.summary")
-    }
-
-    private func cell(_ item: ReceiptSummaryItem) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Label and qualifier reserve their longest word, so the grid's
-            // column count is chosen from a width they can wrap into rather
-            // than one that splits a word mid-glyph (K26).
-            CapsLabel(text: item.label)
-                .wordSafeWidth(of: item.label, role: .labelCaps,
-                               uppercased: true, tracking: Type.labelCapsTracking)
-            if let value = item.value {
-                // Qualifier under the value: a basis word never wraps the
-                // number, and the value itself never breaks.
-                VStack(alignment: .leading, spacing: 2) {
-                    // A tile value is a measured figure; the face comes from
-                    // the one rule, never from a local choice (K10).
-                    Text(value).workFont(FieldFont.value(.kpi, isMetric: true))
-                        .foregroundStyle(item.isWarning ? Theme.amber : Theme.ink)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                    if let qualifier = item.qualifier {
-                        Text(qualifier).workFont(FieldFont.qualifier).foregroundStyle(Theme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .wordSafeWidth(of: qualifier, role: FieldFont.qualifier)
-                    }
-                }
-            } else {
-                // Absence is a named state at value position — never "0" and
-                // never in the metric face — in the one muted body role, with
-                // its reason (when the reducer names one) beneath it.
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.absent ?? "not recorded")
-                        .workFont(FieldFont.value(.kpi, isMetric: false)).foregroundStyle(Theme.muted)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                    if let qualifier = item.qualifier {
-                        Text(qualifier).workFont(FieldFont.qualifier).foregroundStyle(Theme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .wordSafeWidth(of: qualifier, role: FieldFont.qualifier)
-                    }
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("receipt.summary.\(item.id)")
-    }
-}
 
 /// Equal-width tile columns. The column count is the largest that gives every
 /// tile at least its minimum width (its unbreakable value and longest
@@ -954,6 +886,13 @@ struct RecordDimensionsCard: View {
     var showsGaps = true
     /// Topic use drops the digest's explanatory copy into help.
     var compactDigest = false
+    /// The record page deletes the WEEKLY PLAN row: its absence is one noun in
+    /// the collapsed absence line, and its figure rides the cost row.
+    var showsPlanShare = true
+    /// When true a dimension whose only value is a named absence is dropped —
+    /// the record page's absence budget states it once instead, in one line for
+    /// the whole page. Off by default, so every other caller is unchanged.
+    var dropsAbsentValues = false
 
     private var ordered: [Dimension] { Dimension.allCases.filter(included.contains).filter(carriesAFact) }
 
@@ -967,6 +906,15 @@ struct RecordDimensionsCard: View {
     /// objective, a recorded gap or a provenance chip all keep it, because each
     /// of those is a fact the heading does not hold.
     private func carriesAFact(_ dimension: Dimension) -> Bool {
+        // A cost row whose only content is "we recorded no usage" is an ABSENCE,
+        // and the record page states its absences once, together. A recorded
+        // token volume or a priced figure is a FACT about the work — often the
+        // only one on a thin record — so the row stays whenever either exists.
+        if dropsAbsentValues, dimension == .cost {
+            let dim = receipt.dimensions.cost
+            if (dim.tokens?.total ?? 0) > 0 { return true }
+            return dim.estimatedCostUsd != nil
+        }
         guard dimension == .task else { return true }
         let objectives = receipt.dimensions.task.objectives ?? []
         guard objectives.count == 1, restatesPayloadText(objectives[0], receipt.title) else { return true }
@@ -1003,7 +951,8 @@ struct RecordDimensionsCard: View {
             dimensionRow(labels.costLabel, costSummary,
                          provenance: receipt.dimensions.cost.provenance,
                          gaps: receipt.dimensions.cost.gaps)
-            if receipt.dimensions.cost.planShare != nil
+            if showsPlanShare,
+               receipt.dimensions.cost.planShare != nil
                 || PayloadAbsence.text(receipt.dimensions.cost.planShareHeadline) != nil {
                 hairline
                 // The reducer's plan-share headline, or its named absence —
@@ -1128,9 +1077,7 @@ struct RecordDimensionsCard: View {
         var parts: [String] = []
         if let agent = dim.primaryAgent { parts.append(agent) }
         if let models = dim.models, !models.isEmpty { parts.append(models.joined(separator: ", ")) }
-        if let subagents = dim.subagentSessionCount, subagents > 0 {
-            parts.append("\(subagents) subagent\(subagents == 1 ? "" : "s")")
-        }
+        if let subagents = dim.subagentsText { parts.append(subagents) }
         return parts.isEmpty ? "no agent recorded" : parts.joined(separator: " · ")
     }
 
@@ -1528,64 +1475,17 @@ struct ReceiptStandingProof {
     }
 }
 
-/// The positive twin of `AttentionCallout` (C3). The record page reserved ONE
-/// slot that names a check in full — and filled it only when something was
-/// WRONG, so a Task whose checks all passed showed strictly LESS evidence than
-/// one that failed. On a product about proof that is backwards. When nothing
-/// needs you, the same slot names the standing proof instead: its tier, which
-/// check, the result words, the exit code, the revision it ran at, and the
-/// reducer's own reason for the grade.
-struct EvidenceCallout: View {
-    let proof: ReceiptStandingProof
-    /// The reducer's field name for this block's subject (`field_labels`).
-    let title: String
+/// The standing-proof callout is DELETED, and with it `EvidenceCallout`.
+///
+/// The slot it filled is not gone — the record's hero card carries ONE exhibit,
+/// filled by an open attention item or, when nothing needs you, by the standing
+/// proof's own identity line. What is gone is this block's duplication: on the
+/// flagship record it was a verbatim copy of one Checks row (the same headline,
+/// the same meta line, the same pip, the same stamped revision and the same
+/// contradiction sentence) plus a prose restatement of the tier. That prose is
+/// not lost either: it is now the tier's context help, on the Evidence heading
+/// where the tier is stated.
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            AttentionBlockBody(
-                // Evidence is not an alarm: the eyebrow is the section's own
-                // field name, the tier badge beside it carries the strength.
-                reasonLabel: title,
-                summary: proof.gradeReason ?? PayloadAbsence.text(proof.check.summary),
-                label: proof.identityLine,
-                noteText: PayloadAbsence.text(proof.check.noteText),
-                nextStep: nil,
-                variant: .record,
-                tone: Theme.muted,
-                icon: nil,
-                recency: agoText(proof.check.at).map { "last updated \($0)" }
-            )
-            WrappingRowLayout(horizontalSpacing: Space.m, verticalSpacing: Space.xs) {
-                // Tier by SHAPE, never by a colour or a second word (K05).
-                TierBadge(grade: proof.tierKey, text: proof.tierLabel)
-                // Where it ran, or the named absence — a proof without a
-                // revision is a weaker proof, so the absence is stated.
-                Text(proof.check.revisionText)
-                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            if let contradiction = PayloadAbsence.text(proof.check.revisionContradictionText) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    CaveatMarker()
-                    Text(verbatim: contradiction)
-                        .workFont(.caption).foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
-                }
-            }
-        }
-        .padding(Space.l)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Neutral, never green: green is reserved for externally-verified
-        // evidence and the live connection, and this block renders whatever
-        // tier the receipt actually reached.
-        .background(Theme.tintNeutral, in: RoundedRectangle(cornerRadius: Metrics.radius))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(title)
-        .accessibilityIdentifier("receipt.evidence-standing")
-    }
-}
 
 // MARK: - Evidence coverage
 

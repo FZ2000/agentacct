@@ -1,0 +1,22 @@
+{
+  "platform_id": "macos-26-xcode-26.6-arm64-2x",
+  "compared_axes": {
+    "macos_major": "26",
+    "xcode_version": "26.6",
+    "architecture": "arm64"
+  },
+  "recorded_on": {
+    "macos_product_version": "26.6",
+    "macos_build_version": "25G72",
+    "xcode_version": "26.6",
+    "xcode_build_version": "17F113",
+    "architecture": "arm64",
+    "raster_scale": "2x",
+    "tz": "UTC",
+    "lang": "en_US.UTF-8",
+    "lc_all": "en_US.UTF-8"
+  },
+  "recorded_at_commit": "6946ef26dd1b3e20ddea41a42e292525b135ae5d",
+  "recorded_at_utc": "2026-09-17T03:22:12Z",
+  "note": "compared_axes is the gate. recorded_on is provenance only and is never compared; drift inside macOS 26.x is absorbed by VisualSnapshotTolerance.crossMinorRenderingNoise, whose measured basis is documented in Tests/agentacctTests/Support/VisualSnapshotHarness.swift."
+}

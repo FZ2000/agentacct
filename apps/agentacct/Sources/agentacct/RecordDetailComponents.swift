@@ -156,6 +156,11 @@ struct OutcomeBar: View {
 struct SessionStepSpine: View {
     let items: [SessionStepItem]
     let openedIDs: Set<String>
+    /// The Task's own recorded next step, when the page above already prints it.
+    /// A step whose next step is the SAME text does not print it again — on the
+    /// flagship record the two were measured identical, so the one line that
+    /// says what happens next appeared twice on one page.
+    var taskNextStep: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -165,7 +170,8 @@ struct SessionStepSpine: View {
                     StepCard(
                         step: item.step,
                         initiallyExpanded: openedIDs.contains(item.id),
-                        accessibilityContext: item.id
+                        accessibilityContext: item.id,
+                        pageNextStep: taskNextStep
                     )
                     .padding(.vertical, 3)
                 }

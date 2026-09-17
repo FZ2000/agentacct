@@ -61,6 +61,19 @@ final class VocabularyLintTests: XCTestCase {
         // CHECK_RESULT_LABELS — a recorded check's own words.
         "Passed", "Could not run", "Skipped", "Result not recorded",
         "Could not reproduce",
+        // The absence budget. Every "we did not capture this" on the record
+        // page collapses into ONE line composed by `not_captured_line()`; a
+        // Swift-spelled copy would be a second budget with its own noun order.
+        "not captured",
+        // The record page's first EXEMPT absence. The reducer now emits it as
+        // `dimensions.task.goal_absent_text`, and the goal line renders that
+        // field or nothing — so there is no Swift fallback to allow.
+        "No goal was recorded for this task.",
+        // NOT banned yet, deliberately: `NEXT_STEP_ABSENT` ("No next step
+        // recorded."). Python owns the words, but no payload field carries
+        // them, so `NextStepRow.absence` is still the only source and banning
+        // it would leave the app with nothing to print. Ban it in the same
+        // change that makes the reducer emit the SS4 next-step absence.
     ]
 
     /// Vocabulary whose display label is character-identical to the payload key

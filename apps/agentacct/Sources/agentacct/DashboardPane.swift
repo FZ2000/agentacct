@@ -616,7 +616,12 @@ struct DashboardUsagePulse: Equatable {
         error: String?,
         tokenBasis: String? = nil,
         now: Date = SnapshotMode.currentDate,
-        timeZone: TimeZone = .current
+        // No default. `TimeZone.current` used to be the default here, which made
+        // the rendered period label depend on the zone of whichever process did
+        // the rendering — the single largest source of false visual-snapshot
+        // failures on a non-canonical host. Callers must say which zone they
+        // mean; views read `\.timeZone` from the environment.
+        timeZone: TimeZone
     ) {
         let basis = PayloadAbsence.text(tokenBasis) ?? PayloadAbsence.costBasis
         if let error {
@@ -830,6 +835,11 @@ struct DashboardPane: View {
     @Environment(GlanceState.self) var glance
     @Environment(AppSelection.self) var selection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The zone the usage-period comparison is made in. The live app inherits
+    /// the system zone through this environment value, exactly as before; the
+    /// snapshot renderers set it to GMT, so the rendered period label no longer
+    /// depends on which zone the rendering process happens to be in.
+    @Environment(\.timeZone) private var timeZone
 
     private var presentedError: String? {
         dashboard.errorText ?? dashboard.receiptListError
@@ -917,7 +927,8 @@ struct DashboardPane: View {
                             isLoaded: dashboard.usage != nil,
                             rangeDays: dashboard.usageDays,
                             error: dashboard.errorText,
-                            tokenBasis: dashboard.usage?.tokenBasisLabel
+                            tokenBasis: dashboard.usage?.tokenBasisLabel,
+                            timeZone: timeZone
                         ),
                         ingestion: dashboard.ingestion,
                         ingestionError: dashboard.ingestionError

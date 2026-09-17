@@ -15,9 +15,26 @@ import SwiftUI
 /// * The header tally counts the FRONTIER only (`history_run` rows are
 ///   excluded from it by the reducer), so a history row never reads as a peer.
 ///
-/// Every word is the payload's: `result_label`, `revision_label`,
-/// `command_state_text`, `note_text`, `revision_contradiction_text`,
-/// `check_tally_text`. The table composes none of them.
+/// ## Say each fact once
+///
+/// The table used to print the stamped revision on EVERY row — four prints of
+/// two values on the flagship record — and the reducer's contradiction sentence
+/// on every row that carried it, byte-identically, three times. Both are now
+/// hoisted: the revision is a group header over a rule, and the contradiction
+/// is ONE amber banner under it. The reducer decides the grouping
+/// (`revision_groups`, falling back to strict time order rather than split a
+/// supersession pair) and CLEARS the sentence from the rows a banner covers, so
+/// reading the groups is not optional — a surface that ignores them prints the
+/// sentence nowhere.
+///
+/// The four result words are likewise one line now (`meta_line`), joined by the
+/// reducer on the one separator, with whichever of them is uniform across every
+/// row hoisted to the section heading. They used to render as four fragments
+/// punctuated as four sentences: `Passed. Exit 0. test. Agent-reported`.
+///
+/// Every word is the payload's: `meta_line`, `revision_label`,
+/// `note_text`, `contradiction_text`, `summary_preview`. The table composes
+/// none of them.
 struct RecordChecksSection: View {
     let receipt: Receipt
     /// The record page's selection channel: choosing a row selects the same
@@ -50,6 +67,51 @@ struct RecordChecksSection: View {
             .map(\.element)
     }
 
+    /// One rendered block: the reducer's revision group, and the rows it names.
+    private struct Block: Identifiable {
+        let id: String
+        let label: String?
+        let contradiction: String?
+        let rows: [ReceiptCheck]
+    }
+
+    /// The reducer's groups, resolved to rows.
+    ///
+    /// Walking `revision_groups` and each group's `event_ids` yields every row
+    /// exactly once in strict time order under BOTH grouping modes, so the
+    /// groups settle the render order too — iterating `checks` directly would
+    /// reproduce the old per-identity order, which reads as alphabetical noise.
+    /// A payload with no groups (an older daemon) keeps the one-block shape and
+    /// each row's own revision line, so nothing is lost.
+    private var blocks: [Block] {
+        let all = rows
+        guard let groups = evidence.revisionGroups, !groups.isEmpty else {
+            return [Block(id: "ungrouped", label: nil, contradiction: nil, rows: all)]
+        }
+        let byEvent = Dictionary(all.map { (PayloadAbsence.text($0.eventId) ?? $0.id, $0) },
+                                 uniquingKeysWith: { first, _ in first })
+        var placed = Set<String>()
+        var result: [Block] = []
+        for group in groups {
+            let members = (group.eventIds ?? []).compactMap { byEvent[$0] }
+            guard !members.isEmpty else { continue }
+            for member in members { placed.insert(PayloadAbsence.text(member.eventId) ?? member.id) }
+            result.append(Block(
+                id: group.id,
+                label: PayloadAbsence.text(group.label),
+                contradiction: PayloadAbsence.text(group.contradictionText),
+                rows: members
+            ))
+        }
+        // A row the groups did not name is still the reviewer's evidence: it
+        // keeps its own revision line and is never dropped.
+        let orphans = all.filter { !placed.contains(PayloadAbsence.text($0.eventId) ?? $0.id) }
+        if !orphans.isEmpty {
+            result.append(Block(id: "ungrouped", label: nil, contradiction: nil, rows: orphans))
+        }
+        return result
+    }
+
     var body: some View {
         if rows.isEmpty {
             // A task with no recorded runs still names that state — the tally
@@ -64,15 +126,53 @@ struct RecordChecksSection: View {
             // building the ones on screen. Nothing is elided — every run still
             // scrolls into view, earlier ones greyed, exactly as before.
             ScrollContentStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.element.id) { index, check in
-                    if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1) }
-                    row(check)
+                ForEach(Array(blocks.enumerated()), id: \.element.id) { blockIndex, block in
+                    if let label = block.label {
+                        groupHeader(label, contradiction: block.contradiction,
+                                    first: blockIndex == 0, identifier: block.id)
+                    } else if blockIndex > 0 {
+                        Rectangle().fill(Theme.hairline).frame(height: 1)
+                    }
+                    ForEach(Array(block.rows.enumerated()), id: \.element.id) { index, check in
+                        if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1) }
+                        row(check)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("work.record.checks")
         }
+    }
+
+    /// The stamped revision, once, over a rule — and the group's one
+    /// contradiction sentence under it. A rule plus text, never a second card,
+    /// so the page gains no new radius.
+    @ViewBuilder
+    private func groupHeader(_ label: String, contradiction: String?,
+                             first: Bool, identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(verbatim: label)
+                .workFont(FieldFont.qualifier).foregroundStyle(Theme.muted)
+                .lineLimit(1).truncationMode(.middle)
+                .textSelection(.enabled)
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+            if let contradiction {
+                // The reducer's one sentence for a stamped revision that cannot
+                // contain the paths the checks declared. It used to print on
+                // every row of the group — three byte-identical copies on the
+                // flagship record.
+                Label(contradiction, systemImage: "exclamationmark.triangle")
+                    .workFont(.caption).foregroundStyle(Theme.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
+            }
+        }
+        .padding(.top, first ? 0 : Space.m)
+        .padding(.bottom, Space.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("work.record.checks.revision.\(identifier)")
     }
 
     // MARK: one run
@@ -94,40 +194,49 @@ struct RecordChecksSection: View {
                             .foregroundStyle(history ? Theme.muted : Theme.ink)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        HStack(spacing: Space.s) {
-                            Text(PayloadAbsence.text(check.resultLabel) ?? PayloadAbsence.checkResult)
-                                .workFont(.caption)
-                                .foregroundStyle(resultTint(check, history: history))
-                            if let code = check.exitCode {
-                                Text("Exit \(code)").workFont(.dataSmall).foregroundStyle(Theme.muted)
-                            }
-                            if let type = PayloadAbsence.text(check.evidenceType) {
-                                Text(type).workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
-                            }
-                            if let source = PayloadAbsence.text(check.sourceLabel) {
-                                Text(source).workFont(.caption).foregroundStyle(Theme.muted).lineLimit(1)
-                            }
-                        }
+                        // ONE line, one separator, composed by the reducer —
+                        // result, exit code, and whichever of evidence type and
+                        // source the heading did not hoist. It used to be four
+                        // Texts a reader parsed as four sentences.
+                        Text(verbatim: check.metaLineText)
+                            .workFont(.caption)
+                            .foregroundStyle(resultTint(check, history: history))
+                            .fixedSize(horizontal: false, vertical: true)
                         // The reducer's named result/exit-code disagreement,
-                        // directly under the exit code it disagrees with.
+                        // directly under the exit code it disagrees with. It
+                        // stays per-row: it is THIS row's disagreement.
                         if let note = PayloadAbsence.text(check.noteText) {
                             Label(note, systemImage: "exclamationmark.triangle")
                                 .workFont(.caption).foregroundStyle(Theme.amber)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        Text(check.revisionText)
-                            .workFont(FieldFont.qualifier).foregroundStyle(Theme.muted)
-                            .lineLimit(1).truncationMode(.middle)
+                        // The stamped revision, only when the group header did
+                        // NOT already print it.
+                        if check.revisionLabelHoisted != true {
+                            Text(check.revisionText)
+                                .workFont(FieldFont.qualifier).foregroundStyle(Theme.muted)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
                         // A stamped revision that cannot contain the paths the
-                        // check declared. The reducer decides and words it.
+                        // check declared. The reducer clears this on rows a
+                        // group banner covers, so it renders here only when the
+                        // rows' sentences differ and no banner could carry them.
                         if let contradiction = PayloadAbsence.text(check.revisionContradictionText) {
                             Label(contradiction, systemImage: "exclamationmark.triangle")
                                 .workFont(.caption).foregroundStyle(Theme.amber)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        if let summary = PayloadAbsence.text(check.summary) {
-                            Text(summary).workFont(.caption).foregroundStyle(Theme.muted)
-                                .lineLimit(expanded ? nil : 1)
+                        // The finding, WHOLE. `summary_preview` is the shortest
+                        // run of complete sentences that still reaches the
+                        // observed-vs-expected clause, so it is deliberately
+                        // NOT clamped to a line count: a one-line clamp cut
+                        // `raises decimal.InvalidOperation on the st…` — exactly
+                        // the words that name the defect.
+                        if let summary = PayloadAbsence.text(check.summaryPreview)
+                            ?? PayloadAbsence.text(check.summary) {
+                            Text(verbatim: summary).workFont(.caption).foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
                         }
                         if let files = check.files, !files.isEmpty {
                             Text(files.joined(separator: " · "))
@@ -175,9 +284,14 @@ struct RecordChecksSection: View {
     @ViewBuilder
     private func detail(_ check: ReceiptCheck) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let command = PayloadAbsence.text(check.commandStateText) {
-                Text(command).workFont(.caption).foregroundStyle(Theme.muted)
+            // The rest of the agent's own account, when the preview did not
+            // reach the end of it. The preview is not an excerpt policy — it is
+            // the shortest whole-sentence run that still holds the finding — so
+            // this is the remainder, never a re-print of what is already shown.
+            if check.summaryElided == true, let full = PayloadAbsence.text(check.summary) {
+                Text(verbatim: full).workFont(.caption).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
             }
             if let runs = check.runsTotal, runs > 1 {
                 Text("\(runs) recorded runs of this check").workFont(.caption).foregroundStyle(Theme.muted)
@@ -191,15 +305,14 @@ struct RecordChecksSection: View {
                     factRow("On the authority of", basis)
                 }
             }
-            if let definition = PayloadAbsence.text(check.supersededDefinition) {
-                Text(definition).workFont(.caption).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             if let absent = check.revisionAbsentFiles, !absent.isEmpty {
                 factRow("Absent at that revision", absent.joined(separator: " · "))
             }
-            if let scope = PayloadAbsence.text(check.scope) { factRow("Scope", scope) }
             if let event = PayloadAbsence.text(check.eventId) { factRow("Event", event) }
+            // `command_state_text`, `superseded_definition` and `scope` are NOT
+            // here: each is identical on every row of a record (`scope` is
+            // byte-identical on all four rows of the flagship), so each is
+            // printed once, in the Evidence section's disclosure.
         }
         .textSelection(.enabled)
         .padding(.bottom, Space.s)
@@ -223,10 +336,8 @@ struct RecordChecksSection: View {
 
     private func spokenLabel(_ check: ReceiptCheck) -> String {
         [PayloadAbsence.text(check.title) ?? PayloadAbsence.text(check.name),
-         PayloadAbsence.text(check.resultLabel),
-         check.exitCode.map { "Exit \($0)" },
-         PayloadAbsence.text(check.evidenceType),
-         check.revisionText,
+         check.metaLineText,
+         check.revisionLabelHoisted == true ? nil : check.revisionText,
          PayloadAbsence.text(check.noteText)]
             .compactMap { $0 }.joined(separator: ", ")
     }

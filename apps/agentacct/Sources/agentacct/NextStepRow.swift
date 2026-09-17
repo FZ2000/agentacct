@@ -14,6 +14,10 @@ import SwiftUI
 struct NextStepRow: View {
     let text: String?
     var compact: Bool = false
+    /// False under a section heading that already names this row — the record
+    /// page's "Next" section. One fact, one name for it: the caps label and the
+    /// heading would otherwise say the same thing a line apart.
+    var showsLabel: Bool = true
 
     static let label = "Recorded next step"
     static let absence = "No next step recorded."
@@ -26,7 +30,9 @@ struct NextStepRow: View {
 
     var body: some View {
         Group {
-            if compact {
+            if !showsLabel {
+                value(role: .body)
+            } else if compact {
                 // At large reading sizes in a narrow column the caps label is
                 // wider than the card: held on one line it overflowed the
                 // leading edge and squeezed the value to a near-zero column,

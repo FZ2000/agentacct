@@ -311,6 +311,9 @@ struct CheckPresentation {
 struct StepCard: View {
     let step: V1Step
     let accessibilityContext: String?
+    /// The recorded next step the PAGE already prints, when there is one. A step
+    /// whose own next step is the same text does not print it a second time.
+    let pageNextStep: String?
     @State private var expanded: Bool
     @State private var showAllAttention: Bool
     @State private var showAllCurrentChecks: Bool
@@ -323,10 +326,12 @@ struct StepCard: View {
         initiallyShowAllAttention: Bool = false,
         initiallyShowAllCurrentChecks: Bool = false,
         initiallyShowHistory: Bool = false,
-        accessibilityContext: String? = nil
+        accessibilityContext: String? = nil,
+        pageNextStep: String? = nil
     ) {
         self.step = step
         self.accessibilityContext = accessibilityContext
+        self.pageNextStep = pageNextStep
         _expanded = State(initialValue: initiallyExpanded)
         _showAllAttention = State(initialValue: initiallyShowAllAttention)
         _showAllCurrentChecks = State(initialValue: initiallyShowAllCurrentChecks)
@@ -423,7 +428,11 @@ struct StepCard: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }
-                    if let next = PayloadAbsence.text(step.nextStep) {
+                    // Suppressed when the page above already prints this exact
+                    // text: merging two statements of one fact is right, and the
+                    // Task's own next step is the one a reviewer acts on.
+                    if let next = PayloadAbsence.text(step.nextStep),
+                       !restatesPayloadText(next, pageNextStep) {
                         NextStepRow(text: next, compact: true)
                     }
                     checksSection
@@ -740,7 +749,11 @@ struct CheckRow: View {
         } else if presentation.supersessionLabel == "Supersession state unknown" {
             parts.append("supersession state unknown")
         }
-        if let commandStateText = presentation.commandStateText { parts.append(commandStateText) }
+        // `command_state_text` is NOT here. It is identical on every check of a
+        // record — four prints under four checks on the flagship — so the record
+        // page states it once, in the Evidence section's disclosure. The spoken
+        // summary still carries it per row, where there is no shared line to
+        // hoist it to.
         return parts
     }
 

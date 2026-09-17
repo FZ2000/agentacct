@@ -2848,42 +2848,17 @@ struct WorkRecordPage: View {
                     breadcrumb.id(Self.topAnchor)
                     // A breakpoint changes arrangement and padding, never the
                     // set of facts: the dense header is the same verdict stack.
+                    // SS1 + SS2. The page head (title and the recorded goal) and
+                    // the answer to "did it work" share one card: the decision
+                    // word, what it meant, and ONE exhibit. Everything that
+                    // answers a different question has moved out of it.
                     verdictHero(dense: denseHeader)
                         .padding(.top, denseHeader ? Space.s : Space.m)
-                    // The reducer's one attention block, for every kind (failed
-                    // check, blocker, failed step). A dispositioned item keeps
-                    // its callout in a neutral tone so it stays reopenable.
-                    if let attention = receipt.attention {
-                        AttentionCallout(
-                            attention: attention,
-                            taskId: receipt.taskId,
-                            blocker: receipt.axes.decisionStatus.blocker
-                        )
-                        .padding(.top, Space.s)
-                    } else if let proof = standingProof {
-                        // The same reserved slot, filled the other way. It used
-                        // to render ONLY on trouble, so a Task whose checks all
-                        // passed showed less evidence than one that failed (C3).
-                        EvidenceCallout(proof: proof, title: labels.checksLabel)
-                            .padding(.top, Space.s)
-                    }
-                    // The receipt's totals sit with the header, above the
-                    // evidence: verdict, then line items, then history.
-                    RecordSummaryStrip(receipt: receipt, summary: summary)
-                        .padding(Space.l)
-                        .background(Theme.card, in: RoundedRectangle(cornerRadius: Metrics.radius))
-                        .overlay(RoundedRectangle(cornerRadius: Metrics.radius).strokeBorder(Theme.cardLine))
-                        .padding(.top, denseHeader ? Space.s : Space.l)
-                    // The recorded runs themselves, between the totals and the
-                    // activity surface: the evidence the tally above counts,
-                    // earlier runs greyed rather than elided.
-                    ReceiptSection(
-                        title: labels.checksLabel, identifier: "checks",
-                        help: PayloadAbsence.text(receipt.dimensions.evidence.checkTallyText)
-                    ) {
-                        RecordChecksSection(receipt: receipt, layers: layers)
-                    }
-                    .padding(.top, denseHeader ? Space.m : Space.l)
+                    // SS3 — "can I trust it". The evidence tier stated once, the
+                    // coverage it grades, the runs themselves, and the whole
+                    // absence budget in one line.
+                    evidenceAnswer
+                        .padding(.top, denseHeader ? Space.m : Space.l)
                     // Below the verdict and the runs that prove it, the record
                     // body: the step spine, the activity timeline inline (never
                     // behind a tab), the other sessions, then the supporting
@@ -2901,10 +2876,22 @@ struct WorkRecordPage: View {
                         ForEach(orderedSections(proxy: proxy)) { $0.view }
                     }
                     .padding(.top, compactViewport ? Space.l : Space.xl)
+                    // SS4 — "what do I do now". Last, because it is what a
+                    // reviewer leaves with, and persistent, because the one line
+                    // that says what happens next must not depend on whether
+                    // something still needs attention.
+                    nextAnswer
+                        .padding(.top, compactViewport ? Space.l : Space.xl)
                 }
                 .padding(denseHeader ? Space.m : Space.gutter)
                 .modifier(WorkRecordPageFrame(unbounded: timelineFocused))
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // The Task id left the resting page for SS3's disclosure — it is
+                // inert to read and was 124 px on every record. It keeps its copy
+                // button there, and the page carries it as its own value, so a
+                // screen-reader user is not the one who has to go hunting.
+                .accessibilityElement(children: .contain)
+                .accessibilityValue(receipt.taskId)
                 .task(id: primaryKey) {
                     // Load the primary session's steps, re-keyed on the member so
                     // a primary-session change (role enrichment during live
@@ -3031,7 +3018,8 @@ struct WorkRecordPage: View {
                     .workFont(.caption).foregroundStyle(Theme.muted)
             } else {
                 let items = SessionStepItem.make(detail.steps)
-                SessionStepSpine(items: items, openedIDs: openedStepIDs(items))
+                SessionStepSpine(items: items, openedIDs: openedStepIDs(items),
+                                 taskNextStep: recordedNextStep)
             }
         } else if dashboard.isOfflineSnapshot {
             stepsOfflineNotice
@@ -3110,31 +3098,29 @@ struct WorkRecordPage: View {
         let steps = OrderedSection(id: "steps", view: AnyView(stepsSection))
         let timeline = OrderedSection(id: "timeline", view: AnyView(timelineView(proxy: proxy)))
         let subagents = OrderedSection(id: "subagents", view: AnyView(subagentsSection))
-        let supporting = OrderedSection(id: "supporting", view: AnyView(supportingSections))
         return timelineFocused
-            ? [timeline, steps, subagents, supporting]
-            : [steps, timeline, subagents, supporting]
+            ? [timeline, steps, subagents]
+            : [steps, timeline, subagents]
     }
 
-    /// Supporting captured detail, below the steps and the timeline: each fact
-    /// once, no duplication of the summary strip above.
-    private var supportingSections: some View {
-        VStack(alignment: .leading, spacing: Space.xl) {
-            ReceiptSection(
-                title: "Usage", identifier: "usage",
-                help: "Counts describe captured tool calls, not progress or success. Related paths are recorded associations, not modified files. Current receipts have no ordered action ledger, so captured call counts cannot be linked to results or timing."
-            ) {
-                RecordDimensionsCard(receipt: receipt, included: [.actions, .cost],
-                                     showsProvenance: false, compactDigest: true)
-            }
-            ReceiptSection(title: "Recording", identifier: "recording",
-                           help: recordingHelp) {
-                recordingDetails
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("work.all-captured-details")
-    }
+    // The `Usage` and `Recording` sections are GONE — together a near-constant
+    // 1 073–1 249 px tail on every record, of which the flagship's was 43 %
+    // named absence, 25 % restatement and 10 % an inert identifier, leaving two
+    // file paths and a count as its only facts about the work.
+    //
+    // Nothing they carried was dropped without a new home:
+    // * TOOL CALLS / COST / WEEKLY PLAN absences → nouns in SS3's one absence
+    //   line, each sentence still readable in its disclosure.
+    // * related paths, and a recorded token or cost figure → SS3's captured
+    //   facts, where a figure survives even though an absence does not.
+    // * TASK (the title's third print) → deleted; SS1's recorded goal takes the
+    //   slot, and the section titles it printed are in SS3's disclosure.
+    // * AGENTS → the hero meta line, subagent count included.
+    // * SOURCES → SS3's heading line, which states the tier and its source.
+    // * GAPS → split by the reducer: the ones that stop a reviewer stay as
+    //   sentences in SS3, the bookkeeping collapses into the absence line.
+    // * TASK ID → SS3's disclosure, copy button intact, plus the page's own
+    //   accessibility value.
 
     /// An unmistakable back control (the old caps "WORK" read as a static path
     /// label, not a button) + the path itself. Esc triggers the same return.
@@ -3250,6 +3236,30 @@ struct WorkRecordPage: View {
             // ImageRenderer blanks views carrying AccessibilityFocusState, so
             // only the live path takes the entry focus (as `backButton` does).
             heroTitle(ramp: ramp)
+            // SS1 — "what was this for". The task-level goal the agent recorded,
+            // in one sentence directly under the title: body size, muted, no
+            // caps label, no card and no rule of its own, because it is the page
+            // head rather than a titled section. It takes the slot the dead
+            // `Recording → TASK` row used to occupy, which printed the title a
+            // third time on every record.
+            //
+            // When no goal was recorded the reducer's own sentence says so. That
+            // absence is exempt from the page's absence budget on purpose: a
+            // record with no stated purpose is one a reviewer should distrust,
+            // so it is worth a line of its own.
+            if let goal = PayloadAbsence.text(receipt.dimensions.task.goal) {
+                Text(verbatim: goal)
+                    .workFont(.body).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("work.record.goal")
+            } else if let absent = PayloadAbsence.text(receipt.dimensions.task.goalAbsentText) {
+                Text(verbatim: absent)
+                    .workFont(.body).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("work.record.goal.absent")
+            }
             // ONE state row. The decision badge is the primary state; the
             // handoff marker is sent only when it ADDS to that word, so the two
             // read as one state, not as competing chips. The proof clause used
@@ -3290,25 +3300,24 @@ struct WorkRecordPage: View {
                     tracking: ramp.consequenceTracking
                 )
             }
-            // The agent's recorded continuation point, on EVERY record — not
-            // only on one that still needs you (F6). It used to render solely
-            // inside the attention callout, so marking a finding reviewed took
-            // the one line that says what happens next off the page with it.
-            NextStepRow(text: recordedNextStep)
-                .padding(.top, Space.xs)
-            coverageMeter(evidence: evidence)
-            if let verdict = receipt.verdict, let gapLine = verdict.gapLine {
-                verdictGapCallout(gapLine, unproven: verdict.gapIsUnproven)
-            }
+            // ONE exhibit, inside the card. This used to be a separate band
+            // below it — 326 px on the flagship record — which republished the
+            // tier in prose, the meta line, the pip, the stamped revision and
+            // the contradiction sentence, every one of them a verbatim copy of a
+            // single row of the Checks table. The slot still fills both ways: an
+            // open attention item when something needs you, the standing proof
+            // reduced to its identity line when nothing does.
+            exhibit
             if !metaLine.isEmpty {
                 Text(metaLine).workFont(.dataSmall).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let boundaryGap = boundaryGapText {
-                Text(boundaryGap).workFont(.caption).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
-            }
+            // MOVED OUT of this card, each to the one question it answers: the
+            // coverage meter, its ledger, its definition and the proving run's
+            // revision line to SS3 (they answer "can I trust it"); the recorded
+            // next step to SS4; the verdict gap line and the project-boundary
+            // gap to SS3, the first as its own caveat and the second as one noun
+            // in the absence line.
         }
         .padding(dense ? Space.m : Space.l)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3339,6 +3348,354 @@ struct WorkRecordPage: View {
             ?? PayloadAbsence.text(receipt.attention?.nextStep)
     }
 
+    // MARK: - SS2's one exhibit
+
+    /// The hero's single exhibit slot. It used to be a page-level band below the
+    /// card, and on a record with a standing pass it was a VERBATIM duplicate of
+    /// one Checks row plus a prose restatement of the tier — the tier's fourth
+    /// print, in its third register.
+    ///
+    /// Filled both ways, as the reserved slot always was (C3): an open attention
+    /// item, with the controls that act on it, when something needs you; the
+    /// standing proof's own identity line when nothing does. The controls stay
+    /// here rather than in SS4 because they act on the exhibit, not on the next
+    /// step.
+    @ViewBuilder
+    private var exhibit: some View {
+        if let attention = receipt.attention {
+            AttentionCallout(
+                attention: attention,
+                taskId: receipt.taskId,
+                blocker: receipt.axes.decisionStatus.blocker
+            )
+        } else if let proof = standingProof {
+            HStack(alignment: .top, spacing: Space.m) {
+                RecordCheckResultGlyph(check: proof.check).padding(.top, 2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verbatim: PayloadAbsence.text(proof.check.title)
+                         ?? PayloadAbsence.text(proof.check.name)
+                         ?? PayloadAbsence.checkResult)
+                        .workFont(.rowLabel).foregroundStyle(Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // One line, one separator — never the four fragments this
+                    // slot used to punctuate as four sentences. The tier is NOT
+                    // repeated here: SS3's heading states it, once.
+                    Text(verbatim: proof.check.metaLineText)
+                        .workFont(.caption).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(Space.m)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Neutral, never green: green is reserved for externally-verified
+            // evidence and the live connection, and this renders whatever tier
+            // the receipt actually reached.
+            .background(Theme.tintNeutral, in: RoundedRectangle(cornerRadius: Metrics.radius))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("receipt.evidence-standing")
+        }
+    }
+
+    // MARK: - SS3 · can I trust it
+
+    /// Everything that bears on whether the record can be believed, in one
+    /// section and each fact in it exactly once.
+    ///
+    /// It absorbs the coverage meter and its ledger from the hero, the COVERAGE
+    /// and CHECKS tiles from the deleted tile strip, the whole Checks section
+    /// regrouped by revision, what survives of `Usage`, and what survives of
+    /// `Recording` — and it closes with the page's ENTIRE absence budget as one
+    /// line, every collapsed sentence still readable behind its disclosure.
+    private var evidenceAnswer: some View {
+        ReceiptSection(
+            title: labels.evidenceSectionLabel, identifier: "evidence",
+            help: recordingHelp
+        ) {
+            VStack(alignment: .leading, spacing: Space.l) {
+                evidenceHeadingLine
+                coverageMeter(evidence: receipt.axes.evidenceStrength)
+                // The reducer's typed gap on the verdict itself (`Not yet proven
+                // — …`), which belongs with the evidence rather than over the
+                // decision word.
+                if let verdict = receipt.verdict, let gapLine = verdict.gapLine {
+                    verdictGapCallout(gapLine, unproven: verdict.gapIsUnproven)
+                }
+                RecordChecksSection(receipt: receipt, layers: layers)
+                capturedFacts
+                blocksReviewGaps
+                notCapturedLine
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The tier, stated ONCE on the whole page.
+    ///
+    /// The reducer's `heading_line` carries the tally, the tier word and
+    /// whichever check facts were uniform across every row. The tier used to be
+    /// stated three times in three registers — a prose sentence in the callout,
+    /// a bare qualifier under the COVERAGE tile, and a pip, twice.
+    ///
+    /// The pip is hoisted with it only when the record reached exactly ONE tier:
+    /// pip SHAPE carries the tier, so a record with two non-empty buckets keeps
+    /// its counted legend and its per-row pips instead.
+    @ViewBuilder
+    private var evidenceHeadingLine: some View {
+        // A record with no recorded run has one thing to say about its checks,
+        // and the empty checks row says it. The heading line then carries the
+        // same words — the tally counts task-level rows while the tier grades
+        // step coverage, so a record with neither produces a heading that IS the
+        // empty state — and printing both is one fact twice. Two payload strings
+        // compared; no wording is composed here.
+        if let line = PayloadAbsence.text(receipt.dimensions.evidence.headingLine),
+           !restatesPayloadText(line, ReceiptCheckRunsPresentation(
+               evidence: receipt.dimensions.evidence).rowText) {
+            let strength = receipt.axes.evidenceStrength
+            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                if let tier = hoistableTierKey {
+                    EvidencePip(grade: tier, radius: Type.icon / 2)
+                }
+                Text(verbatim: line)
+                    .workFont(FieldFont.qualifier).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
+                // The sentence the deleted callout carried in prose — "the agent
+                // reported a check passed (…) — the agent's own, not
+                // independent" — is the clearest words on the page for a reader
+                // who does not know what `self-checked` means. It is not deleted:
+                // it becomes the tier's own context help, here, where the tier is
+                // stated.
+                if let reason = PayloadAbsence.text(standingProof?.gradeReason)
+                    ?? PayloadAbsence.text(strength.definition) {
+                    ContextHelp(
+                        title: "About \(labels.evidenceSectionLabel.lowercased())",
+                        message: reason,
+                        identifier: "work.record.evidence.tier.help"
+                    )
+                }
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("work.record.evidence.heading")
+        }
+    }
+
+    /// The tier key the heading may wear as a pip: only when the receipt reached
+    /// exactly one tier, because one pip on the page must not stand for two.
+    private var hoistableTierKey: String? {
+        let strength = receipt.axes.evidenceStrength
+        guard let tier = PayloadAbsence.text(strength.strongestTier) else { return nil }
+        guard let buckets = strength.byTier else { return tier }
+        return buckets.nonEmptyTierCount == 1 ? tier : nil
+    }
+
+    /// What the capture actually holds about the work: the related-path count
+    /// with the paths behind a disclosure, and the token or cost figure when one
+    /// was recorded.
+    ///
+    /// This is all that survives the deleted `Usage` section — but it must
+    /// survive: on the thinnest record in the set the token line is the ONLY
+    /// fact about the work anywhere on the page. A cost row with nothing but a
+    /// named absence is dropped, because the absence line below states it.
+    @ViewBuilder
+    private var capturedFacts: some View {
+        let actions = receipt.dimensions.actions
+        let paths = actions.touchedFiles ?? actions.touchedFilesPreview ?? []
+        VStack(alignment: .leading, spacing: Space.s) {
+            if !paths.isEmpty, let scope = PayloadAbsence.text(actions.relatedPathsText) {
+                // The count states itself ONCE, as the disclosure's own counted
+                // trigger — the page's established idiom for a list that folds.
+                // Printing it above the trigger as well would be the same two
+                // words twice, a line apart.
+                HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                    OverflowDisclosure(
+                        label: scope, identifier: "work.overflow.related-paths"
+                    ) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(paths, id: \.self) { path in
+                                Text(verbatim: path)
+                                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    if let definition = PayloadAbsence.text(actions.relatedPathsDefinition) {
+                        ContextHelp(
+                            title: "About \(labels.actionsLabel.lowercased())",
+                            message: definition,
+                            identifier: "work.record.related-paths.help"
+                        )
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            RecordDimensionsCard(
+                receipt: receipt, included: [.cost],
+                showsProvenance: false, showsGaps: false, compactDigest: true,
+                showsPlanShare: false, dropsAbsentValues: true
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The gaps that STOP a reviewer, as sentences.
+    ///
+    /// The split is the reducer's, not a guess here: a gap it could pair with an
+    /// absence-budget noun (`absence_key`) is already spoken by the collapsed
+    /// line below and lives in its disclosure; a gap no noun can carry has no
+    /// shorter form, so it stays a sentence on the resting page. That keeps the
+    /// content the thickest record's tail was actually carrying — "3 supporting
+    /// sessions spent 3,733,638 tokens and recorded no work, so what they did is
+    /// unreviewable." — while the bookkeeping collapses.
+    @ViewBuilder
+    private var blocksReviewGaps: some View {
+        let items = (receipt.dimensions.gaps.items ?? []).filter {
+            PayloadAbsence.text($0.absenceKey) == nil
+        }
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                // Index-stable identity: two gaps sharing a dimension and reason
+                // must both render, never collapse into one row.
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in gapRow(item) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("work.record.gaps")
+        }
+    }
+
+    /// The page's whole absence budget: ONE line, composed by the reducer, with
+    /// every sentence it stands for behind one disclosure.
+    ///
+    /// Absence stays NAMED — that rule is not weakened. What changes is that it
+    /// may no longer occupy more space than the facts it is absent from: this
+    /// replaces a near-constant 1 073–1 249 px tail that was 43 % named absence
+    /// and said the same seven things on every record however much work was
+    /// done. An empty budget prints NOTHING: no receipt can claim everything was
+    /// captured.
+    @ViewBuilder
+    private var notCapturedLine: some View {
+        let budget = receipt.dimensions.gaps.notCaptured
+        if let line = PayloadAbsence.text(budget?.line) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: line)
+                    .workFont(FieldFont.gapLine).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
+                    .accessibilityIdentifier("work.record.not-captured")
+                recordFootnotes(budget: budget)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            recordFootnotes(budget: nil)
+        }
+    }
+
+    /// Everything the record page prints exactly once, and never at rest: the
+    /// collapsed absence sentences, the recorded objectives, the facts that were
+    /// byte-identical on every check row, and the Task's own id.
+    @ViewBuilder
+    private func recordFootnotes(budget: ReceiptNotCaptured?) -> some View {
+        let details = budget?.detail ?? []
+        let objectives = receipt.dimensions.task.objectives ?? []
+        let uniform = uniformCheckFacts
+        let count = details.count + (objectives.isEmpty ? 0 : 1) + uniform.count + 1
+        OverflowDisclosure(
+            label: "\(count) detail\(count == 1 ? "" : "s")",
+            identifier: "work.overflow.not-captured"
+        ) {
+            VStack(alignment: .leading, spacing: Space.s) {
+                // Each collapsed absence, in the order the line named its nouns,
+                // worded byte-identically to the gap sentence it came from.
+                ForEach(details) { item in
+                    if let text = PayloadAbsence.text(item.text) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            CaveatMarker()
+                            Text(verbatim: text)
+                                .workFont(.caption).foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
+                        }
+                    }
+                }
+                // The recorded section titles, as a plain list. They used to
+                // print as `<first> · +43 more objectives`, where the first was
+                // the page heading over again on three of five records.
+                if !objectives.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        CapsLabel(text: labels.taskLabel)
+                        ForEach(objectives, id: \.self) { objective in
+                            Text(verbatim: objective)
+                                .workFont(.caption).foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
+                        }
+                    }
+                }
+                // One print each of the facts that were identical on every check
+                // row: how the command was handled, what supersession means
+                // here, and the checks' scope.
+                ForEach(uniform, id: \.self) { fact in
+                    Text(verbatim: fact)
+                        .workFont(.caption).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
+                }
+                // The Task id keeps its copy button. It leaves the resting page —
+                // it is inert to read — but anyone pasting it into a bug report
+                // is one disclosure away, and the page announces it too.
+                HStack(alignment: .firstTextBaseline, spacing: Space.l) {
+                    CapsLabel(text: labels.taskLabel)
+                    CopyableValue(text: receipt.taskId, announce: "task ID")
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(.top, 2)
+    }
+
+    /// The check facts that are byte-identical on every recorded run, so each is
+    /// printed once for the record rather than once per row. On the flagship
+    /// record `command_state_text` was printed four times and `scope` was
+    /// byte-identical on all four rows.
+    private var uniformCheckFacts: [String] {
+        let checks = receipt.dimensions.evidence.checks ?? []
+        guard !checks.isEmpty else { return [] }
+        func shared(_ value: (ReceiptCheck) -> String?) -> String? {
+            let texts = checks.map { PayloadAbsence.text(value($0)) }
+            guard let first = texts.first ?? nil else { return nil }
+            return texts.allSatisfy { $0 == first } ? first : nil
+        }
+        return [
+            shared(\.commandStateText),
+            shared(\.supersededDefinition),
+            shared(\.scope),
+        ].compactMap { $0 }
+    }
+
+    // MARK: - SS4 · what do I do now
+
+    /// The recorded next step, and nothing else that could be built.
+    ///
+    /// The exits this section is meant to offer — open the commit, the project,
+    /// the PR — CANNOT be built from this payload: `artifact_url`,
+    /// `artifact_path` and `artifact_ref` are null on every check measured, and
+    /// no repo, remote or origin field of any kind exists in the receipt schema.
+    /// `revision.commit` carries a full 40-character sha and `boundary.project`
+    /// carries a name, but nothing maps either to a location. Three new payload
+    /// fields (`boundary.repo_url`, `checks[].revision.commit_url`,
+    /// `outcome.pr_url`) would fill it; until they exist this section is the next
+    /// step alone, and inventing a URL in Swift would be inventing a fact.
+    private var nextAnswer: some View {
+        ReceiptSection(title: labels.nextSectionLabel, identifier: "next") {
+            // The heading already says what this is, so the row drops its own
+            // caps label: one fact, one name for it. A missing next step is
+            // still NAMED — the second absence exempt from the budget.
+            NextStepRow(text: recordedNextStep, showsLabel: false)
+        }
+    }
+
 
     /// The coverage meter and everything a reader needs to read it (C2).
     ///
@@ -3355,7 +3712,12 @@ struct WorkRecordPage: View {
         let bar = CoverageBar(evidence: evidence)
         let ledger = PayloadAbsence.text(receipt.verdict?.ledgerText)
             ?? PayloadAbsence.text(evidence.coverageLedger)
-        let dirtyProof = standingProof?.dirtyRevisionLabel
+        // The proving run's revision line is NOT drawn here any more. It is the
+        // same string the checks block now prints once as a group header,
+        // directly over the runs it stamps — which took `HEAD when recorded:
+        // c41d44f · main · uncommitted changes` from four prints to one. The
+        // qualifier a record owes a reader has not been dropped: it has moved to
+        // where the evidence is, inside this same section.
         VStack(alignment: .leading, spacing: Space.s) {
             // A Task with no recorded step has no meter to caption: the
             // Coverage tile carries its named absence and the ledger, if the
@@ -3383,25 +3745,12 @@ struct WorkRecordPage: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
             }
-            if let dirtyProof {
-                // The proving run's own revision line, verbatim: a hero that
-                // says Verified over a tree with uncommitted changes owes the
-                // reader that qualifier.
-                HStack(alignment: .firstTextBaseline, spacing: Space.s) {
-                    CaveatMarker()
-                    Text(verbatim: dirtyProof)
-                        .workFont(FieldFont.qualifier).foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: Metrics.readingMeasure, alignment: .leading)
-                }
-            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(joinedRecordedSentences([
             labels.coverageLabel,
             PayloadAbsence.text(evidence.coverageRow),
             ledger,
-            dirtyProof,
         ]))
         .accessibilityIdentifier("work.record.coverage")
     }
@@ -3511,6 +3860,13 @@ struct WorkRecordPage: View {
                 // model the work ran on, and how long it ran. They sit before
                 // the recency, so the line reads identity → run → recency.
                 PayloadAbsence.text(receipt.dimensions.actors.models?.first),
+                // The `Agents` row's one fact this line did not already hold.
+                // That row is deleted, and its string had to MOVE rather than
+                // merely go: on the thickest record it read `claude-code ·
+                // claude-opus-4-8 · 3 subagents`, and the subagent count
+                // appeared nowhere else at rest once the Sessions tile — which
+                // read `1` on four of five records — went with it.
+                receipt.dimensions.actors.subagentsText,
                 receipt.durationSeconds.flatMap { (secs: Double) -> String? in
                     secs > 0 ? "ran \(durationText(secs))" : nil
                 },
@@ -3528,113 +3884,6 @@ struct WorkRecordPage: View {
         PayloadAbsence.text(receipt.dimensions.task.boundary?.gapText)
     }
 
-    private var topicDivider: some View {
-        Rectangle().fill(Theme.hairline).frame(height: 1)
-    }
-
-    /// The provenance sources as the reducer labels them; an older payload
-    /// without labelled entries falls back to the keys it listed.
-    private var sourceEntries: [ReceiptSourceEntry] {
-        let provenance = receipt.dimensions.provenance
-        if let sources = provenance.sources, !sources.isEmpty { return sources }
-        return (provenance.sourcesPresent ?? []).map { key in
-            ReceiptSourceEntry(
-                key: key,
-                label: provenance.sourceLabel(for: key),
-                legend: provenance.legend?[key],
-                tierKey: nil,
-                tierLabel: nil
-            )
-        }
-    }
-
-    /// Identity and provenance in one place: task and agent facts, sources
-    /// and gaps. Coverage lives in the verdict hero (its definition in this
-    /// section's help); each fact appears once on the page.
-    private var recordingDetails: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RecordDimensionsCard(receipt: receipt, included: [.task, .agents],
-                                 showsProvenance: false, showsGaps: false)
-            receiptFactRow("Sources") {
-                let entries = sourceEntries
-                if entries.isEmpty {
-                    Text(PayloadAbsence.text(receipt.dimensions.provenance.sourcesAbsentText) ?? PayloadAbsence.source)
-                        .workFont(.body).foregroundStyle(Theme.muted)
-                } else {
-                    let legendLines = entries.compactMap { entry -> String? in
-                        guard let legend = PayloadAbsence.text(entry.legend) else { return nil }
-                        return "\(PayloadAbsence.text(entry.label) ?? entry.key): \(legend)"
-                    }
-                    HStack(alignment: .top, spacing: Space.s) {
-                        WrappingRowLayout(horizontalSpacing: 6, verticalSpacing: Space.xs) {
-                            ForEach(entries) { entry in
-                                ProvenanceChip(text: PayloadAbsence.text(entry.label) ?? entry.key)
-                            }
-                        }
-                        // Each source's legend sentence is the daemon's own,
-                        // keyboard-openable rather than hover-only.
-                        if !legendLines.isEmpty {
-                            ContextHelp(
-                                title: "About these sources",
-                                message: legendLines.joined(separator: "\n"),
-                                identifier: "work.recording.sources.help"
-                            )
-                        }
-                        Spacer(minLength: 0)
-                    }
-                }
-            }
-            let gapsDim = receipt.dimensions.gaps
-            receiptFactRow("Gaps") {
-                // The boundary gap already shows under the verdict's meta line;
-                // it is not repeated here.
-                let items = (gapsDim.items ?? []).filter { item in
-                    boundaryGapText.map { item.reason != $0 } ?? true
-                }
-                let removed = (gapsDim.items ?? []).count - items.count
-                let count = max((gapsDim.count ?? (gapsDim.items ?? []).count) - removed, 0)
-                if count == 0 {
-                    Text("no recorded gaps").workFont(.body).foregroundStyle(Theme.muted)
-                } else if items.isEmpty {
-                    Text("\(count) recorded gap\(count == 1 ? "" : "s") · details not included")
-                        .workFont(.caption).foregroundStyle(Theme.muted)
-                } else {
-                    // Detailed gaps beyond the third fold into one counted
-                    // trigger; any gaps counted without detail are named too, so
-                    // the remaining total is honest whichever form the extras take.
-                    let undetailed = max(count - items.count, 0)
-                    VStack(alignment: .leading, spacing: 4) {
-                        // Index-stable identity: two gaps sharing a dimension and
-                        // reason must both render, never collapse into one row.
-                        ForEach(Array(items.prefix(3).enumerated()), id: \.offset) { _, item in gapRow(item) }
-                        if items.count > 3 {
-                            let remaining = (items.count - 3) + undetailed
-                            OverflowDisclosure(
-                                label: "\(remaining) more gap\(remaining == 1 ? "" : "s")",
-                                identifier: "work.overflow.gaps"
-                            ) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ForEach(Array(items.dropFirst(3).enumerated()), id: \.offset) { _, item in gapRow(item) }
-                                    if undetailed > 0 {
-                                        Text("\(undetailed) more recorded gap\(undetailed == 1 ? "" : "s") · details not included")
-                                            .workFont(.caption).foregroundStyle(Theme.muted)
-                                    }
-                                }
-                                .padding(.top, 4)
-                            }
-                            .padding(.top, 2)
-                        } else if undetailed > 0 {
-                            Text("\(undetailed) more recorded gap\(undetailed == 1 ? "" : "s") · details not included")
-                                .workFont(.caption).foregroundStyle(Theme.muted)
-                        }
-                    }
-                }
-            }
-            receiptFactRow("Task ID") {
-                CopyableValue(text: receipt.taskId, announce: "task ID")
-            }
-        }
-    }
 
     /// One recorded gap: the caveat marker (a gap is not an evidence tier, so
     /// it never wears a pip shape), the dimension naming where the blind spot
@@ -3651,29 +3900,6 @@ struct WorkRecordPage: View {
         // The dimension names where the blind spot is and the sentence states
         // it: one fact, one element (K124).
         .accessibilityElement(children: .combine)
-    }
-
-    /// One labelled fact of the record. Every row here holds a control (copy,
-    /// context help) or a disclosure, so the row is a NAMED container rather
-    /// than one combined element: the field name is announced on entry and the
-    /// control inside keeps its own role and action (K124/K118). Rows whose
-    /// value is pure prose combine label and value instead — see
-    /// `RecordDimensionsCard.dimensionRow`.
-    private func receiptFactRow<Content: View>(
-        _ label: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        HStack(alignment: .top, spacing: Space.l) {
-            CapsLabel(text: label)
-                .frame(width: 104, alignment: .leading)
-                .padding(.top, 3)
-            content()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.vertical, Space.m)
-        .overlay(alignment: .top) { topicDivider }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(label)
     }
 }
 

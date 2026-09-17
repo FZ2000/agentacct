@@ -92,11 +92,22 @@ struct ReceiptFieldLabels: Decodable, Equatable {
     var client: String? = nil
     var updated: String? = nil
     var attention: String? = nil
+    /// The four names that head a record-page SECTION rather than a receipt
+    /// dimension (`RECORD_SECTION_LABEL_KEYS`). Before these existed the record
+    /// page spelled its own headings, so a wording change in Python left the
+    /// app disagreeing with the CLI.
+    var goal: String? = nil
+    var outcomeSection: String? = nil
+    var evidenceSection: String? = nil
+    var nextSection: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case decision, coverage, checks, cost, agents, task, actions
-        case client, updated, attention
+        case client, updated, attention, goal
         case weeklyPlan = "weekly_plan"
+        case outcomeSection = "outcome_section"
+        case evidenceSection = "evidence_section"
+        case nextSection = "next_section"
     }
 
     var decisionLabel: String { PayloadAbsence.text(decision) ?? "Decision" }
@@ -110,6 +121,10 @@ struct ReceiptFieldLabels: Decodable, Equatable {
     var clientLabel: String { PayloadAbsence.text(client) ?? "Client" }
     var updatedLabel: String { PayloadAbsence.text(updated) ?? "Updated" }
     var attentionLabel: String { PayloadAbsence.text(attention) ?? "Attention" }
+    var goalLabel: String { PayloadAbsence.text(goal) ?? "Goal" }
+    var outcomeSectionLabel: String { PayloadAbsence.text(outcomeSection) ?? "Outcome" }
+    var evidenceSectionLabel: String { PayloadAbsence.text(evidenceSection) ?? "Evidence" }
+    var nextSectionLabel: String { PayloadAbsence.text(nextSection) ?? "Next" }
 }
 
 /// One provenance source as the reducer labels it: `{key, label, legend,
@@ -1001,6 +1016,14 @@ struct ReceiptByTier: Decodable {
     let selfChecked: Int?
     let unchecked: Int?
 
+    /// How many tiers the record actually reached. The record page hoists its
+    /// tier pip to the Evidence heading only at exactly ONE: pip SHAPE carries
+    /// the tier, so a single pip must never stand for two.
+    var nonEmptyTierCount: Int {
+        [externallyVerified, independentlyChecked, selfChecked, unchecked]
+            .filter { ($0 ?? 0) > 0 }.count
+    }
+
     enum CodingKeys: String, CodingKey {
         case externallyVerified = "externally_verified"
         case independentlyChecked = "independently_checked"
@@ -1555,6 +1578,18 @@ struct ReceiptTaskDim: Decodable {
     let boundary: ReceiptBoundary?
     let provenance: [String]?
     let gaps: [String]?
+    /// The task-level GOAL, recorded once by the agent (`task_goal`). It cannot
+    /// be derived from `objectives`, which are the recorded SECTION TITLES —
+    /// steps, and usually the Task title over again.
+    var goal: String? = nil
+    /// The reducer's named absence when no goal was recorded. One of the two
+    /// absences exempt from the record page's absence budget.
+    var goalAbsentText: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case objectives, boundary, provenance, gaps, goal
+        case goalAbsentText = "goal_absent_text"
+    }
 }
 
 struct ReceiptActorsDim: Decodable {
@@ -1564,6 +1599,14 @@ struct ReceiptActorsDim: Decodable {
     let childSessionCount: Int?
     let provenance: [String]?
     let gaps: [String]?
+
+    /// The subagent count as a phrase. ONE composition, used by both the place
+    /// the count is written and the record page's meta line, so deleting the
+    /// `Agents` row does not take the subagent count off the resting page.
+    var subagentsText: String? {
+        guard let count = subagentSessionCount, count > 0 else { return nil }
+        return "\(count) subagent\(count == 1 ? "" : "s")"
+    }
 
     enum CodingKeys: String, CodingKey {
         case primaryAgent = "primary_agent"
@@ -1875,8 +1918,28 @@ struct ReceiptCheck: Decodable, Identifiable {
     var commandState: String? = nil
     /// Paths this check declared that the stamped revision cannot contain.
     var revisionAbsentFiles: [String]? = nil
-    /// The reducer's sentence naming that contradiction (nil when none).
+    /// The reducer's sentence naming that contradiction (nil when none). The
+    /// reducer CLEARS it on every row a group banner covers, so a surface that
+    /// does not read `revision_groups[].contradiction_text` prints the sentence
+    /// nowhere at all.
     var revisionContradictionText: String? = nil
+    /// The row's one meta line — `Failed · Exit 1 · test · Agent-reported`,
+    /// joined by the reducer on the single separator, with whichever fields are
+    /// uniform across every row already hoisted OUT of it and onto the section
+    /// heading. It replaces the four words a surface used to punctuate as four
+    /// sentences.
+    var metaLine: String? = nil
+    /// The shortest run of WHOLE sentences from the start of `summary` that
+    /// still contains the finding. It never ends mid-clause and carries no
+    /// ellipsis, so it must not be clamped to a line count.
+    var summaryPreview: String? = nil
+    /// True when `summary` holds more than `summaryPreview` shows.
+    var summaryElided: Bool? = nil
+    /// Which of `dimensions.evidence.revision_groups` this row belongs to.
+    var revisionGroupIndex: Int? = nil
+    /// True when the group header prints this row's revision label, so the row
+    /// must not print it a second time.
+    var revisionLabelHoisted: Bool? = nil
 
     /// A run whose own result failed but which a later run replaced: the
     /// recovery half of a fail → pass story, and neither a live failure nor a
@@ -1896,6 +1959,20 @@ struct ReceiptCheck: Decodable, Identifiable {
     /// The revision line, or its named absence.
     var revisionText: String {
         PayloadAbsence.text(revisionLabel) ?? PayloadAbsence.revision
+    }
+
+    /// The row's ONE meta line. The reducer composes it and hoists whatever is
+    /// uniform across the rows; an older payload that carries no `meta_line`
+    /// falls back to the same four facts joined on the SAME separator every
+    /// surface uses, so there is never a second punctuation grammar — and never
+    /// again four fragments each ended with a full stop.
+    var metaLineText: String {
+        if let line = PayloadAbsence.text(metaLine) { return line }
+        return workMetaLine(
+            client: PayloadAbsence.text(resultLabel) ?? PayloadAbsence.checkResult,
+            project: exitCode.map { "Exit \($0)" },
+            trailing: [PayloadAbsence.text(evidenceType), PayloadAbsence.text(sourceLabel)]
+        )
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1929,6 +2006,44 @@ struct ReceiptCheck: Decodable, Identifiable {
         case commandState = "command_state"
         case revisionAbsentFiles = "revision_absent_files"
         case revisionContradictionText = "revision_contradiction_text"
+        case metaLine = "meta_line"
+        case summaryPreview = "summary_preview"
+        case summaryElided = "summary_elided"
+        case revisionGroupIndex = "revision_group_index"
+        case revisionLabelHoisted = "revision_label_hoisted"
+    }
+}
+
+/// One run of adjacent check rows sharing a stamped revision
+/// (`dimensions.evidence.revision_groups[]`).
+///
+/// The grouping is the REDUCER'S decision, not a Swift heuristic: it falls back
+/// to strict time order whenever grouping by revision would split a
+/// supersession pair across two groups, because a fail → pass recovery has to
+/// stay legible as two adjacent rows. `revisionGroupingMode` says which choice
+/// it made; walking each group's `eventIds` in order yields every row exactly
+/// once, in time order, under either mode.
+struct ReceiptCheckRevisionGroup: Decodable, Identifiable {
+    let revision: ReceiptCheckRevision?
+    /// The stamped revision line, printed ONCE over the group. On the flagship
+    /// record this took `HEAD when recorded: c41d44f · main · uncommitted
+    /// changes` from four prints to one.
+    let label: String?
+    let eventIds: [String]?
+    let rowCount: Int?
+    /// The reducer's one contradiction sentence for this group, emitted only
+    /// when more than one row carried it byte-identically — and cleared from
+    /// those rows. When the rows' sentences differ this is nil and each row
+    /// keeps its own; no merged sentence is ever composed.
+    let contradictionText: String?
+
+    var id: String { (eventIds?.first).map { "group-\($0)" } ?? (label ?? "group") }
+
+    enum CodingKeys: String, CodingKey {
+        case revision, label
+        case eventIds = "event_ids"
+        case rowCount = "row_count"
+        case contradictionText = "contradiction_text"
     }
 }
 
@@ -2121,6 +2236,17 @@ struct ReceiptEvidenceDim: Decodable {
     var checkTallyText: String? = nil
     /// `failed` / `passed` / `not_reported` / `none`.
     var checkRunsState: String? = nil
+    /// The section's ONE heading line: the tally, the evidence tier stated here
+    /// and nowhere else on the page, then whichever meta fields were uniform
+    /// across every row. Composed by the reducer.
+    var headingLine: String? = nil
+    /// The uniform fields the heading line hoisted off the rows — present so a
+    /// surface can tell a hoisted fact from one that was never recorded.
+    var hoistedSourceLabel: String? = nil
+    var hoistedEvidenceType: String? = nil
+    /// `by_revision` or `time_order` — the reducer's grouping decision.
+    var revisionGroupingMode: String? = nil
+    var revisionGroups: [ReceiptCheckRevisionGroup]? = nil
 
     enum CodingKeys: String, CodingKey {
         case checks
@@ -2133,6 +2259,11 @@ struct ReceiptEvidenceDim: Decodable {
         case checksTile = "checks_tile"
         case checkTallyText = "check_tally_text"
         case checkRunsState = "check_runs_state"
+        case headingLine = "heading_line"
+        case hoistedSourceLabel = "hoisted_source_label"
+        case hoistedEvidenceType = "hoisted_evidence_type"
+        case revisionGroupingMode = "revision_grouping_mode"
+        case revisionGroups = "revision_groups"
     }
 }
 
@@ -2326,6 +2457,17 @@ struct ReceiptGapItem: Decodable, Identifiable {
     let reason: String
     /// The reducer's label for the dimension (`Agents`, `Tool calls`).
     var dimensionLabel: String? = nil
+    /// `blocks_review` or `provenance` — whether this gap stops a reviewer or is
+    /// bookkeeping.
+    var kind: String? = nil
+    var kindLabel: String? = nil
+    /// The typed gap code, never a sentence to match on.
+    var code: String? = nil
+    /// The absence-budget noun that already carries this gap, when one does.
+    /// A gap WITH a key is spoken by the collapsed absence line and belongs in
+    /// its disclosure; a gap without one has no noun and stays a sentence.
+    var absenceKey: String? = nil
+    var rank: Int? = nil
     var id: String { "\(dimension)-\(reason)" }
 
     /// The printed group name: the payload label, else the raw key de-snaked
@@ -2335,14 +2477,51 @@ struct ReceiptGapItem: Decodable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case dimension, reason
+        case dimension, reason, kind, code, rank
         case dimensionLabel = "dimension_label"
+        case kindLabel = "kind_label"
+        case absenceKey = "absence_key"
+    }
+}
+
+/// One sentence behind the collapsed absence line: the noun the line printed,
+/// and the full sentence it stands for. Absence stays NAMED — the line is a
+/// summary of these, never a replacement for them.
+struct ReceiptNotCapturedDetail: Decodable, Identifiable {
+    let key: String
+    let noun: String?
+    let text: String?
+    var id: String { key }
+}
+
+/// The record page's whole absence budget, in one statement
+/// (`dimensions.gaps.not_captured`).
+///
+/// `line` is nil when nothing is missing, and an empty budget prints NOTHING —
+/// never a positive "everything was captured" claim, which no receipt can make.
+struct ReceiptNotCaptured: Decodable {
+    let line: String?
+    let keys: [String]?
+    let detail: [ReceiptNotCapturedDetail]?
+    let detailCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case line, keys, detail
+        case detailCount = "detail_count"
     }
 }
 
 struct ReceiptGapsDim: Decodable {
     let items: [ReceiptGapItem]?
     let count: Int?
+    /// The collapsed absence statement. Every sentence it stands for is still
+    /// in its `detail`.
+    var notCaptured: ReceiptNotCaptured? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case items, count
+        case notCaptured = "not_captured"
+    }
 }
 
 struct ReceiptProvenanceDim: Decodable {

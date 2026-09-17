@@ -766,6 +766,16 @@ struct WorkTimeWindowScroller: View {
     static let notNarrowableTemplate = "Whole recorded span: {span} — nothing to narrow"
     /// `display_vocabulary.TIMELINE_WINDOW_NOT_NARROWABLE_DETAIL`: why the
     /// control is gone. Also the canvas's accessibility help in that state.
+    /// How to drive the canvas. Mirrors `display_vocabulary.TIMELINE_GESTURE_HINT`
+    /// character for character; the parity test pins both.
+    ///
+    /// Plain scroll is deliberately left to the page, so a reader who scrolls
+    /// over the canvas sees nothing happen — indistinguishable from broken
+    /// unless the canvas says what the gesture actually is. Google Maps answers
+    /// the same problem the same way ("Use ctrl + scroll to zoom the map").
+    static let gestureHint = "⌥ scroll to zoom · ⇧ scroll or drag to move"
+    static let gestureHintDetail = "Hold Option and scroll to change how much time is in view. Hold Shift and scroll, swipe sideways, or drag the canvas to move through time. Plain scrolling is left to the page, so the timeline never takes over your scrolling."
+
     static let notNarrowableDetail = "The whole recorded span is already in view, and it is shorter than the smallest window the time axis can label, so there is no narrower view to move to."
 
     static func notNarrowableText(span: Double) -> String {
