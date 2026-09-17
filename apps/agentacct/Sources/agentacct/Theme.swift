@@ -34,11 +34,12 @@ enum Fmt {
         prefix + (usd.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value))
     }
 
-    /// `count` + the correctly-inflected noun — the ONE pluralization for the
-    /// app, so no rendered count reads "1 checks" or "1 step(s)". Matches the
-    /// Python `receipt.plural` helper word-for-word (the one-vocabulary rule).
-    static func plural(_ count: Int, _ singular: String, _ pluralForm: String? = nil) -> String {
-        "\(count) \(count == 1 ? singular : (pluralForm ?? singular + "s"))"
+    /// "1 session" / "3 sessions": every user-facing count carries a
+    /// correctly numbered noun. Pass `plural` for irregular nouns. Matches the
+    /// Python `agentacct.plural.count_noun` helper word-for-word (the
+    /// one-vocabulary rule).
+    static func count(_ n: Int, _ singular: String, _ plural: String? = nil) -> String {
+        "\(n) \(n == 1 ? singular : (plural ?? singular + "s"))"
     }
 
     /// The app-wide cost grammar (v10 rule 5 — every cost carries its basis):

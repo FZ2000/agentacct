@@ -1179,7 +1179,7 @@ struct UsageBreakdownTable: View {
         .accessibilityLabel(
             [
                 name,
-                bucket.sessions.map { "\($0) sessions" } ?? "sessions not reported",
+                bucket.sessions.map { Fmt.count($0, "session") } ?? "sessions not reported",
                 bucket.freshTokens.map { "\($0) fresh tokens" } ?? "tokens not reported",
                 share.map { "\(Fmt.percentShare($0)) of known fresh tokens" }
                     ?? "token share not reported",

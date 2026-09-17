@@ -878,7 +878,7 @@ private struct ReceiptActionSnapshotScene: View {
                 Rectangle().fill(Theme.hairline).frame(height: 1)
                 ReceiptActionsDigest(
                     synopsis: example.synopsis,
-                    relatedPathsText: example.pathCount.map { Fmt.plural($0, "related path") },
+                    relatedPathsText: example.pathCount.map { Fmt.count($0, "related path") },
                     sourceText: example.provenance == nil ? nil : "Hook-captured",
                     gaps: example.gaps
                 )

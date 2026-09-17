@@ -740,11 +740,11 @@ private struct WorksetTimeline: View {
         if let dur = WorksetFormat.duration(lane.durationSeconds) { parts.append(dur) }
         if let cost = WorksetFormat.laneCost(lane) { parts.append(cost) }
         if let tokens = lane.totalTokens, tokens > 0 { parts.append("\(tokens) tokens") }
-        if let calls = lane.toolCalls, calls > 0 { parts.append("\(calls) tool calls") }
-        if let steps = lane.steps, steps > 0 { parts.append("\(steps) steps") }
+        if let calls = lane.toolCalls, calls > 0 { parts.append(Fmt.count(calls, "tool call")) }
+        if let steps = lane.steps, steps > 0 { parts.append(Fmt.count(steps, "step")) }
         if let checks = lane.checks, checks > 0 {
             let failed = lane.checksFailed ?? 0
-            parts.append(failed > 0 ? "\(checks) checks, \(failed) failed" : "\(checks) checks")
+            parts.append(failed > 0 ? "\(Fmt.count(checks, "check")), \(failed) failed" : Fmt.count(checks, "check"))
         }
         return parts.joined(separator: ", ")
     }
@@ -1165,9 +1165,9 @@ private struct WorksetSessionRow: View {
         var parts = [lane.displayTitle, WorksetFormat.sourceLabel(lane.client ?? "unknown")]
         if isSubagent, let kind = lane.sessionKind { parts.append("\(kind) subagent") }
         if let status = lane.status { parts.append(status) }
-        if let steps = lane.steps, steps > 0 { parts.append("\(steps) steps") }
-        if let failed = lane.checksFailed, failed > 0 { parts.append("\(failed) failed checks") }
-        else if let checks = lane.checks, checks > 0 { parts.append("\(checks) checks") }
+        if let steps = lane.steps, steps > 0 { parts.append(Fmt.count(steps, "step")) }
+        if let failed = lane.checksFailed, failed > 0 { parts.append(Fmt.count(failed, "failed check")) }
+        else if let checks = lane.checks, checks > 0 { parts.append(Fmt.count(checks, "check")) }
         if let cost = WorksetFormat.laneCost(lane) { parts.append(cost) }
         if let tokens = lane.totalTokens, tokens > 0 { parts.append("\(UsageTotals.compact(tokens)) tokens") }
         if let dur = WorksetFormat.duration(lane.durationSeconds) { parts.append(dur) }

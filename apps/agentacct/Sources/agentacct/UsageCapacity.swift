@@ -249,7 +249,7 @@ struct UsageCapacityRow: Identifiable {
         if let usage {
             parts.append("last \(days) days")
             parts.append(usage.freshTokens.map { "\($0) fresh tokens" } ?? "tokens not reported")
-            parts.append(usage.sessions.map { "\($0) sessions" } ?? "sessions not reported")
+            parts.append(usage.sessions.map { Fmt.count($0, "session") } ?? "sessions not reported")
             parts.append(UsageCostPresentation(bucket: usage).accessibilityText)
         } else {
             parts.append(usageLoaded
@@ -560,7 +560,7 @@ private struct UsageCapacityLedgerRow: View {
                         .foregroundStyle(usage.freshTokens == nil ? Theme.muted : Theme.ink)
                     Text("fresh tokens").workFont(.caption).foregroundStyle(Theme.muted)
                 }
-                Text(usage.sessions.map { "\($0) sessions" } ?? "Sessions not reported")
+                Text(usage.sessions.map { Fmt.count($0, "session") } ?? "Sessions not reported")
                     .workFont(.dataSmall).foregroundStyle(Theme.muted)
                 let cost = UsageCostPresentation(bucket: usage)
                 VStack(alignment: .leading, spacing: 4) {

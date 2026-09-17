@@ -34,13 +34,13 @@ from .display_vocabulary import (
     source_label,
     timeline_lane_label,
 )
+from .plural import count_noun
 from .receipt import (
     PROVENANCE_LEGEND,
     check_tally_text,
     evidence_coverage_headline,
     evidence_coverage_ledger,
     plan_share_headline,
-    plural,
     receipt_category_text,
     receipt_cost_text,
 )
@@ -110,7 +110,7 @@ def receipt_dimension_rows(receipt: Mapping[str, Any]) -> list[tuple[str, str, s
         for part in (
             _text(actors.get("primary_agent")) or None,
             ", ".join(str(m) for m in (actors.get("models") or [])) or None,
-            (plural(int(actors.get("subagent_session_count") or 0), "subagent") if actors.get("subagent_session_count") else None),
+            (count_noun(int(actors.get("subagent_session_count") or 0), "subagent") if actors.get("subagent_session_count") else None),
         )
         if part
     ) or "no agent recorded"
@@ -118,7 +118,7 @@ def receipt_dimension_rows(receipt: Mapping[str, Any]) -> list[tuple[str, str, s
     actions = dims.get("actions", {}) if isinstance(dims.get("actions"), Mapping) else {}
     actions_summary = receipt_actions_text(actions)
     if int(actions.get("command_count") or 0):
-        actions_summary += f" · ran {plural(int(actions.get('command_count') or 0), 'command')}"
+        actions_summary += f" · ran {count_noun(int(actions.get('command_count') or 0), 'command')}"
 
     cost = dims.get("cost", {}) if isinstance(dims.get("cost"), Mapping) else {}
     evidence = dims.get("evidence", {}) if isinstance(dims.get("evidence"), Mapping) else {}
@@ -166,7 +166,7 @@ def receipt_actions_text(actions: Mapping[str, Any]) -> str:
     count = actions.get("touched_file_count")
     paths = _text(actions.get("related_paths_text"))
     if not paths and isinstance(count, int) and count > 0:
-        paths = f"touched {plural(count, 'file')}"
+        paths = f"touched {count_noun(count, 'file')}"
     return f"{head} · {paths}" if paths else head
 
 

@@ -843,7 +843,7 @@ struct NativeSetupFlow: View {
             }
             .padding(.top, Space.m)
         } label: {
-            Text("\(isRecovery ? (recoveryKind == .synchronization ? "Recovery" : "Reconnect") : "Setup") output · \(Fmt.plural(activeLog.count, "line"))").workFont(.rowLabel).foregroundStyle(Theme.ink)
+            Text("\(isRecovery ? (recoveryKind == .synchronization ? "Recovery" : "Reconnect") : "Setup") output · \(Fmt.count(activeLog.count, "line"))").workFont(.rowLabel).foregroundStyle(Theme.ink)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("setup-output")

@@ -891,7 +891,6 @@ def test_plan_share_headline_is_calibrated_or_nothing() -> None:
 # gap, and a time-bounded proof claim. These assert the line degrades honestly.
 
 from agentacct.receipt import (  # noqa: E402
-    plural,
     verdict_gap_line,
     verdict_headline,
     verdict_health_window,
@@ -1002,11 +1001,10 @@ def test_list_summary_and_full_receipt_word_the_verdict_identically() -> None:
     assert full == row
 
 
-def test_plural_inflects_and_matches_the_one_vocabulary_rule() -> None:
-    assert plural(1, "step") == "1 step"
-    assert plural(0, "step") == "0 steps"
-    assert plural(3, "check") == "3 checks"
-    assert plural(2, "octopus", "octopuses") == "2 octopuses"
+# The pluralization helper itself is ``agentacct.plural.count_noun`` and is unit
+# tested in ``tests/test_plural.py`` (singular/zero/plural, an explicit irregular
+# form, and compound nouns). What stays here is the receipt-level guarantee that
+# no rendered surface leaks the ungrammatical counting copy.
 
 
 def test_no_rendered_receipt_leaks_the_paren_s_or_one_checks_bug() -> None:

@@ -219,7 +219,7 @@ func workBrowseCountText(
     if total < loaded {
         return "\(loadedCount) · \(total) total reported"
     }
-    return "\(visible) of \(total) tasks"
+    return "\(visible) of \(Fmt.count(total, "task"))"
 }
 
 func workReceiptRefreshError(

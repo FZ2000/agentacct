@@ -572,7 +572,7 @@ struct WorkTimeCanvas: View {
         let failureLines = (failures > 0 || resolved > 0) ? 1 : 0
         let budget = Self.clusterContentLines - failureLines - (sessionCount > 1 ? 1 : 0)
         let named = members.count <= budget ? members.count : max(0, budget - 1)
-        Text("\(members.count) records").workFont(.rowLabel).foregroundStyle(Theme.ink)
+        Text(Fmt.count(members.count, "record")).workFont(.rowLabel).foregroundStyle(Theme.ink)
         if failures > 0 {
             Label("\(failures) failed", systemImage: "exclamationmark.circle")
                 .workFont(.caption).foregroundStyle(Theme.coral).lineLimit(1)

@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .display_vocabulary import COMMAND_STATE_AGENT_RECORDED, FAILED_CHECK_RESULTS
-from .receipt import plural
+from .plural import count_noun
 from .confidence import (
     normalize_cost_basis,
     normalize_cost_confidence,
@@ -1798,11 +1798,11 @@ _ATTENTION_GROUP_NEXT_STEPS = {
 # is a callable of the count so "1 usage row has no work context" reads correctly
 # instead of "1 usage row(s) have no work context".
 _ATTENTION_GROUP_TITLES = {
-    "completed_without_strong_evidence": lambda n: f"{plural(n, 'completed work item')} without strong evidence",
-    "completed_evidenced_work_without_attributed_usage": lambda n: f"{plural(n, 'evidence-backed completed item')} with no attributed usage",
-    "ambiguous_same_session_attribution": lambda n: f"{plural(n, 'work item')} with ambiguous same-session usage",
-    "missing_client_session_id": lambda n: f"{plural(n, 'work item')} missing client_session_id",
-    "usage_truth_without_mcp_context": lambda n: f"{plural(n, 'usage row')} {'has' if n == 1 else 'have'} no work context",
+    "completed_without_strong_evidence": lambda n: f"{count_noun(n, 'completed work item')} without strong evidence",
+    "completed_evidenced_work_without_attributed_usage": lambda n: f"{count_noun(n, 'evidence-backed completed item')} with no attributed usage",
+    "ambiguous_same_session_attribution": lambda n: f"{count_noun(n, 'work item')} with ambiguous same-session usage",
+    "missing_client_session_id": lambda n: f"{count_noun(n, 'work item')} missing client_session_id",
+    "usage_truth_without_mcp_context": lambda n: f"{count_noun(n, 'usage row')} {'has' if n == 1 else 'have'} no work context",
 }
 
 ATTENTION_GROUP_EXAMPLE_LIMIT = 3
@@ -1860,7 +1860,7 @@ def build_attention_groups(
         group["title"] = (
             title_builder(group["count"])
             if title_builder
-            else f"{plural(group['count'], 'attention item')}: {group['cause']}"
+            else f"{count_noun(group['count'], 'attention item')}: {group['cause']}"
         )
     return {"groups": groups, "total_items": len(attention_items)}
 

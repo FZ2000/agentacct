@@ -44,6 +44,7 @@ from textual.screen import ModalScreen
 from textual.theme import Theme
 from textual.widgets import ContentSwitcher, DataTable, Footer, Input, ListItem, ListView, Static
 
+from .plural import count_noun
 from .service import SentinelService
 from .display_vocabulary import (
     ATTENTION_OPEN_ACTION,
@@ -2754,7 +2755,7 @@ def _workset_detail_markup(card: dict, pal: dict[str, str], width: int = 140, *,
 
     notes: list[str] = []
     if tl["hidden_by_window"]:
-        notes.append(f"[{pal['dim']}]{tl['hidden_by_window']} session(s) outside this range — zoom out (−) to see them.[/]")
+        notes.append(f"[{pal['dim']}]{count_noun(int(tl['hidden_by_window']), 'session')} outside this range — zoom out (−) to see them.[/]")
     if tl["hidden"]:
         notes.append(f"[{pal['dim']}]Showing {tl['shown']} rows in view — zoom into a range to see the rest.[/]")
     if tl["timeless"]:
@@ -2865,7 +2866,7 @@ def _build_dashboard_parts(
         act = _humanize_ago(summaries[0].get("last_activity_at"), now)
         working_sub = " · ".join(p for p in (proj, (f"activity {act}" if act != "—" else "")) if p)
     rail_blocks = [_rail_block(
-        "Working now", f"{active} active session(s)",
+        "Working now", count_noun(int(active), "active session"),
         working_sub or ("in progress" if active else "none in progress right now"), pal)]
     rail_blocks.append(_capacity_block(limits, pal))
     if snap is not None:
@@ -3474,7 +3475,7 @@ def _build_steps_parts(receipt: dict, checks: list[dict], pal: dict[str, str], w
                 body.append(tl["axis"])
             tail_notes = []
             if tl["hidden"]:
-                tail_notes.append(f"{tl['hidden']} earlier event(s) not shown")
+                tail_notes.append(f"{count_noun(int(tl['hidden']), 'earlier event')} not shown")
             if tl["timeless"]:
                 tail_notes.append(f"{tl['timeless']} with no recorded time (faded at start)")
             if tail_notes:

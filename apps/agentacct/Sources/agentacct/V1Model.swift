@@ -2356,8 +2356,8 @@ struct ReceiptCheckRunsPresentation {
                 headerText = rowText
             } else {
                 value = "Not reported"
-                qualifier = "passes unavailable · \(Fmt.plural(total, "check"))" + Self.failedSuffix(failed)
-                rowText = "passes not reported · \(Fmt.plural(total, "check"))" + Self.failedSuffix(failed)
+                qualifier = "passes unavailable · \(Fmt.count(total, "check"))" + Self.failedSuffix(failed)
+                rowText = "passes not reported · \(Fmt.count(total, "check"))" + Self.failedSuffix(failed)
                 headerText = "passes not reported · \(total) total" + Self.failedSuffix(failed)
             }
         } else if total == 0 {

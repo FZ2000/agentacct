@@ -128,6 +128,7 @@ from .display_vocabulary import (
     RELATED_PATHS_DEFINITION,
 )
 from .task_intelligence import build_task_intelligence
+from .plural import count_noun
 from .task_outcome import (
     EVIDENCE_GRADE_RANK,
     GRADE_CLAIMED,
@@ -262,17 +263,6 @@ def _items(task: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
-
-
-def plural(count: int, singular: str, plural_form: str | None = None) -> str:
-    """``count`` + the correctly-inflected noun — the ONE pluralization shared by
-    every Python receipt surface, so no rendered count reads "1 step(s)" or
-    "1 checks". ``plural(1, "step") -> "1 step"``; ``plural(3, "step") -> "3
-    steps"``; irregulars pass an explicit ``plural_form``. Matches the Swift
-    ``Fmt.plural`` helper word-for-word (the M1 one-vocabulary rule)."""
-
-    noun = singular if count == 1 else (plural_form or f"{singular}s")
-    return f"{count} {noun}"
 
 
 # The Actions dimension already CAPTURES every touched artifact path; surfaces
@@ -1093,7 +1083,7 @@ def evidence_unproven_parts(evidence: Mapping[str, Any]) -> list[str]:
     if not unchecked:
         return []
     return [
-        f"{plural(unchecked, 'completed step')} {UNCHECKED_STEP_WORDS}"
+        f"{count_noun(unchecked, 'completed step')} {UNCHECKED_STEP_WORDS}"
         f"{_subagent_suffix(evidence, 'unchecked')}"
     ]
 
@@ -1108,20 +1098,20 @@ def evidence_ledger_parts(evidence: Mapping[str, Any]) -> list[str]:
     parts: list[str] = []
     not_run = int(evidence.get("checks_not_run") or 0)
     if not_run:
-        parts.append(f"{plural(not_run, 'check')} {CHECK_NOT_RUN_WORDS}")
+        parts.append(f"{count_noun(not_run, 'check')} {CHECK_NOT_RUN_WORDS}")
     still_open = int(evidence.get("still_open") or 0)
     if "still_open" not in evidence:
         # An older payload without the split buckets: every non-success step.
         still_open = int(evidence.get("open_or_incomplete") or 0)
     if still_open:
-        parts.append(f"{plural(still_open, 'step')} {STILL_OPEN_WORDS}{_subagent_suffix(evidence, 'still_open')}")
+        parts.append(f"{count_noun(still_open, 'step')} {STILL_OPEN_WORDS}{_subagent_suffix(evidence, 'still_open')}")
     for status, words in STOP_LABELS.items():
         count = int(evidence.get(f"stopped_{status}") or 0)
         if count:
-            parts.append(f"{plural(count, 'step')} {words}{_subagent_suffix(evidence, f'stopped_{status}')}")
+            parts.append(f"{count_noun(count, 'step')} {words}{_subagent_suffix(evidence, f'stopped_{status}')}")
     unattributed = int(evidence.get("unattributed_checks") or 0)
     if unattributed:
-        parts.append(f"{plural(unattributed, 'check')} {UNLINKED_CHECK_WORDS}")
+        parts.append(f"{count_noun(unattributed, 'check')} {UNLINKED_CHECK_WORDS}")
     not_checkable = int(evidence.get("not_checkable") or 0)
     if not_checkable:
         parts.append(
@@ -1173,7 +1163,7 @@ def check_tally_parts(evidence: Mapping[str, Any]) -> list[str]:
         parts.append(f"{superseded} superseded")
     earlier = int(evidence.get("checks_earlier_failed") or 0)
     if earlier:
-        parts.append(f"{plural(earlier, 'earlier run')} failed")
+        parts.append(f"{count_noun(earlier, 'earlier run')} failed")
     return parts
 
 
@@ -1245,7 +1235,7 @@ def evidence_display_fields(evidence: Mapping[str, Any]) -> dict[str, Any]:
         "check_runs_state": runs_state,
         # ``2 checks could not run`` — the named gap as its own phrase for a
         # surface that states it beside (never inside) the failure count.
-        "checks_not_run_text": f"{plural(not_run, 'check')} {CHECK_NOT_RUN_WORDS}" if not_run else None,
+        "checks_not_run_text": f"{count_noun(not_run, 'check')} {CHECK_NOT_RUN_WORDS}" if not_run else None,
     }
 
 
@@ -2202,10 +2192,10 @@ def _evidence_dimension(checks: list[Mapping[str, Any]], strength: Mapping[str, 
     unchecked_steps = int((strength.get("by_tier") or {}).get("unchecked") or 0)
     if unchecked_steps:
         have = "has" if unchecked_steps == 1 else "have"
-        gaps.append(f"{plural(unchecked_steps, 'completed step')} {have} no linked passing check.")
+        gaps.append(f"{count_noun(unchecked_steps, 'completed step')} {have} no linked passing check.")
     not_run = int(strength.get("checks_not_run") or 0)
     if not_run:
-        gaps.append(f"{plural(not_run, 'check')} {CHECK_NOT_RUN_WORDS}, so {'it proves' if not_run == 1 else 'they prove'} nothing.")
+        gaps.append(f"{count_noun(not_run, 'check')} {CHECK_NOT_RUN_WORDS}, so {'it proves' if not_run == 1 else 'they prove'} nothing.")
     # The rows are mutated in place by both passes below, so shape them once
     # here rather than handing two passes two different copies.
     rows = [dict(check) for check in checks]
@@ -2477,7 +2467,7 @@ def _roll_up_gaps(
     if unlinked:
         add(
             "actors",
-            f"{plural(unlinked, 'work item')} could not be tied to an exact session.",
+            f"{count_noun(unlinked, 'work item')} could not be tied to an exact session.",
             code=GAP_CODE_WORK_NOT_TIED_TO_SESSION,
         )
     for dimension, reason, code in _reviewer_gaps(dimensions, task):
@@ -3331,7 +3321,6 @@ __all__ = [
     "receipt_cost_text",
     "receipt_category_text",
     "plan_share_headline",
-    "plural",
     "verdict_headline",
     "verdict_gap_line",
     "verdict_health_window",

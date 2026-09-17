@@ -327,7 +327,7 @@ struct WorkTimelineView: View {
     private var clusterChooser: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                Text("\(clusterMembers.count) records").workFont(.titleCard)
+                Text(Fmt.count(clusterMembers.count, "record")).workFont(.titleCard)
                     .accessibilityFocused($accessibleEvidence, equals: "inspector")
                 Spacer()
                 Button("Zoom here") {
@@ -803,7 +803,7 @@ struct WorkTimelineView: View {
             VStack(alignment: .leading, spacing: 12) {
                 if !clusterMembers.isEmpty {
                     Button { navigation.view.selectedID = nil } label: {
-                        Label("Back to \(clusterMembers.count) records", systemImage: "chevron.left")
+                        Label("Back to \(Fmt.count(clusterMembers.count, "record"))", systemImage: "chevron.left")
                     }.buttonStyle(QuietButtonStyle(horizontalPadding: 8))
                     .accessibilityIdentifier("work.timeline.cluster.back")
                     .help("Return to the group member list")
