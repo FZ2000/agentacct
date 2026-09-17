@@ -54,6 +54,7 @@ from .display_vocabulary import (
     NOT_GRADEABLE_TEXT,
     STILL_OPEN_WORDS,
     STOP_LABELS,
+    TASK_GOAL_ABSENT,
     UNCHECKED_STEP_WORDS,
     UNLINKED_CHECK_WORDS,
     asserted_by_label,
@@ -103,11 +104,18 @@ from .display_vocabulary import (
     GAP_NO_CHANGE_DESCRIPTION,
     GAP_NO_COMMIT_RECORDED,
     LIFECYCLE_MARKER_TEXT,
+    NOT_CAPTURED_NOUNS,
     REVISION_NOT_CAPTURED,
+    TIER_LABELS,
     handoff_marker_line,
     actions_synopsis,
+    check_meta_line,
+    check_summary_preview,
+    checks_heading_line,
+    collapse_not_captured_keys,
     command_state_text,
     decision_group,
+    not_captured_line,
     gap_declared_paths_unobserved,
     gap_kind_label,
     gap_rank,
@@ -454,6 +462,7 @@ def _shape_check(
     name = check_display_name(check)
     result = _text(check.get("result")).lower() or "unknown"
     summary = check_display_summary(check)
+    summary_preview, summary_elided = check_summary_preview(summary)
     artifact_path_redacted = check.get("artifact_path_redacted") is True
     artifact_url_redacted = check.get("artifact_url_redacted") is True
     command_redacted = bool(check.get("command_redacted"))
@@ -504,6 +513,20 @@ def _shape_check(
             # the tone to a glyph/color and never switch on ``result``.
             "result_label": check_result_label(result),
             "result_tone": check_result_tone(result),
+            # ONE line for the row's four facts, composed HERE. Every surface
+            # printed ``result_label``, ``exit_code``, ``evidence_type`` and
+            # ``source_label`` as four separate words and punctuated them as
+            # four sentences -- ``Passed. Exit 0. test. Agent-reported`` -- which
+            # reads as four broken fragments rather than one line of four facts.
+            # ``_evidence_dimension`` REWRITES this without whatever it hoisted
+            # onto the section heading; this value is the un-hoisted default a
+            # lone row (or a surface that renders no heading) prints.
+            "meta_line": check_meta_line(
+                check_result_label(result),
+                _int_or_none(check.get("exit_code")),
+                _text(check.get("evidence_type")) or None,
+                source_label(_check_source(check)),
+            ),
             # A named disagreement between result and exit code (display
             # only; the recorded result is never re-graded).
             "note_text": check_result_note(result, check.get("exit_code")),
@@ -540,6 +563,13 @@ def _shape_check(
             # verbatim — None when it was absent or only restated
             # "<name>: <result>".
             "summary": summary,
+            # The summary cut where a SENTENCE ends, never mid-clause, and never
+            # before the clause that names the observed value against the
+            # expected one. ``summary`` stays verbatim beside it, so a surface
+            # offers the rest rather than losing it; ``summary_elided`` says
+            # whether there is a rest to offer.
+            "summary_preview": summary_preview,
+            "summary_elided": summary_elided,
             "files": files,
             "command_redacted": command_redacted,
             # WHICH command state this is, and its own sentence. An
@@ -570,8 +600,18 @@ def _shape_check(
             # that records before it commits, is the commit BEFORE the work.
             "revision": revision,
             "revision_label": revision_label(revision),
+            # Which ``evidence.revision_groups`` entry this row belongs to, and
+            # whether that entry's header already prints the label. Set by
+            # ``_group_checks_by_revision``; ``revision_label`` itself is kept on
+            # the row so a surface that renders no group header still has it.
+            "revision_group_index": None,
+            "revision_label_hoisted": False,
             # The self-proving contradiction: paths this check declared that do
-            # not exist at the revision it was stamped with.
+            # not exist at the revision it was stamped with. CLEARED on the row
+            # when several rows of one group carry the byte-identical sentence
+            # and the group banner states it once instead -- printing it per row
+            # is what put the same sentence verbatim on two rows of
+            # task_5f7dbea9.
             "revision_contradiction_text": revision_contradiction_text(
                 (revision or {}).get("commit"), absent_paths
             ),
@@ -1627,6 +1667,20 @@ _SESSION_IDENTITY_GAPS: dict[str, str] = {
 def _task_dimension(task: Mapping[str, Any], title: str) -> dict[str, Any]:
     objectives: list[str] = []
     seen: set[str] = set()
+    # The task-level GOAL, recorded once by the agent on the first section of a
+    # task (`task_goal`). It is not derivable from anything else on the record:
+    # `objectives` below is the list of SECTION TITLES, which are steps, and on
+    # most records objectives[0] is the Task title again. So the goal is read
+    # verbatim from whichever recorded section carried it, and a task with none
+    # says so — `goal_absent_text` is one of the two absences the record page's
+    # absence budget exempts, because a record with no stated purpose is one a
+    # reviewer should distrust.
+    goal: str | None = None
+    for item in _items(task):
+        candidate = _text(item.get("task_goal"))
+        if candidate:
+            goal = candidate
+            break
     for item in _items(task):
         objective = _text(item.get("objective") or item.get("title") or item.get("summary"))
         if objective and objective not in seen:
@@ -1634,6 +1688,7 @@ def _task_dimension(task: Mapping[str, Any], title: str) -> dict[str, Any]:
             objectives.append(objective)
     boundary = _boundary(task)
     gaps: list[str] = []
+    absences: list[dict[str, str]] = []
     if not objectives:
         gaps.append("No explicit objective was recorded for this Task.")
     # Gapped when the Task is not bound to a declared project or namespace (or
@@ -1642,15 +1697,19 @@ def _task_dimension(task: Mapping[str, Any], title: str) -> dict[str, Any]:
         boundary["identity_scope"] == "unscoped" or boundary["project_identity_state"] == "conflicting"
     ):
         gaps.append(boundary["gap_text"])
+        absences.append({"key": "project", "text": boundary["gap_text"]})
     provenance = [SOURCE_MCP] if objectives else []
     if boundary["session_count"]:
         provenance.append(session_identity_source(task))
     return {
         "title": title,
+        "goal": goal,
+        "goal_absent_text": None if goal else TASK_GOAL_ABSENT,
         "objectives": objectives,
         "boundary": boundary,
         "provenance": sorted(set(provenance)) or [SOURCE_NONE],
         "gaps": gaps,
+        "absences": absences,
     }
 
 
@@ -1660,14 +1719,17 @@ def _actors_dimension(task: Mapping[str, Any], intelligence: Mapping[str, Any]) 
     primary = next((lane for lane in lanes if isinstance(lane, Mapping) and lane.get("role") == "primary"), None)
     supporting = [lane for lane in lanes if isinstance(lane, Mapping) and lane.get("role") == "supporting"]
     gaps: list[str] = []
+    absences: list[dict[str, str]] = []
     if not models:
         gaps.append("No model was observed for this Task's usage.")
+        absences.append({"key": "model", "text": gaps[-1]})
     if supporting and not any(lane.get("session_kinds") for lane in supporting):
         gaps.append("Subagent roles were not scanned, so supporting sessions show as counts only.")
     session_count = int(task.get("session_count") or 0)
     source = session_identity_source(task) if session_count or lanes else SOURCE_NONE
     if source in _SESSION_IDENTITY_GAPS:
         gaps.append(_SESSION_IDENTITY_GAPS[source])
+        absences.append({"key": "session_identity", "text": gaps[-1]})
     return {
         "primary_agent": _text(primary.get("client")) if isinstance(primary, Mapping) else None,
         "models": models,
@@ -1677,6 +1739,7 @@ def _actors_dimension(task: Mapping[str, Any], intelligence: Mapping[str, Any]) 
         "child_session_count": int(task.get("child_count") or 0),
         "provenance": [source],
         "gaps": gaps,
+        "absences": absences,
     }
 
 
@@ -1820,6 +1883,7 @@ def _actions_dimension(task: Mapping[str, Any]) -> dict[str, Any]:
             touched.append(path)
     provenance: list[str] = []
     gaps: list[str] = []
+    absences: list[dict[str, str]] = []
     tool_calls_label = receipt_field_label("actions")
     if touched:
         provenance.append(SOURCE_MCP)
@@ -1843,10 +1907,12 @@ def _actions_dimension(task: Mapping[str, Any]) -> dict[str, Any]:
         provenance.extend(capture_bases or [SOURCE_HOOK])
     elif capture_bases:
         gaps.append(f"A capture basis ran but recorded no tool calls; the {tool_calls_label} row shows none.")
+        absences.append({"key": "tool_calls", "text": gaps[-1]})
     else:
         gaps.append(
             f"Tool categories were not instrumented for this session; the {tool_calls_label} row shows related paths only."
         )
+        absences.append({"key": "tool_calls", "text": gaps[-1]})
     # Compute the capped preview + disclosed overflow ONCE, here, so every surface
     # (CLI, TUI, and the macOS app) renders the daemon-provided slice and never
     # re-derives the cap client-side — the single source of truth for the cap.
@@ -1908,6 +1974,7 @@ def _actions_dimension(task: Mapping[str, Any]) -> dict[str, Any]:
         "commands_elided": commands_elided,
         "provenance": sorted(set(provenance)) or [SOURCE_NONE],
         "gaps": gaps,
+        "absences": absences,
     }
 
 
@@ -1922,6 +1989,7 @@ def _cost_dimension(task: Mapping[str, Any]) -> dict[str, Any]:
         {"estimated_cost_usd": estimated, "cost_complete": cost_complete, "rows": rows}
     )
     gaps: list[str] = []
+    absences: list[dict[str, str]] = []
     # One state per Task: a complete estimate is not a gap (its basis rides
     # cost_basis / cost_confidence); "incomplete" is said only when a priced
     # subtotal exists, and absence is named on its own.
@@ -1929,8 +1997,19 @@ def _cost_dimension(task: Mapping[str, Any]) -> dict[str, Any]:
         gaps.append("Cost is incomplete: some usage rows are unpriced or excluded.")
     elif state == "unpriced":
         gaps.append("Usage was recorded for this Task, but none of it was priced.")
+        absences.append({"key": "cost", "text": gaps[-1]})
     elif state == "no_usage":
         gaps.append("No usage was recorded for this Task.")
+        absences.append({"key": "cost", "text": gaps[-1]})
+    # The weekly-plan share has no gap SENTENCE of its own (its absence is a
+    # named state on the row the record page deletes), so it joins the budget
+    # from its own calibrated-or-nothing state rather than from a gap. When cost
+    # itself is absent this key is subsumed and never reaches the line.
+    plan_share = _mapping(task.get("plan_share")) or None
+    if plan_share is not None and plan_share.get("pct") is None:
+        share_text = _text(plan_share.get("sentence_text")) or plan_share_headline(plan_share)
+        if share_text:
+            absences.append({"key": "weekly_plan_share", "text": share_text})
     cost_fields = cost_display_fields(
         {
             "estimated_cost_usd": estimated,
@@ -1958,7 +2037,158 @@ def _cost_dimension(task: Mapping[str, Any]) -> dict[str, Any]:
         },
         "provenance": [SOURCE_CLIENT_LOG] if rows else [SOURCE_NONE],
         "gaps": gaps,
+        "absences": absences,
     }
+
+
+#: How the check rows were grouped for the record page. ``revision`` is the
+#: preferred grouping; ``time_order`` is the fallback taken when it would split a
+#: fail -> pass recovery across two groups.
+#: Both names are spelled as MODES rather than as the axis they group on, so a
+#: surface literal that happens to be the payload key ``revision`` can never be
+#: mistaken for a surface deciding the grouping.
+CHECK_GROUPING_BY_REVISION = "by_revision"
+CHECK_GROUPING_TIME_ORDER = "time_order"
+
+
+def _group_checks_by_revision(checks: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """``(mode, groups)`` -- the check rows partitioned so the stamped revision
+    prints ONCE per group instead of once per row, and the revision
+    contradiction once per group instead of once per row.
+
+    Grouping by revision is preferred: on task_5f7dbea9 it takes
+    ``HEAD when recorded: c41d44f`` from four prints of two distinct values down
+    to two. It is taken ONLY when no supersession pair would be split across two
+    groups, because ``WorkRecordChecks``' own contract is that a fail -> pass
+    recovery reads as two ADJACENT rows -- a grouping that files the failure
+    under one commit and its fix under another destroys exactly the story the
+    rows exist to tell. When a pair would be split, the fallback is strict time
+    order with the label hoisted only over RUNS of adjacent rows sharing a value.
+
+    That choice is made HERE, in the reducer, and shipped as
+    ``evidence.revision_groups``: a surface that guessed it would be a second
+    grouping vocabulary, and two surfaces guessing differently would group the
+    same record two ways.
+
+    ``groups`` fully determines both the grouping and the row order: walking the
+    groups and their ``event_ids`` in order yields every row exactly once.
+    """
+
+    if not checks:
+        return CHECK_GROUPING_BY_REVISION, []
+
+    def commit_of(check: Mapping[str, Any]) -> str:
+        return _text((check.get("revision") or {}).get("commit"))
+
+    # Rows in strict time order first. The payload's own row order is per check
+    # IDENTITY (every run of one check together), which reads as alphabetical
+    # noise on a page; grouping settles the render order, so it settles it
+    # temporally in BOTH modes.
+    in_time_order = [
+        check for _, check in sorted(enumerate(checks), key=lambda pair: (_number(pair[1].get("at")), pair[0]))
+    ]
+
+    # Candidate grouping: distinct stamped commit, each group in time order and
+    # the groups themselves ordered by when their first row happened. A row with
+    # no stamp joins the single unstamped group -- "not captured" is one state,
+    # not one state per row.
+    order: list[str] = []
+    partition: dict[str, list[dict[str, Any]]] = {}
+    for check in in_time_order:
+        key = commit_of(check)
+        if key not in partition:
+            order.append(key)
+            partition[key] = []
+        partition[key].append(check)
+
+    # Would that split a recovery? Both directions of the supersession link are
+    # on the row, so the test is exact rather than heuristic.
+    by_event = {_text(check.get("event_id")): check for check in checks if _text(check.get("event_id"))}
+    splits = False
+    for check in checks:
+        for field in ("superseded_by_event_id", "supersedes_check_event_id"):
+            other = by_event.get(_text(check.get(field)))
+            if other is not None and commit_of(other) != commit_of(check):
+                splits = True
+                break
+        if splits:
+            break
+
+    if splits:
+        mode = CHECK_GROUPING_TIME_ORDER
+        runs: list[list[dict[str, Any]]] = []
+        for check in in_time_order:
+            if runs and commit_of(runs[-1][0]) == commit_of(check):
+                runs[-1].append(check)
+            else:
+                runs.append([check])
+        grouped = runs
+    else:
+        mode = CHECK_GROUPING_BY_REVISION
+        grouped = [partition[key] for key in order]
+
+    groups: list[dict[str, Any]] = []
+    for index, rows in enumerate(grouped):
+        head = rows[0]
+        # The banner is earned only by a DUPLICATE: one row's own sentence is
+        # already stated once, and lifting it off a single row buys no ink while
+        # costing the row the sentence.
+        texts = [_text(row.get("revision_contradiction_text")) for row in rows]
+        shared = (
+            texts[0]
+            if len(rows) > 1 and texts[0] and all(text == texts[0] for text in texts)
+            else None
+        )
+        for row in rows:
+            row["revision_group_index"] = index
+            row["revision_label_hoisted"] = True
+            if shared:
+                row["revision_contradiction_text"] = None
+        groups.append(
+            {
+                "revision": head.get("revision"),
+                # The group header, verbatim from the row vocabulary -- never a
+                # second wording of the same stamp.
+                "label": _text(head.get("revision_label")) or REVISION_NOT_CAPTURED,
+                "event_ids": [_text(row.get("event_id")) for row in rows],
+                "row_count": len(rows),
+                # 0 or 1 banner. None when the rows disagree: a merged sentence
+                # covering two different contradictions would be a second
+                # vocabulary, so each row keeps its own instead.
+                "contradiction_text": shared,
+            }
+        )
+    return mode, groups
+
+
+def _hoist_check_meta(checks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Lift the check facts that are IDENTICAL on every row off the rows and onto
+    the section heading, then rewrite each row's ``meta_line`` without them.
+
+    On task_5f7dbea9 ``test`` and ``Agent-reported`` are the same on all four
+    rows -- six prints of two facts -- and hoisting them leaves
+    ``Failed · Exit 1`` / ``Passed · Exit 0``. Only the type and the source are
+    ever hoisted: the result and the exit code are what DISTINGUISHES one row
+    from another, so a record whose rows all passed still states it per row.
+    """
+
+    def uniform(field: str) -> str | None:
+        values = {_text(check.get(field)) for check in checks}
+        if len(values) != 1:
+            return None
+        only = values.pop()
+        return only or None
+
+    evidence_type = uniform("evidence_type") if checks else None
+    source = uniform("source_label") if checks else None
+    for check in checks:
+        check["meta_line"] = check_meta_line(
+            check.get("result_label"),
+            check.get("exit_code"),
+            None if evidence_type else (_text(check.get("evidence_type")) or None),
+            None if source else (_text(check.get("source_label")) or None),
+        )
+    return {"evidence_type": evidence_type, "source_label": source}
 
 
 def _evidence_dimension(checks: list[Mapping[str, Any]], strength: Mapping[str, Any]) -> dict[str, Any]:
@@ -1976,8 +2206,29 @@ def _evidence_dimension(checks: list[Mapping[str, Any]], strength: Mapping[str, 
     not_run = int(strength.get("checks_not_run") or 0)
     if not_run:
         gaps.append(f"{plural(not_run, 'check')} {CHECK_NOT_RUN_WORDS}, so {'it proves' if not_run == 1 else 'they prove'} nothing.")
+    # The rows are mutated in place by both passes below, so shape them once
+    # here rather than handing two passes two different copies.
+    rows = [dict(check) for check in checks]
+    hoisted = _hoist_check_meta(rows)
+    grouping_mode, revision_groups = _group_checks_by_revision(rows)
     return {
-        "checks": list(checks),
+        "checks": rows,
+        # The evidence section's ONE heading line: the tally, the tier stated
+        # here and nowhere else on the page, then whichever of the source and
+        # the type was uniform enough to lift off every row.
+        "heading_line": checks_heading_line(
+            strength.get("check_tally_text"),
+            TIER_LABELS.get(_text(strength.get("strongest_tier"))) if strength.get("gradeable") else None,
+            hoisted["source_label"],
+            hoisted["evidence_type"],
+        )
+        or None,
+        # What the heading line took OFF the rows, so a surface can tell a
+        # hoisted absence from a fact that was never recorded.
+        "hoisted_source_label": hoisted["source_label"],
+        "hoisted_evidence_type": hoisted["evidence_type"],
+        "revision_grouping_mode": grouping_mode,
+        "revision_groups": revision_groups,
         "checks_total": int(strength.get("checks_total") or 0),
         "checks_passed": int(strength.get("checks_passed") or 0),
         "checks_failed": int(strength.get("checks_failed") or 0),
@@ -1989,6 +2240,10 @@ def _evidence_dimension(checks: list[Mapping[str, Any]], strength: Mapping[str, 
         "check_runs_state": strength.get("check_runs_state"),
         "provenance": sources or [SOURCE_NONE],
         "gaps": gaps,
+        # This dimension's budgeted absences all arrive as REVIEWER gaps (no
+        # commit recorded, unordered file operations), which are appended after
+        # the dimensions are built; see ``_ABSENCE_KEY_BY_GAP_CODE``.
+        "absences": [],
     }
 
 
@@ -2029,6 +2284,10 @@ def _outcome_dimension(
         **_outcome_next_step(items, _text(decision.get("key"))),
         "provenance": [_asserted_by_source(asserted_by, checks)],
         "gaps": gaps,
+        # No terminal outcome is a MISSING DECISION, not an uncaptured
+        # measurement: it belongs in the decision axis the page leads with, never
+        # collapsed into the tail's not-captured line.
+        "absences": [],
     }
     # Detail-line facts (#3), surfaced ONLY when the Task went quiet
     # (inactive / mostly_done): ``quiet_since`` = this Task's newest event (when it
@@ -2078,14 +2337,82 @@ def _outcome_next_step(items: list[Mapping[str, Any]], decision_key: str) -> dic
 
 # --- Roll-ups (dimensions 7 & 8) ---------------------------------------------
 
+#: Reviewer gaps that are ALSO a named absence of something the record could
+#: have captured, and therefore belong on the one absence line. Keyed by gap
+#: CODE, never by sentence: a code is a typed fact the reducer already emits,
+#: while matching on a sentence would put the vocabulary in two files and let
+#: them drift.
+#:
+#: The reviewer gaps NOT listed here stay full sentences and are deliberately
+#: outside the budget -- ``no_change_description``, ``subagents_recorded_no_work``
+#: and ``declared_paths_unobserved`` each name something the record HAS and
+#: contradicts, not something it failed to measure, and a noun could not carry
+#: them.
+_ABSENCE_KEY_BY_GAP_CODE: dict[str, str] = {
+    GAP_CODE_NO_COMMIT: "revision",
+    GAP_CODE_FILE_OPERATIONS_UNORDERED: "tool_call_order",
+}
+
+
+def _absence_budget(items: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """The record's ONE collapsed absence statement, plus the detail behind it.
+
+    Absence stays a NAMED state -- every sentence survives, in ``detail`` -- but
+    it collapses to one line. Measured on task_5f7dbea9 the tail was eight
+    statements of which six were "we do not know"; those six are now four nouns
+    on one line with a disclosure.
+
+    Composed HERE so no surface decides which absences are "the same one": two
+    surfaces collapsing the set differently would be two vocabularies.
+    ``line`` is None on an empty budget and the surface prints NOTHING -- a
+    record knows what it failed to capture, never that it captured everything.
+    """
+
+    detail: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        key = _text(item.get("absence_key"))
+        if not key or key not in NOT_CAPTURED_NOUNS or key in seen:
+            continue
+        seen.add(key)
+        detail.append(
+            {
+                "key": key,
+                "noun": NOT_CAPTURED_NOUNS[key],
+                # The full sentence stays the gap's own words, so the disclosure
+                # and the gap list can never say different things.
+                "text": _text(item.get("reason")),
+            }
+        )
+    keys = collapse_not_captured_keys(list(seen))
+    # Declaration order for the detail too, so the disclosure reads in the same
+    # order as the line it opens.
+    order = list(NOT_CAPTURED_NOUNS)
+    detail.sort(key=lambda row: order.index(row["key"]))
+    return {
+        "line": not_captured_line(keys),
+        "keys": keys,
+        "detail": detail,
+        "detail_count": len(detail),
+    }
+
+
 def _roll_up_gaps(
     dimensions: Mapping[str, Mapping[str, Any]],
     coverage: list[Mapping[str, Any]],
     task: Mapping[str, Any],
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
+    # Budgeted absences that are NOT gaps of their own; see the loop below.
+    budget_only: list[dict[str, Any]] = []
 
-    def add(dimension: str, reason: str, kind: str | None = None, code: str | None = None) -> None:
+    def add(
+        dimension: str,
+        reason: str,
+        kind: str | None = None,
+        code: str | None = None,
+        absence_key: str | None = None,
+    ) -> None:
         capture_shortfall = str(reason).startswith(GAP_CAPTURE_COVERAGE_PREFIX)
         resolved = kind or (
             GAP_KIND_BOOKKEEPING
@@ -2112,12 +2439,32 @@ def _roll_up_gaps(
                 # reviewer-facing ones nowhere.
                 "kind": resolved,
                 "kind_label": gap_kind_label(resolved),
+                # The noun this gap contributes to the ONE absence line, or None
+                # when the gap is a full sentence no noun could carry. The gap
+                # keeps its own sentence either way: the budget changes where
+                # absence is PRINTED, never whether it is named.
+                "absence_key": absence_key,
             }
         )
 
     for name, dimension in dimensions.items():
+        # Each dimension declares which of its gap sentences is a budgeted
+        # absence, at the site that appends the sentence, so the pairing is by
+        # construction rather than by matching text after the fact.
+        keyed = {
+            _text(entry.get("text")): _text(entry.get("key"))
+            for entry in (dimension.get("absences") or [])
+            if isinstance(entry, Mapping) and _text(entry.get("text"))
+        }
         for reason in dimension.get("gaps", []) or []:
-            add(name, reason)
+            add(name, reason, absence_key=keyed.pop(_text(reason), None) or None)
+        # An absence with no gap sentence of its own (the weekly plan share)
+        # still joins the budget, carrying its own named state as the detail. It
+        # is deliberately NOT appended to ``items``: it is already a named state
+        # on its own row, and listing it as a gap as well is exactly the
+        # duplication the budget exists to remove.
+        for text, key in keyed.items():
+            budget_only.append({"absence_key": key, "reason": text})
     # The coverage table (recorded / unavailable / not_recorded per dimension)
     # already ships as its own ``coverage`` block. Folding every non-recorded
     # row into gaps duplicated the per-dimension gaps and drowned the real,
@@ -2134,13 +2481,22 @@ def _roll_up_gaps(
             code=GAP_CODE_WORK_NOT_TIED_TO_SESSION,
         )
     for dimension, reason, code in _reviewer_gaps(dimensions, task):
-        add(dimension, reason, kind=GAP_KIND_BLOCKS_REVIEW, code=code)
+        add(
+            dimension,
+            reason,
+            kind=GAP_KIND_BLOCKS_REVIEW,
+            code=code,
+            absence_key=_ABSENCE_KEY_BY_GAP_CODE.get(code),
+        )
     # Reviewer-facing first, provenance bookkeeping last, and inside each kind
     # by what the gap prevents; insertion order holds inside a rank (``sort``
     # is stable), so two gaps of equal weight stay in reducer order.
     items.sort(key=lambda item: (0 if item["kind"] == GAP_KIND_BLOCKS_REVIEW else 1, item["rank"]))
     return {
         "items": items,
+        # The ONE collapsed absence statement plus its disclosure. Built from the
+        # very gap items above, so the line and the list cannot disagree.
+        "not_captured": _absence_budget([*items, *budget_only]),
         "count": len(items),
         "blocks_review_count": sum(1 for item in items if item["kind"] == GAP_KIND_BLOCKS_REVIEW),
         "bookkeeping_count": sum(1 for item in items if item["kind"] == GAP_KIND_BOOKKEEPING),
@@ -2937,6 +3293,8 @@ def session_start_index(tasks: list[Mapping[str, Any]]) -> dict[str, float]:
 
 __all__ = [
     "V1_ATTENTION_SCHEMA_VERSION",
+    "CHECK_GROUPING_BY_REVISION",
+    "CHECK_GROUPING_TIME_ORDER",
     "RECEIPT_SCHEMA_VERSION",
     "PROVENANCE_LEGEND",
     "EVIDENCE_TIER_LABEL",

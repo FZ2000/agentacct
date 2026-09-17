@@ -832,6 +832,179 @@ def test_v1_endpoints_return_exactly_the_receipt_reducers_output(tmp_path: Path)
 
 
 # --------------------------------------------------------------------------- #
+# the two composed lines have exactly ONE composer                              #
+# --------------------------------------------------------------------------- #
+
+# `not_captured_line()` and `check_meta_line()` compose text rather than label a
+# value, which is the shape a surface is most tempted to re-implement: joining
+# four fields with a separator looks like formatting, not vocabulary. These pin
+# the composition to display_vocabulary BEFORE any surface prints it, so the
+# second copy is caught at the moment someone writes it.
+#
+# The reducer NOW emits both (`dimensions.gaps.not_captured.line` and each
+# check's `meta_line`), so the emission itself is asserted below against every
+# scenario and against the HTTP lane. What is still NOT asserted, and named here
+# rather than left as a silent hole: the CLI, TUI and Markdown export continue to
+# print the per-dimension gap LIST rather than the collapsed line. That is a
+# deliberate difference of medium — a terminal render has no vertical budget to
+# defend — and when a surface does adopt the collapsed line it must print
+# `dimensions.gaps.not_captured.line` verbatim, never rebuild it, which is what
+# the two tests below already enforce.
+_VOCABULARY_MODULE = "display_vocabulary.py"
+_SURFACE_MODULES = ("cli.py", "tui.py", "receipt_markdown.py", "api.py", "receipt.py")
+
+
+def _string_literals(name: str) -> list[str]:
+    """Every string CONSTANT in one module — comments and identifiers excluded,
+    so a comment mentioning a phrase is never read as a surface spelling it."""
+
+    import ast
+
+    source = (Path(__file__).resolve().parent.parent / "src" / "agentacct" / name).read_text(
+        encoding="utf-8"
+    )
+    return [
+        node.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+
+
+def test_the_absence_budget_has_one_composer_and_no_surface_spells_it() -> None:
+    """One record's absence line and another's must be the same sentence for the
+    same set. A surface that spelled the prefix or a noun itself would be a
+    second budget with its own wording and its own order."""
+
+    from agentacct.display_vocabulary import (
+        NOT_CAPTURED_NOUNS,
+        NOT_CAPTURED_PREFIX,
+        not_captured_line,
+    )
+
+    assert NOT_CAPTURED_PREFIX in _string_literals(_VOCABULARY_MODULE)
+    # The nouns ARE the vocabulary. Only the multi-word ones are checked: a
+    # bare "cost" or "model" is a payload key everywhere in this codebase.
+    owned = {NOT_CAPTURED_PREFIX} | {noun for noun in NOT_CAPTURED_NOUNS.values() if " " in noun}
+    for module in _SURFACE_MODULES:
+        literals = set(_string_literals(module))
+        spelled = sorted(owned & literals)
+        assert not spelled, (
+            f"{module} spells {spelled} itself; print "
+            "display_vocabulary.not_captured_line() instead"
+        )
+    # The line is stable under caller order: two records with the same budget
+    # word it identically, which is the whole point of a declaration order.
+    keys = list(NOT_CAPTURED_NOUNS)[:3]
+    assert not_captured_line(keys) == not_captured_line(list(reversed(keys)))
+
+
+def test_the_check_meta_line_has_one_composer_and_one_separator() -> None:
+    """`Passed. Exit 0. test. Agent-reported` was four fragments punctuated as
+    four sentences. The replacement is ONE line, and the separator a reader (and
+    a wrapper) may break on is the vocabulary's, not a surface's."""
+
+    from agentacct.display_vocabulary import META_SEPARATOR, check_meta_line, checks_heading_line
+
+    assert META_SEPARATOR == " · "
+    line = check_meta_line("Passed", 0, "test", "Agent-reported")
+    assert line.count(META_SEPARATOR) == 3 and "." not in line
+    # Both composers use the same separator, so a hoisted field reads the same
+    # on the heading as it did on the row it left.
+    assert checks_heading_line("2/2 passed", "self-checked").count(META_SEPARATOR) == 1
+    # No surface may build the exit-code fragment itself.
+    for module in _SURFACE_MODULES:
+        spelled = [text for text in _string_literals(module) if text.strip() in {"Exit", "Exit {}"}]
+        assert not spelled, f"{module} composes an exit-code fragment itself: {spelled}"
+
+
+@pytest.mark.parametrize("name", SCENARIO_NAMES)
+def test_the_reducer_emits_both_composed_lines_for_every_scenario(name: str) -> None:
+    """Every check row ships its own ``meta_line`` and every record ships its
+    absence budget, so a surface never has four words and a separator to join.
+
+    The expected text is taken from the composers at assert time, so this cannot
+    become a fifth copy of the vocabulary.
+    """
+
+    from agentacct.display_vocabulary import (
+        check_meta_line,
+        collapse_not_captured_keys,
+        not_captured_line,
+    )
+
+    payload = _receipt(name)
+    evidence = payload["dimensions"]["evidence"]
+    hoisted_type = evidence["hoisted_evidence_type"]
+    hoisted_source = evidence["hoisted_source_label"]
+    for row in evidence["checks"]:
+        assert row["meta_line"] == check_meta_line(
+            row["result_label"],
+            row["exit_code"],
+            None if hoisted_type else row["evidence_type"],
+            None if hoisted_source else row["source_label"],
+        )
+        # A composed line, never a run of fragments punctuated as sentences.
+        assert ". " not in row["meta_line"]
+
+    budget = payload["dimensions"]["gaps"]["not_captured"]
+    assert budget["line"] == not_captured_line(budget["keys"])
+    assert budget["keys"] == collapse_not_captured_keys(
+        [row["key"] for row in budget["detail"]]
+    )
+    # Absence is never deleted to fit the line.
+    assert budget["detail_count"] == len(budget["detail"]) >= len(budget["keys"])
+
+
+@pytest.mark.parametrize("name", SCENARIO_NAMES)
+def test_the_revision_grouping_is_the_reducers_decision_not_a_surface_heuristic(
+    name: str,
+) -> None:
+    """The fail -> pass fallback has to be decided once. Two surfaces grouping the
+    same record two ways would be two grouping vocabularies, so the mode ships on
+    the payload and the groups cover every row exactly once."""
+
+    from agentacct.receipt import CHECK_GROUPING_BY_REVISION, CHECK_GROUPING_TIME_ORDER
+
+    evidence = _receipt(name)["dimensions"]["evidence"]
+    assert evidence["revision_grouping_mode"] in {
+        CHECK_GROUPING_BY_REVISION,
+        CHECK_GROUPING_TIME_ORDER,
+    }
+    walked = [id_ for group in evidence["revision_groups"] for id_ in group["event_ids"]]
+    assert sorted(walked) == sorted(row["event_id"] for row in evidence["checks"])
+    for group in evidence["revision_groups"]:
+        # The header wording is the row's own label, never a second spelling of
+        # the same stamp.
+        assert group["label"] in {
+            row["revision_label"]
+            for row in evidence["checks"]
+            if row["event_id"] in group["event_ids"]
+        }
+        # A banner and a row never both print the sentence.
+        if group["contradiction_text"]:
+            assert all(
+                row["revision_contradiction_text"] is None
+                for row in evidence["checks"]
+                if row["event_id"] in group["event_ids"]
+            )
+
+
+def test_no_surface_spells_a_grouping_mode_or_a_summary_ellipsis() -> None:
+    """The grouping mode is a reducer decision and the preview carries no
+    ellipsis of its own; a surface spelling either would be re-deciding it."""
+
+    from agentacct.receipt import CHECK_GROUPING_BY_REVISION, CHECK_GROUPING_TIME_ORDER
+
+    owned = {CHECK_GROUPING_BY_REVISION, CHECK_GROUPING_TIME_ORDER}
+    for module in ("cli.py", "tui.py", "receipt_markdown.py", "api.py"):
+        spelled = sorted(owned & set(_string_literals(module)))
+        assert not spelled, f"{module} decides the check grouping itself: {spelled}"
+    # The sentence-boundary preview terminates on a full stop; an ellipsis would
+    # be a second punctuation vocabulary for the same elision.
+    assert "…" not in _string_literals(_VOCABULARY_MODULE)
+
+
+# --------------------------------------------------------------------------- #
 # the Swift lint's list is pinned to this vocabulary, so it cannot go stale     #
 # --------------------------------------------------------------------------- #
 
@@ -888,6 +1061,18 @@ def _python_display_vocabulary() -> set[str]:
         vocabulary.COST_ABSENT_UNPRICED,
         vocabulary.EVIDENCE_GRADE_NOT_GRADED,
         vocabulary.EVIDENCE_GRADE_NOT_CHECK_RELEVANT,
+        # The absence budget's one prefix, pinned here so Swift cannot spell a
+        # second budget with its own noun order.
+        vocabulary.NOT_CAPTURED_PREFIX,
+        # The record page's first exempt absence, now that the reducer emits it
+        # as `dimensions.task.goal_absent_text`: the app renders that field and
+        # nothing else, so the words may not appear in Swift at all.
+        #
+        # NEXT_STEP_ABSENT is still deliberately NOT pinned: no payload field
+        # carries it, so `NextStepRow.absence` remains the only source of those
+        # words. It joins this set in the change that emits the SS4 next-step
+        # absence — see the matching note in VocabularyLintTests.
+        vocabulary.TASK_GOAL_ABSENT,
     }
     return {word for word in words if word}
 
@@ -955,6 +1140,39 @@ def test_swift_tier_fallback_labels_are_this_modules_tier_words() -> None:
         "EvidenceTierStyle.forGrade's default echoes the raw grade key; Python says "
         f"{EVIDENCE_GRADE_LABELS['none']!r}"
     )
+
+
+_TIME_CANVAS = _APP_ROOT / "Sources" / "agentacct" / "WorkTimeCanvas.swift"
+
+
+@pytest.mark.skipif(not _TIME_CANVAS.exists(), reason="the macOS app is not in this checkout")
+def test_swift_not_narrowable_state_is_this_vocabularys_sentence() -> None:
+    """The time canvas's overview strip stops being a control when the whole
+    recorded span is already shorter than the window floor, and prints a NAMED
+    state in its place. Only the measured span is the app's (a number no reducer
+    can know); every word is this module's, so both literals are pinned here
+    character for character — the same arrangement the freshness phrase uses.
+    """
+
+    from agentacct.display_vocabulary import (
+        TIMELINE_WINDOW_NOT_NARROWABLE,
+        TIMELINE_WINDOW_NOT_NARROWABLE_DETAIL,
+    )
+
+    source = _TIME_CANVAS.read_text(encoding="utf-8")
+    for constant, expected in (
+        ("notNarrowableTemplate", TIMELINE_WINDOW_NOT_NARROWABLE),
+        ("notNarrowableDetail", TIMELINE_WINDOW_NOT_NARROWABLE_DETAIL),
+    ):
+        match = re.search(rf'static let {constant} = "([^"]*)"', source)
+        assert match, f"WorkTimeCanvas.swift no longer declares {constant} — has it been restructured?"
+        assert match.group(1) == expected, (
+            f"WorkTimeCanvas.swift spells {constant} {match.group(1)!r}; this vocabulary says {expected!r}"
+        )
+    # The app fills in the span itself; the placeholder is what makes that a
+    # substitution rather than a second sentence.
+    assert "{span}" in TIMELINE_WINDOW_NOT_NARROWABLE
+    assert 'replacingOccurrences(of: "{span}"' in source
 
 
 @pytest.mark.skipif(not _APP_FIXTURE.exists(), reason="the macOS app is not in this checkout")

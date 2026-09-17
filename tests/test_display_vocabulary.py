@@ -195,6 +195,13 @@ def test_receipt_field_labels():
         "actors": "Agents",
         "actions": "Tool calls",
         "weekly_plan": "Weekly plan",
+        # The four questions a reviewer arrives with, as section headings. They
+        # are section names, not dimension names, and they live here so the
+        # macOS app stops spelling them as Swift literals.
+        "goal": "Goal",
+        "outcome_section": "Outcome",
+        "evidence_section": "Evidence",
+        "next_section": "Next",
     }
     # A LIST of tasks names three more columns; a single receipt has none of
     # them, so they ship with the task list, from the same vocabulary.
@@ -619,3 +626,58 @@ def test_display_time_span_names_its_absence_and_collapses_one_instant(los_angel
     assert vocab.display_time_span(start + 17 * 60, start) == "Sep 12 17:21–17:38"
     assert vocab.display_time_span(None, start) == "window not recorded"
     assert vocab.display_time_span(start, 0) == "window not recorded"
+
+
+def test_timeline_span_text_names_sub_second_spans_and_absence():
+    """A span shorter than the canvas's window floor is what the not-narrowable
+    state reports, so the words have to survive hundredths of a second: whole
+    seconds would print ``0s`` for the measured 0.30-second task, and
+    ``humanize_seconds`` can only say ``<1m``.
+
+    This table is mirrored, value for value, by
+    ``WorkTimeCanvasInputTests.testSpanTextMirrorsThePythonSpanWords`` — the app
+    measures the span at render time, so the rule exists in both places and the
+    two tables must stay identical.
+    """
+
+    table = {
+        0.3: "0.30s",
+        0.75: "0.75s",
+        0.996: "1.00s",
+        1: "1.0s",
+        4.62: "4.6s",
+        9.9: "9.9s",
+        10: "10s",
+        42.4: "42s",
+        59.4: "59s",
+        60: "1m",
+        138.61: "2m",
+        3600: "1h 0m",
+        24954.83: "6h 55m",
+        183600: "2d 3h",
+    }
+    for seconds, expected in table.items():
+        assert vocab.timeline_span_text(seconds) == expected, seconds
+    # An unmeasurable extent is a NAMED absence, never a fabricated zero.
+    for broken in (0, -1, None, float("nan"), float("inf"), "0.3"):
+        assert vocab.timeline_span_text(broken) == vocab.TIME_SPAN_NOT_RECORDED
+
+
+def test_not_narrowable_state_states_the_span_and_the_reason():
+    """The canvas's overview strip is a control only while a narrower window
+    exists. When none does, it prints this named state instead — the recorded
+    span, and that there is nothing to narrow. The detail sentence explains the
+    axis limit rather than blaming the Task."""
+
+    assert (
+        vocab.timeline_window_not_narrowable_text(0.3)
+        == "Whole recorded span: 0.30s — nothing to narrow"
+    )
+    assert vocab.timeline_window_not_narrowable_text(None) == (
+        f"Whole recorded span: {vocab.TIME_SPAN_NOT_RECORDED} — nothing to narrow"
+    )
+    # The state never reads as an error or as a missing measurement.
+    detail = vocab.TIMELINE_WINDOW_NOT_NARROWABLE_DETAIL
+    assert "shorter than the smallest window the time axis can label" in detail
+    assert "{" not in detail and "}" not in detail
+    assert "{span}" in vocab.TIMELINE_WINDOW_NOT_NARROWABLE

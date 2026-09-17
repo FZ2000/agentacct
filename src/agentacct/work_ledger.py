@@ -1079,6 +1079,14 @@ def build_work_items(
                 "files": [],
                 "blocker": None,
                 "next_step": None,
+                # Recorded ONCE, on a task's first section. Unlike summary and
+                # next_step below, this is FIRST-write-wins: a later section
+                # re-stating the goal must not overwrite what the task was
+                # opened for, and a later section that omits it must not erase
+                # it. Carried here because receipt._task_dimension reads it off
+                # the item; without this the page said no goal was recorded for
+                # tasks whose agent had recorded one.
+                "task_goal": None,
                 # Every non-terminal summary this section recorded, oldest
                 # first. The item keeps ONE summary (last write wins), so the
                 # prose of a `checkpoint` update — the narration the recording
@@ -1222,6 +1230,8 @@ def build_work_items(
             item["next_step"] = event.get("next_step") or item["next_step"]
             if event.get("status") == "blocked":
                 item["current_blocked_event_id"] = event.get("event_id")
+        if not item.get("task_goal"):
+            item["task_goal"] = event.get("task_goal")
         item["started_at"] = _min_timestamp(item.get("started_at"), event.get("created_at"))
         item["updated_at"] = _max_timestamp(item.get("updated_at"), event.get("created_at"))
         if event.get("status") not in TERMINAL_WORK_STATUSES:

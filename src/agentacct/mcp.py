@@ -26,6 +26,7 @@ from .mechanical_capture import absent_paths_at_revision, capture_git_revision
 from .task_outcome import step_is_checkable
 from .service import RESERVED_CLIENT_CONTEXT_PROVENANCE_KEYS, SentinelService
 from .semantic_rules import (
+    REST_OF_WORK_STATES,
     SemanticRecordError,
     collapse_display_text,
     collapse_narrative_text,
@@ -103,6 +104,36 @@ SECTION_FILES_DESCRIPTION = (
     "The project-relative paths this step changed. They are the only per-step anchor for WHAT "
     "changed, so a terminal section owes them unless its `kind` is review/research/planning/docs. "
     "Sticky across the section: naming them once (on any record of the same section_id) is enough. "
+)
+
+# The task-level goal. Measured problem it fixes: a record page could state a
+# title, 44 section titles, a decision word and four checks, and still leave a
+# reader unable to say what finishing the task would MEAN. Section titles are
+# STEPS -- a task with 44 of them has one goal and 44 steps, not 44 objectives.
+TASK_GOAL_DESCRIPTION = (
+    "What you were asked to ACHIEVE, in the requester's terms -- not what you are about to do. "
+    "Record it once, on the first `section_status=started` of a task; later sections inherit it and "
+    "should leave it out. It is the one line a reader sees under the title, and without it "
+    "'completed' is unjudgeable: they can see a step finished and still not know what finishing was "
+    "for. Good: 'Money columns from the bank CSV import without manual cleanup.' Bad (that is a "
+    "step, not a goal): 'Add parse_amount().' Bad (that is a status): 'Finish the parser work.' "
+    "Do not repeat `section_title` here."
+)
+
+# What a failure COSTS a reader, as a bounded state rather than more prose. The
+# BIT is a field because the page has to sort, group and collapse on it -- the
+# receipt already splits its gaps on exactly this axis and the reducer has been
+# GUESSING which side a failure falls on. The SENTENCE is not a new field: it
+# belongs in the prose slot the record already has (`blocker` on a stopped
+# section, `summary` on a failed check).
+REST_OF_WORK_DESCRIPTION = (
+    "What this failure COSTS: whether the REST of the work is still usable despite it. "
+    "usable = a reader can use everything else as recorded; unusable = this blocks the rest, so "
+    "they should not build on it; unknown = you did not determine it (say so rather than implying "
+    "either). Answer it on a blocked section and on a failed or error check -- you already know at "
+    "write time, and it is the question a reviewer opens the record to answer. 'One case still red' "
+    "does not answer it. When you record unusable, name WHO or WHAT it blocks in the prose you are "
+    "already writing: 'so the importer must not be pointed at unvalidated input yet'."
 )
 
 # Join keys that stay valid for a whole client session, so sections recorded on
@@ -206,8 +237,15 @@ TOOLS: list[dict[str, Any]] = [
                         "that failed and the observed vs expected value. Do not restate the name and "
                         "the result -- a summary that only says '<name>: <result>' is dropped at read "
                         "time and the card ends up with no description at all. Optional on a passing "
-                        "check: when omitted, nothing is synthesized."
+                        "check: when omitted, nothing is synthesized. On a failure, say what it COSTS "
+                        "as well as what broke -- 'so the importer must not be pointed at unvalidated "
+                        "input yet', not just 'one case still red'."
                     ),
+                },
+                "rest_of_work": {
+                    "type": ["string", "null"],
+                    "enum": [*REST_OF_WORK_STATES, None],
+                    "description": REST_OF_WORK_DESCRIPTION,
                 },
                 "command": {
                     "type": ["string", "null"],
@@ -344,15 +382,39 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": ["planning", "implementation", "debugging", "testing", "review", "docs", "refactor", "research", "other", "unknown", None],
                     "description": SECTION_KIND_DESCRIPTION,
                 },
+                "task_goal": {
+                    "type": ["string", "null"],
+                    "maxLength": 400,
+                    "description": TASK_GOAL_DESCRIPTION,
+                },
+                "rest_of_work": {
+                    "type": ["string", "null"],
+                    "enum": [*REST_OF_WORK_STATES, None],
+                    "description": REST_OF_WORK_DESCRIPTION,
+                },
                 "summary": {
                     "type": ["string", "null"],
                     "maxLength": 1200,
                     "description": (
-                        "One sentence stating the OUTCOME, then optional short lines for what changed and "
-                        "what was verified. Required on a terminal status. This is the only prose a reader "
-                        "sees, so lead with the result, not the process: 'Fixed the login redirect and "
-                        "covered it with two tests', not 'Reviewed the login flow and inspected the "
-                        "redirects'. The inspector renders about "
+                        # Rewritten from "lead with the result, not the process", which
+                        # produced changelog entries: true, numeric, and unreadable. The
+                        # contrast below is the teaching -- the measured lesson of the
+                        # last contract round is that descriptions do the work refusals
+                        # cannot (seven calls, zero refusals, because the descriptions
+                        # taught before the agent wrote).
+                        "Open with the CONSEQUENCE -- what a reader should now believe or do -- then the "
+                        "mechanism that supports it. Required on a terminal status; this is the only prose "
+                        "a reader sees. A summary made only of what changed and how many tests passed is a "
+                        "changelog entry: every clause true, and nothing a reader can decide from. "
+                        "WEAK (all mechanism): 'Added parse_amount() with parenthesised-negative handling; "
+                        "6 of 7 parse tests pass, the full suite is 15 passed 1 failed, and the change is "
+                        "uncommitted.' STRONG (consequence first, same facts): 'Money strings from the bank "
+                        "CSV can now be parsed, except a bare unclosed \"($12.34\", which still returns a "
+                        "positive value instead of raising -- so the importer must not be pointed at "
+                        "unvalidated input yet. parse_amount() in moneyutil/core.py; 6 of 7 parse tests "
+                        "pass, suite 15 passed 1 failed, uncommitted.' Name the cost, not just the count: "
+                        "'one case still red' does not tell a reader whether they are blocked. The "
+                        "inspector renders about "
                         f"{INSPECTOR_SUMMARY_CHARACTERS} characters before it stops being a summary and "
                         "becomes a report; the cap is higher so nothing is lost, but past that length a "
                         "reader skims rather than reads."
@@ -1384,6 +1446,37 @@ class SentinelMCPServer:
                 return True
         return False
 
+    def _task_goal_already_recorded(self, context: Mapping[str, Any]) -> bool:
+        """True when some earlier section in this session scope already stated a
+        `task_goal`.
+
+        The goal is recorded ONCE per task, so every later section must be able
+        to stay silent about it without being nagged. Scoped by session (falling
+        back to the client name) because that is the scope a task is assembled
+        from. Read-only and fail-open, exactly like the duplicate-name scan: an
+        advisory that cannot be computed is simply not shown.
+        """
+
+        scope = _text_or_none(context.get("client_session_id")) or _text_or_none(context.get("client"))
+        if scope is None:
+            return False
+        try:
+            events = self.service.list_all_events()
+        except Exception:  # noqa: BLE001 - never fail a stored write for an advisory
+            return False
+        for event in events:
+            if not str(event.get("event_type") or "").startswith("section_"):
+                continue
+            metadata = event.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            if _text_or_none(metadata.get("task_goal")) is None:
+                continue
+            other = _text_or_none(metadata.get("client_session_id")) or _text_or_none(metadata.get("client"))
+            if other == scope:
+                return True
+        return False
+
     def _inherit_attached_client_context(self, context: dict[str, Any], *, keys: tuple[str, ...] = INHERITABLE_CLIENT_CONTEXT_KEYS) -> list[str]:
         """Fill missing session-scoped join keys from the last attached context.
 
@@ -1530,6 +1623,7 @@ class SentinelMCPServer:
                     "evidence_type",
                     "result",
                     "summary",
+                    "rest_of_work",
                     "command",
                     "exit_code",
                     "artifact_ref",
@@ -1557,6 +1651,7 @@ class SentinelMCPServer:
                     "evidence_type",
                     "result",
                     "summary",
+                    "rest_of_work",
                     "command",
                     "exit_code",
                     "artifact_ref",
@@ -1706,6 +1801,10 @@ class SentinelMCPServer:
                     "evidence_type": _optional_choice(arguments, "evidence_type", EVIDENCE_TYPES, "other"),
                     "result": result,
                     "summary": evidence_summary,
+                    # What this failure costs a reader, as a bounded state the
+                    # reducer can group on. Never inferred from the result: a
+                    # check that did not say stays unsaid.
+                    "rest_of_work": _optional_choice(arguments, "rest_of_work", set(REST_OF_WORK_STATES), None),
                     # `name` is the card's human LABEL, collapsed for display
                     # (R2). It no longer keys supersession -- `check_key` below
                     # (or the server-derived command key) does -- so rewording a
@@ -1802,6 +1901,7 @@ class SentinelMCPServer:
                         recorded_check_metadata,
                         event_id=payload["event"].get("event_id"),
                     ),
+                    rest_of_work=recorded_check_metadata.get("rest_of_work"),
                 )
                 if advisories:
                     payload["advisories"] = advisories
@@ -1923,6 +2023,8 @@ class SentinelMCPServer:
                 "phase",
                 "kind",
                 "summary",
+                "task_goal",
+                "rest_of_work",
                 "client",
                 "client_session_id",
                 "client_transcript_id",
@@ -1953,6 +2055,9 @@ class SentinelMCPServer:
             section_project_dir = _optional_limited_str(arguments, "project_dir", None, max_length=1000)
             resolved_title = section_title if section_title is not None else section_title_alias
             section_summary = _narrative_text(arguments, "summary", max_length=1200)
+            # Narrative, not a display title: the goal is a sentence a reader
+            # reads, so it is collapsed the way prose is and never clipped.
+            section_task_goal = _narrative_text(arguments, "task_goal", max_length=400)
             section_blocker = _narrative_text(arguments, "blocker", max_length=1200)
             section_next_step = _narrative_text(arguments, "next_step", max_length=1200)
             mangled_fields = _detect_mangled_tool_call_fields(
@@ -1969,6 +2074,13 @@ class SentinelMCPServer:
                 # checkpoint that does not repeat it keeps the declared kind.
                 "kind": _optional_choice(arguments, "kind", WORK_KINDS, None),
                 "summary": section_summary,
+                # The task-level goal (A1). Recorded once, on the first started
+                # section of a task; it answers "what was this FOR", which no
+                # other field on the record does. `objectives` is section
+                # titles echoed back, and section titles are STEPS.
+                "task_goal": section_task_goal,
+                # What a stop COSTS a reader, as a bounded state (A3).
+                "rest_of_work": _optional_choice(arguments, "rest_of_work", set(REST_OF_WORK_STATES), None),
                 "files": _optional_project_relative_files(arguments, project_dir=section_project_dir),
                 "blocker": section_blocker,
                 "next_step": section_next_step,
@@ -2149,6 +2261,18 @@ class SentinelMCPServer:
                 section_title=recorded_metadata.get("section_title"),
                 section_status=recorded_metadata.get("section_status"),
                 next_step=recorded_metadata.get("next_step"),
+                summary=recorded_metadata.get("summary"),
+                blocker=recorded_metadata.get("blocker"),
+                task_goal=recorded_metadata.get("task_goal"),
+                # The goal is a TASK-level field recorded once: a later section
+                # that stays silent about it must not be nagged, so the scan
+                # asks whether this session already has one on record.
+                goal_recorded_earlier=(
+                    False
+                    if recorded_metadata.get("task_goal")
+                    else self._task_goal_already_recorded(recorded_metadata)
+                ),
+                rest_of_work=recorded_metadata.get("rest_of_work"),
             )
             if section_notes:
                 payload["advisories"] = section_notes

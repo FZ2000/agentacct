@@ -42,6 +42,11 @@ def _section(server: SentinelMCPServer, **overrides: Any) -> dict[str, Any]:
         "section_id": "rules-section",
         "section_status": "started",
         "section_title": "Enforce display rules",
+        # An opening section now states the TASK's goal (what the work is FOR).
+        # It lives in the shared helper because a section without one is no
+        # longer a fully-formed opening record -- every test that is not about
+        # the goal should send a complete one.
+        "task_goal": "Display rules hold on every surface a reviewer reads.",
     }
     arguments.update(overrides)
     return _call(server, "agentacct_record_section", arguments)
@@ -467,6 +472,9 @@ def test_failed_with_exit_code_zero_and_no_artifact_is_advised_but_stored(tmp_pa
             exit_code=0,
             name="reproduce the release build failure",
             summary="Ran the release build 3 times; it succeeded every time and the reported error never appeared.",
+            # Declared, so the exit-code advisory is the only one under test:
+            # `rest_of_work` outranks it, and the response is capped at two.
+            rest_of_work="usable",
         )
     )
     # Stored exactly as sent: an advisory never rewrites or refuses a record.
@@ -477,10 +485,10 @@ def test_failed_with_exit_code_zero_and_no_artifact_is_advised_but_stored(tmp_pa
 
 
 def test_failed_with_exit_code_zero_is_not_advised_when_an_artifact_shows_the_defect() -> None:
-    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=0, artifact_path="out/report.txt") == []
-    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=1, command="pnpm build") == []
+    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=0, artifact_path="out/report.txt", rest_of_work="usable") == []
+    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=1, command="pnpm build", rest_of_work="usable") == []
     assert check_advisories(name="the release build reproduces the failure", result="unknown", exit_code=0, command="pnpm build") == []
-    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=None, command="pnpm build") == []
+    assert check_advisories(name="the release build reproduces the failure", result="failed", exit_code=None, command="pnpm build", rest_of_work="usable") == []
 
 
 def test_over_budget_check_name_and_section_title_are_advised_but_stored(tmp_path) -> None:

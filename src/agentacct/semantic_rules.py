@@ -310,6 +310,236 @@ def summary_advice(section_status: str, summary: Any) -> dict[str, str] | None:
     return {"shape": shape, "hint": hint}
 
 
+# --- the second axis: does the prose say what the work is FOR or COSTS? ------
+#
+# Deliberately NOT merged into ``classify_summary_shape``. Shape says what the
+# summary IS (outcome / process / status / thin). Consequence says whether it
+# tells a reader anything they can act on. They are two axes and a summary can
+# score well on one and badly on the other -- which is exactly the measured
+# failure this rule exists for. This summary is fully compliant on shape and a
+# reviewer still called it meaningless:
+#
+#   "Handing off with parenthesised negatives working and one case still red.
+#    ($12.34) and ($1,234.56) parse to the signed value; parse_amount("($12.34")
+#    still returns "12.34" instead of raising ValueError. 6 of 7 parse tests
+#    pass, the full suite is 15 passed 1 failed, and the change is uncommitted."
+#
+# Every clause is true, every number is real, and it never says what the work is
+# FOR or what the one red case COSTS the reader. Merging the two axes would have
+# graded it "outcome" and said nothing.
+_CONSEQUENCE_MARKERS = (
+    # what the reader may now do, or must not
+    "safe to", "not safe", "unsafe", "ready to", "not ready", "can now",
+    "cannot", "can't", "do not", "don't", "must not", "should not",
+    "no longer", "still cannot", "still unusable",
+    # who or what is affected
+    "callers", "caller", "users", "user-facing", "anyone", "downstream",
+    "in production", "on disk", "for the reader", "reviewer",
+    # the shape of the cost
+    "blocks", "blocked by", "unblocks", "unusable", "unreviewable",
+    "wrong", "silently", "data loss", "corrupts", "crashes", "at risk",
+    # explicit consequence connectives
+    "so that", "so the", "so a", "so any", "resulting in", "which means",
+    "meaning", "means that", "until", "unless",
+)
+_CONSEQUENCE_PATTERN = _whole_word_pattern(_CONSEQUENCE_MARKERS)
+
+
+def names_a_consequence(value: Any) -> bool:
+    """True when prose says what the work lets a reader DO, or what it costs
+    them -- not merely what changed. Purely lexical and deliberately generous:
+    it is read by non-blocking advisories only, so a false positive costs a
+    reader nothing and a false negative costs them one ignorable hint."""
+
+    text = readable_text_or_none(value)
+    return text is not None and _CONSEQUENCE_PATTERN.search(text) is not None
+
+
+#: A summary that states a real outcome and still leaves a reader with nothing
+#: to decide. The advice carries the weak/strong contrast rather than a rule,
+#: because the measured lesson of the last contract round is that descriptions
+#: teach where refusals only block.
+SUMMARY_WITHOUT_CONSEQUENCE_ADVICE = (
+    "This summary says what CHANGED but not what it means for the reader. Open with the "
+    "consequence -- what they should now believe or do -- then the mechanism. "
+    "Weak: 'Added parse_amount(); 6 of 7 parse tests pass and the change is uncommitted.' "
+    "Strong: 'Money strings from the CSV import can now be parsed, except bare "
+    "'($12.34' which still returns a positive value instead of raising -- so the importer "
+    "must not be pointed at unvalidated input yet. parse_amount() in moneyutil/core.py; "
+    "6 of 7 parse tests pass.' The record is stored as sent."
+)
+
+
+# --- what a failure COSTS ----------------------------------------------------
+#
+# FIELD-VS-SENTENCE, decided and justified here because the page depends on it:
+#
+#   The BIT is a field. "Does this failure block me?" is the question a reviewer
+#   arrives with, and the page has to SORT, GROUP and COLLAPSE on the answer --
+#   a receipt already splits its gaps on exactly this axis (`blocks_review`
+#   vs `provenance`), and today the reducer has to GUESS which side a failure
+#   falls on while the agent knew at write time. A sentence cannot be sorted.
+#
+#   The SENTENCE is not a new field. A record that owes a cost sentence already
+#   has a prose slot for it -- `blocker` on a stopped section, `summary` on a
+#   failed check -- and the page's measured disease is too much prose, not too
+#   little. Adding a fifth narrative field would have bought one more paragraph
+#   for a reviewer to skip.
+#
+#   Neither is REFUSED. Rendered CLAUDE.md/AGENTS.md instruction files are
+#   written once at onboard and never refreshed (the same constraint that keeps
+#   the `title` alias alive), so a new refusal on `blocked` would break every
+#   already-onboarded agent for a field their instructions never mentioned.
+#   The field teaches in its description and advises on omission.
+REST_OF_WORK_STATES: tuple[str, ...] = ("usable", "unusable", "unknown")
+
+#: Which state each value claims, in the reviewer's words. One phrase per state,
+#: so a surface can print the answer instead of the raw enum key.
+REST_OF_WORK_LABELS: dict[str, str] = {
+    "usable": "the rest of the work is still usable",
+    "unusable": "this blocks the rest of the work",
+    "unknown": "whether the rest is usable was not determined",
+}
+
+REST_OF_WORK_MISSING_ADVICE = (
+    "This record reports a failure and does not say what the failure COSTS. A reviewer "
+    "cannot tell from it whether the rest of the work is usable -- and you already know. "
+    "Set `rest_of_work` to usable, unusable or unknown. The record is stored as sent."
+)
+
+REST_OF_WORK_UNUSABLE_ADVICE = (
+    "`rest_of_work=unusable` says this failure blocks the rest, and the prose does not say "
+    "WHO or WHAT it blocks. Name the cost in the same field you already filled -- "
+    "'so the importer must not be pointed at unvalidated input yet', not 'one case still "
+    "red'. The record is stored as sent."
+)
+
+
+def rest_of_work_state(value: Any) -> str | None:
+    """The declared state, or ``None`` when nothing usable was declared. Never
+    guessed from the failure itself: a record that did not say stays unsaid."""
+
+    text = str(value or "").strip().lower()
+    return text if text in REST_OF_WORK_STATES else None
+
+
+def rest_of_work_label(value: Any) -> str | None:
+    """The reviewer's phrase for a declared state (``None`` when undeclared)."""
+
+    state = rest_of_work_state(value)
+    return REST_OF_WORK_LABELS[state] if state is not None else None
+
+
+def failure_cost_advisory(
+    *,
+    reports_a_failure: bool,
+    rest_of_work: Any,
+    narrative: Any,
+) -> dict[str, str] | None:
+    """Non-blocking advisory for a failure that does not say what it costs.
+
+    ``reports_a_failure`` is the caller's own judgement (a blocked section, a
+    failed or errored check), so this rule never has to know either schema.
+    """
+
+    if not reports_a_failure:
+        return None
+    state = rest_of_work_state(rest_of_work)
+    if state is None:
+        return {
+            "code": "failure_without_cost",
+            "field": "rest_of_work",
+            "hint": REST_OF_WORK_MISSING_ADVICE,
+        }
+    if state == "unusable" and not names_a_consequence(narrative):
+        return {
+            "code": "unusable_without_named_cost",
+            "field": "rest_of_work",
+            "hint": REST_OF_WORK_UNUSABLE_ADVICE,
+        }
+    return None
+
+
+# --- the task's goal: what the work was FOR ----------------------------------
+#
+# Recorded ONCE, on the first started section of a task, and rendered once under
+# the title. Without it "completed" is unjudgeable: a reader can see that a step
+# finished and still not know what finishing was supposed to achieve.
+#
+# It is NOT derivable from what the record already holds. Measured across five
+# real records, `objectives` is section titles echoed back: objectives[0] equals
+# the receipt title on three of five, equals an unrelated section title on a
+# fourth, and is empty on the fifth. Section titles are STEPS. A task with 44 of
+# them does not have 44 objectives; it has one goal and 44 steps.
+MINIMUM_TASK_GOAL_CHARACTERS = 20
+
+TASK_GOAL_ADVICE = (
+    "This task has no `goal` on record, so a reader cannot judge what finishing it would "
+    "mean. Pass `task_goal` on this section: what you were ASKED to achieve, in the "
+    "requester's terms -- 'CSV money columns import without manual cleanup', not 'add "
+    "parse_amount()'. Recorded once per task; later sections inherit it."
+)
+
+TASK_GOAL_ECHOES_TITLE_ADVICE = (
+    "`task_goal` repeats this section's title, so it states the STEP rather than the goal. "
+    "A section title is what you are doing now; the goal is what the whole task is for, in "
+    "the requester's terms. The record is stored as sent."
+)
+
+TASK_GOAL_THIN_ADVICE = (
+    "`task_goal` is too short to state a purpose. Say what the requester wanted to be true "
+    "when the task is done, not the change you plan to make. The record is stored as sent."
+)
+
+
+def _comparable(value: Any) -> str:
+    """Case- and punctuation-insensitive form, for 'is this the same sentence'."""
+
+    text = readable_text_or_none(value)
+    if text is None:
+        return ""
+    return re.sub(r"[\W_]+", " ", text).strip().lower()
+
+
+def task_goal_echoes_title(goal: Any, title: Any) -> bool:
+    """True when the goal is just the section title again."""
+
+    left = _comparable(goal)
+    right = _comparable(title)
+    return bool(left) and left == right
+
+
+def task_goal_advisory(
+    *,
+    section_status: Any,
+    task_goal: Any,
+    section_title: Any = None,
+    goal_recorded_earlier: bool = False,
+) -> dict[str, str] | None:
+    """Non-blocking advisory about the task-level goal.
+
+    Fires on an OPENING section only (``started``): that is the one call whose
+    author still has the request in front of them. A section that inherits a
+    goal already on record is never nagged.
+    """
+
+    status = str(section_status or "").strip().lower()
+    text = readable_text_or_none(task_goal)
+    if text is None:
+        if status != "started" or goal_recorded_earlier:
+            return None
+        return {"code": "task_without_goal", "field": "task_goal", "hint": TASK_GOAL_ADVICE}
+    if task_goal_echoes_title(text, section_title):
+        return {
+            "code": "task_goal_echoes_section_title",
+            "field": "task_goal",
+            "hint": TASK_GOAL_ECHOES_TITLE_ADVICE,
+        }
+    if len(text) < MINIMUM_TASK_GOAL_CHARACTERS:
+        return {"code": "task_goal_thin", "field": "task_goal", "hint": TASK_GOAL_THIN_ADVICE}
+    return None
+
+
 # --- write-time advisories: non-blocking, never a refusal --------------------
 # Each advisory is returned in the MCP response next to the stored record. None
 # of them changes what is stored, and none can refuse a write: the record has
@@ -340,11 +570,26 @@ def _title_budget_advisory(field: str, value: Any) -> dict[str, str] | None:
 #: last: it costs a reader a few clipped characters, while a duplicate check
 #: name costs them the ability to tell two records apart at all.
 _ADVISORY_RANK: tuple[str, ...] = (
+    # A task with no stated purpose costs the reader every other judgement on
+    # the page: they cannot grade "completed" against anything.
+    "task_without_goal",
+    # A record that CLAIMS this failure blocks the rest and never says what it
+    # blocks: a stated consequence with nothing behind it, which is worse than
+    # an unstated one.
+    "unusable_without_named_cost",
     "duplicate_check_name_in_section",
     "check_without_command_or_artifact",
     "failed_with_exit_code_zero",
     "summary_echoes_name_and_result",
+    # Below the defects in what WAS recorded, above the prose notes: a missing
+    # cost leaves a reader undecided, but the record itself is still readable.
+    "failure_without_cost",
     "checkpoint_without_next_step",
+    # Below the hard defects: the prose is real, it just does not carry the
+    # reader to a decision.
+    "summary_without_consequence",
+    "task_goal_echoes_section_title",
+    "task_goal_thin",
     "title_over_card_budget",
 )
 
@@ -368,16 +613,59 @@ def section_advisories(
     section_title: Any,
     section_status: Any = None,
     next_step: Any = None,
+    summary: Any = None,
+    blocker: Any = None,
+    task_goal: Any = None,
+    goal_recorded_earlier: bool = False,
+    rest_of_work: Any = None,
 ) -> list[dict[str, str]]:
     """Non-blocking advisories for a stored section (never a refusal).
 
+    * an opening section that states no task-level ``task_goal``, so nothing on
+      the record says what finishing it would mean.
+    * a stopped section that does not say what the stop COSTS a reader.
+    * a terminal summary that states a real outcome and still leaves the reader
+      with nothing to decide.
     * a section still at ``checkpoint`` with no ``next_step``: the one record a
       reader lands on mid-task, with nothing saying where the work stands.
     * a section title longer than the card title budget.
     """
 
     advisories: list[dict[str, str]] = []
-    if str(section_status or "").strip().lower() == "checkpoint" and not _supplied(next_step):
+    status = str(section_status or "").strip().lower()
+    goal_advisory = task_goal_advisory(
+        section_status=status,
+        task_goal=task_goal,
+        section_title=section_title,
+        goal_recorded_earlier=goal_recorded_earlier,
+    )
+    if goal_advisory is not None:
+        advisories.append(goal_advisory)
+    # A stopped section is a failure report: `blocked` always, and a
+    # `handed_off` that recorded a blocker. A `completed` section is not.
+    cost_advisory = failure_cost_advisory(
+        reports_a_failure=status == "blocked" or (status == "handed_off" and _supplied(blocker)),
+        rest_of_work=rest_of_work,
+        narrative=blocker or summary,
+    )
+    if cost_advisory is not None:
+        advisories.append(cost_advisory)
+    # Only on a terminal section whose summary already reads as an outcome:
+    # `summary_advice` owns the process / status / thin shapes, and two hints
+    # about one sentence is nagging, not teaching.
+    if (
+        status in TERMINAL_STATUSES
+        and classify_summary_shape(summary) == "outcome"
+        and not names_a_consequence(summary)
+    ):
+        advisories.append(
+            {
+                "code": "summary_without_consequence",
+                "field": "summary",
+                "hint": SUMMARY_WITHOUT_CONSEQUENCE_ADVICE,
+            }
+        )
+    if status == "checkpoint" and not _supplied(next_step):
         advisories.append(
             {
                 "code": "checkpoint_without_next_step",
@@ -406,6 +694,7 @@ def check_advisories(
     command: Any = None,
     summary: Any = None,
     duplicate_name_in_section: bool = False,
+    rest_of_work: Any = None,
 ) -> list[dict[str, str]]:
     """Non-blocking advisories for a stored machine check (never a refusal).
 
@@ -422,11 +711,21 @@ def check_advisories(
       Finding.
     * a summary that only restates the name and the result: it is dropped at
       read time, so the card ends up with no description at all.
+    * a failing check that does not say what the failure COSTS: whether the rest
+      of the work is still usable is the question a reviewer opened the record
+      to answer, and the agent already knew it at write time.
     * a check name longer than the card title budget.
     """
 
     advisories: list[dict[str, str]] = []
     no_artifact = not any(_supplied(value) for value in (artifact_ref, artifact_path, artifact_url))
+    cost_advisory = failure_cost_advisory(
+        reports_a_failure=str(result or "").strip().lower() in FAILURE_RESULTS,
+        rest_of_work=rest_of_work,
+        narrative=summary,
+    )
+    if cost_advisory is not None:
+        advisories.append(cost_advisory)
     if duplicate_name_in_section:
         advisories.append(
             {

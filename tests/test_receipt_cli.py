@@ -414,7 +414,16 @@ def test_receipt_text_prints_the_payload_vocabulary_not_local_labels(tmp_path: P
     # Rich wraps long lines to the terminal width; compare word sequences.
     output = " ".join(result.output.split())
     lead = receipt_lead(receipt)
-    for label in receipt["field_labels"].values():
+    # DIMENSION labels only. `field_labels` also ships the four record-page
+    # SECTION headings (Goal / Outcome / Evidence / Next), which the macOS
+    # record page owns; the terminal receipt renders dimensions and has no
+    # section to head with them, so requiring it to print them would force a
+    # heading into existence rather than share a word.
+    from agentacct.display_vocabulary import RECORD_SECTION_LABEL_KEYS
+
+    for key, label in receipt["field_labels"].items():
+        if key in RECORD_SECTION_LABEL_KEYS:
+            continue
         assert label in output
     # Prose takes the grammatical phrase; the chip label never lands after "asserted by".
     assert f"asserted by {receipt['axes']['decision_status']['asserted_by_phrase']}" in output

@@ -17,7 +17,8 @@ reducer can depend on it without an import cycle.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+import re as _re
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -933,7 +934,25 @@ RECEIPT_FIELD_LABELS: dict[str, str] = {
     "actors": "Agents",
     "actions": "Tool calls",
     "weekly_plan": "Weekly plan",
+    # The four questions a reviewer arrives with, as headings. They are section
+    # names, not dimension names: `goal` heads the one sentence saying what the
+    # work was FOR, and the other three head the sections answering "did it
+    # work", "can I trust it" and "what do I do now". They live here so the
+    # macOS app stops spelling `ReceiptSection(title: "Usage")` in Swift and
+    # every surface can only print the same word.
+    "goal": "Goal",
+    "outcome_section": "Outcome",
+    "evidence_section": "Evidence",
+    "next_section": "Next",
 }
+
+#: The keys above that head a record-page SECTION rather than naming a receipt
+#: DIMENSION. Split out (not kept in a second table) so the labels stay in one
+#: place while a surface that renders dimensions can iterate the dimension keys
+#: without owing a heading for a section it does not have.
+RECORD_SECTION_LABEL_KEYS: frozenset[str] = frozenset(
+    {"goal", "outcome_section", "evidence_section", "next_section"}
+)
 
 # The extra columns a LIST of tasks names beside the receipt's own fields: who
 # recorded the work, when it last moved, and why it is in the review queue. A
@@ -957,6 +976,275 @@ def receipt_field_label(key: Any) -> str:
     if not text:
         return "Receipt"
     return RECEIPT_FIELD_LABELS.get(text, sentence_case(text.replace("_", " ")))
+
+
+# ---------------------------------------------------------------------------
+# what the record was FOR, and the absence budget
+# ---------------------------------------------------------------------------
+
+# The one named absence that is EXEMPT from the absence budget below. Every
+# other "we did not capture this" collapses into one line, but a record with no
+# stated purpose is one a reviewer should distrust, so this sentence keeps its
+# own slot under the title. It is the page head, not a section.
+TASK_GOAL_ABSENT = "No goal was recorded for this task."
+
+# The second exempt absence: the record's only remaining print of "where does
+# this go next".
+NEXT_STEP_ABSENT = "No next step recorded."
+
+#: The separator every composed meta line breaks on. One character, so a
+#: reader (and a line-wrapper) can only break a composed line where the
+#: vocabulary intended, exactly as ``_legend`` and the freshness line do.
+META_SEPARATOR = " · "
+
+
+def _joined_meta(parts: Sequence[Any]) -> str:
+    """``a · b · c`` from the parts that are actually present.
+
+    Nothing is padded, invented or punctuated as a sentence: the measured
+    failure this replaces was ``Passed. Exit 0. test. Agent-reported`` —
+    four fragments given four full stops, which reads as four broken
+    sentences rather than one line of four facts.
+    """
+
+    return META_SEPARATOR.join(
+        text for text in (str(part).strip() for part in parts if part is not None) if text
+    )
+
+
+# --- the absence budget -----------------------------------------------------
+# RULE: absence stays a NAMED state (a record must never imply it captured
+# something it did not), but it collapses to ONE line with the detail behind a
+# disclosure. Absence may never occupy more space than the facts it is absent
+# from. Measured on task_5f7dbea9, the tail this replaces was 42.8% named
+# absence against 9.7% new fact about the work.
+
+NOT_CAPTURED_PREFIX = "not captured"
+
+#: The noun for each thing a record can fail to capture. DECLARATION ORDER IS
+#: RENDER ORDER, so two records can never word the same set differently — the
+#: line is a vocabulary, not a sentence composed per record. A key this table
+#: does not know is DROPPED rather than de-snaked: a raw payload key printed to
+#: a reviewer is a second vocabulary.
+NOT_CAPTURED_NOUNS: dict[str, str] = {
+    "model": "model",
+    "cost": "cost",
+    "weekly_plan_share": "weekly plan share",
+    "tool_calls": "tool calls",
+    "tool_call_order": "ordered tool calls",
+    "session_identity": "session identity",
+    "revision": "revision",
+    "project": "project",
+}
+
+#: How many nouns print inline before the rest become a count. Four is the
+#: measured point at which the line still reads as a list rather than a
+#: paragraph at the record page's ~1150pt measure.
+NOT_CAPTURED_INLINE_MAX = 4
+
+#: The tail for the nouns past the inline budget. They are not lost: the
+#: disclosure behind this line carries every one of them, worded in full.
+NOT_CAPTURED_OVERFLOW = "and {count} more"
+
+#: When the STRONGER absence on the left is present, the WEAKER one on the right
+#: says the same thing a second time and is dropped from the LINE (never from
+#: the disclosure, which keeps every named absence in full).
+#:
+#: ``tool_calls`` means no tool call was captured at all; ``tool_call_order``
+#: means the ones captured carry no order. A record that captured none cannot
+#: also be missing their order as a separate fact -- printing both is exactly the
+#: "say each fact once" failure this line exists to fix. The pair is declared
+#: here, beside the nouns, because it is a claim about what the WORDS mean, and
+#: it is deliberately a table rather than a rule so a reviewer can read off every
+#: collapse the line performs.
+#: ``weekly_plan_share`` is a percentage OF a priced cost, so a record with no
+#: priced cost cannot separately be missing its share -- that is one absence
+#: worded twice.
+NOT_CAPTURED_SUBSUMED_BY: dict[str, str] = {
+    "tool_call_order": "tool_calls",
+    "weekly_plan_share": "cost",
+}
+
+
+def collapse_not_captured_keys(keys: Sequence[str]) -> list[str]:
+    """The absence keys that still say something distinct, in declaration order.
+
+    Drops a key whose stronger form is also absent (see
+    ``NOT_CAPTURED_SUBSUMED_BY``) and anything the noun table does not know.
+    The DISCLOSURE behind the line is built from the uncollapsed set: an absence
+    is never deleted, only spared a second wording on the one line.
+    """
+
+    seen = {
+        text
+        for text in (str(key or "").strip() for key in keys or ())
+        if text in NOT_CAPTURED_NOUNS
+    }
+    kept = {
+        key
+        for key in seen
+        if NOT_CAPTURED_SUBSUMED_BY.get(key) not in seen
+    }
+    return [key for key in NOT_CAPTURED_NOUNS if key in kept]
+
+
+def not_captured_line(keys: Sequence[str]) -> str | None:
+    """The record's ONE absence line, or ``None`` when nothing is absent.
+
+    ``not captured: model, cost, ordered tool calls, session identity`` —
+    and, past ``NOT_CAPTURED_INLINE_MAX``, ``…, and 2 more``.
+
+    An empty budget returns ``None`` and the surface prints NOTHING. It must
+    never print a positive claim ("everything was captured"): the record knows
+    what it failed to capture, not what there was to capture.
+    """
+
+    seen: set[str] = set()
+    for key in keys or ():
+        text = str(key or "").strip()
+        if text in NOT_CAPTURED_NOUNS:
+            seen.add(text)
+    if not seen:
+        return None
+    # Declaration order, never the caller's order or a sort of the nouns.
+    ordered = [noun for key, noun in NOT_CAPTURED_NOUNS.items() if key in seen]
+    inline = ordered[:NOT_CAPTURED_INLINE_MAX]
+    overflow = len(ordered) - len(inline)
+    listed = ", ".join(inline)
+    if overflow > 0:
+        listed = f"{listed}, {NOT_CAPTURED_OVERFLOW.format(count=overflow)}"
+    return f"{NOT_CAPTURED_PREFIX}: {listed}"
+
+
+# --- the check row's own line -----------------------------------------------
+
+
+def check_meta_line(
+    result_label: Any = None,
+    exit_code: Any = None,
+    evidence_type: Any = None,
+    source_label: Any = None,
+) -> str:
+    """One line for a check row: ``Failed · Exit 1 · test · Agent-reported``.
+
+    Composed HERE, not on a surface, so the app prints ``check.meta_line`` and
+    composes nothing. Every argument is optional because the reducer removes
+    whatever it hoisted: when `evidence_type` and `source_label` are identical
+    on every row of a record they belong on the section heading, and passing
+    them again here is what printed ``Agent-reported`` six times on one page.
+    """
+
+    exit_text = None
+    if exit_code is not None and not isinstance(exit_code, bool):
+        try:
+            exit_text = f"Exit {int(exit_code)}"
+        except (TypeError, ValueError):
+            exit_text = None
+    return _joined_meta((result_label, exit_text, evidence_type, source_label))
+
+
+def checks_heading_line(
+    tally: Any = None,
+    tier_label: Any = None,
+    source_label: Any = None,
+    evidence_type: Any = None,
+) -> str:
+    """The evidence section's heading line: the tally, then whichever of the
+    tier, source and type is uniform across every row and was therefore hoisted
+    off the rows. Stating the tier here is the record's ONLY print of it."""
+
+    return _joined_meta((tally, tier_label, source_label, evidence_type))
+
+
+# --- the check summary, clipped where a sentence ends -----------------------
+# The measured failure: a one-line clamp cut check 0 of task_5f7dbea9 at
+# ``raises decimal.InvalidOperation on the st…`` -- it kept "3 of 4 parse cases
+# fail" and threw away the clause that names the defect. A character count
+# cannot know where the finding is, so the preview is cut at a SENTENCE boundary
+# and the budget YIELDS to the sentence that carries the observed-vs-expected
+# value. A shorter preview that omits the finding is not a smaller version of the
+# summary; it is a different, useless statement.
+
+#: How many characters the record page's two-line summary slot carries at its
+#: ~1150pt measure. A SOFT budget: it decides how many WHOLE sentences ride
+#: along, never where a sentence is cut.
+CHECK_SUMMARY_PREVIEW_BUDGET = 200
+
+#: The words with which a summary states an observed value against an expected
+#: one. The preview always reaches the first sentence carrying one of these,
+#: whatever the budget says -- that sentence IS the finding.
+CHECK_SUMMARY_CONTRAST_MARKERS: tuple[str, ...] = (
+    "instead of",
+    "instead",
+    "expected",
+    "expects",
+    "rather than",
+    "where a ",
+    "but got",
+    "returned",
+    "returns",
+    "raises",
+    "raised",
+)
+
+#: A sentence ends at ``.``/``!``/``?``, optionally closed by a quote or bracket,
+#: and followed by whitespace. ``decimal.InvalidOperation`` and ``$1,234.56)``
+#: are therefore NOT boundaries: no whitespace follows the stop.
+_SENTENCE_BOUNDARY = _re.compile(r'(?<=[.!?])["\')\]]*\s+')
+
+
+def split_sentences(text: Any) -> list[str]:
+    """One string split into whole sentences, each keeping its own punctuation.
+
+    Shared by the preview and its tests so the two cannot disagree about where a
+    sentence ends.
+    """
+
+    body = str(text or "").strip()
+    if not body:
+        return []
+    return [part.strip() for part in _SENTENCE_BOUNDARY.split(body) if part.strip()]
+
+
+def _names_a_contrast(sentence: str) -> bool:
+    lowered = sentence.lower()
+    return any(marker in lowered for marker in CHECK_SUMMARY_CONTRAST_MARKERS)
+
+
+def check_summary_preview(
+    summary: Any, budget: int = CHECK_SUMMARY_PREVIEW_BUDGET
+) -> tuple[str | None, bool]:
+    """``(preview, elided)`` for one check summary.
+
+    The preview is always a run of WHOLE sentences from the start, so it can
+    never end mid-clause, and it carries NO ellipsis: a full stop already
+    terminates it, and ``elided`` is what tells a surface to offer the rest.
+    The rules, in order:
+
+    1. the first sentence is always kept, however long it is;
+    2. the run is extended to the first sentence that names an
+       observed-vs-expected value, EVEN PAST THE BUDGET -- never clip before the
+       finding;
+    3. further sentences ride along only while the run fits the budget.
+
+    ``(None, False)`` for an absent summary: absence is the caller's to name.
+    """
+
+    sentences = split_sentences(summary)
+    if not sentences:
+        return None, False
+    limit = budget if isinstance(budget, int) and not isinstance(budget, bool) and budget > 0 else 0
+    required = next(
+        (index for index, sentence in enumerate(sentences) if _names_a_contrast(sentence)),
+        0,
+    )
+    kept = sentences[: required + 1]
+    for sentence in sentences[required + 1 :]:
+        candidate = " ".join([*kept, sentence])
+        if len(candidate) > limit:
+            break
+        kept.append(sentence)
+    return " ".join(kept), len(kept) < len(sentences)
 
 
 # ---------------------------------------------------------------------------
@@ -1566,6 +1854,96 @@ def timeline_beat_title(label: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# the viewing window — when there is nothing to narrow
+# ---------------------------------------------------------------------------
+#
+# The time canvas's window has a FLOOR, and the floor is the axis's own finest
+# tick step: the axis can label no interval shorter than one second, so a
+# window below a few seconds is an unlabelled blank rather than a closer look.
+# A Task whose WHOLE recorded span already sits at or under that floor
+# therefore has no narrower view to move to — and the surfaces that offered
+# one (the overview's two drag handles, its adjustable increment/decrement, its
+# keyboard stop, its resize cursors, the canvas's own pinch / Option-scroll /
+# plus-minus) were controls that could not act. This is the NAMED STATE that
+# stands in their place.
+#
+# ``{span}`` is the recorded span, which only the rendering surface can
+# measure; the words are all here. That is the same division of labour the
+# freshness stamps use — Python owns the phrase, the surface owns the number.
+TIMELINE_WINDOW_NOT_NARROWABLE = "Whole recorded span: {span} — nothing to narrow"
+#: Why the control is gone, for the help text and the screen reader. It states
+#: the axis limit rather than blaming the Task: a 0.3-second Task is not an
+#: error, it is simply already shown whole.
+TIMELINE_WINDOW_NOT_NARROWABLE_DETAIL = (
+    "The whole recorded span is already in view, and it is shorter than the smallest window the "
+    "time axis can label, so there is no narrower view to move to."
+)
+
+
+#: How to drive the canvas, in the order a reader needs it: the gesture that
+#: changes the WINDOW first, then the one that MOVES through time.
+#:
+#: This exists because plain scroll deliberately passes through to the page --
+#: the canvas must not hijack a reader's scrolling -- and a gesture that does
+#: nothing is indistinguishable from a broken one. Google Maps solves the same
+#: problem the same way ("Use ctrl + scroll to zoom the map"): say it at the
+#: moment the plain gesture fails, not only in documentation nobody opens.
+#:
+#: Modifiers are named with their macOS glyphs because that is what is printed
+#: on the reader's keyboard. Shift is named for the pan because a mouse has no
+#: two-finger horizontal swipe, and without it a mouse user cannot pan at all.
+TIMELINE_GESTURE_HINT = "⌥ scroll to zoom · ⇧ scroll or drag to move"
+#: The same contract in full words, for the help popover and the screen reader,
+#: where glyphs read poorly and there is room to say why plain scroll is free.
+TIMELINE_GESTURE_HINT_DETAIL = (
+    "Hold Option and scroll to change how much time is in view. Hold Shift and scroll, swipe "
+    "sideways, or drag the canvas to move through time. Plain scrolling is left to the page, so "
+    "the timeline never takes over your scrolling."
+)
+
+
+def timeline_span_text(seconds: Any) -> str:
+    """A recorded span in words, down to hundredths of a second.
+
+    The canvas's not-narrowable state reports spans BELOW the window floor —
+    fractions of a second, where :func:`humanize_seconds` can only say
+    ``<1m`` and a whole-seconds rounding would print the named-absence-breaking
+    ``0s``. Hundredths below a second, tenths below ten, whole seconds below a
+    minute, and :func:`humanize_seconds` above that, so a long span still reads
+    in the words every other duration uses.
+
+    ``window not recorded`` for a span that is missing, non-finite or not
+    positive: an unmeasurable extent is a NAMED absence, never ``0s``.
+
+    The app mirrors this rule in ``WorkTimeWindowScroller.spanText``
+    (Swift) because the number can only be measured at render time; the table
+    in ``tests/test_display_vocabulary.py`` and the one in
+    ``WorkTimeCanvasInputTests.testSpanTextMirrorsThePythonSpanWords`` are the
+    same table and must stay so.
+    """
+
+    value = _finite(seconds)
+    if value is None or value <= 0:
+        return TIME_SPAN_NOT_RECORDED
+    if value < 1:
+        return f"{value:.2f}s"
+    if value < 10:
+        return f"{value:.1f}s"
+    if value < 60:
+        # Half-away-from-zero, matching Swift's `rounded()`; Python's own
+        # `round` is half-to-even and would disagree at exactly .5.
+        return f"{int(value + 0.5)}s"
+    return humanize_seconds(value)
+
+
+def timeline_window_not_narrowable_text(seconds: Any) -> str:
+    """The canvas's named state when no narrower window exists: the recorded
+    span plus what a reader can do about it (nothing)."""
+
+    return TIMELINE_WINDOW_NOT_NARROWABLE.format(span=timeline_span_text(seconds))
+
+
+# ---------------------------------------------------------------------------
 # timeline salience — which records a reviewer should be pulled toward
 # ---------------------------------------------------------------------------
 #
@@ -1972,9 +2350,15 @@ __all__ = [
     "TIMELINE_BEAT_TITLE",
     "TIMELINE_LANE_LABELS",
     "TIMELINE_SALIENCE_REASONS",
+    "TIMELINE_GESTURE_HINT",
+    "TIMELINE_GESTURE_HINT_DETAIL",
+    "TIMELINE_WINDOW_NOT_NARROWABLE",
+    "TIMELINE_WINDOW_NOT_NARROWABLE_DETAIL",
     "timeline_beat_title",
     "timeline_salience",
     "timeline_salience_reason",
+    "timeline_span_text",
+    "timeline_window_not_narrowable_text",
     "TOOL_CATEGORY_LABELS",
     "actions_synopsis",
     "attention_count_text",
@@ -2028,7 +2412,24 @@ __all__ = [
     "EVIDENCE_GRADE_LABELS",
     "EVIDENCE_GRADE_NOT_CHECK_RELEVANT",
     "EVIDENCE_GRADE_NOT_GRADED",
+    "CHECK_SUMMARY_CONTRAST_MARKERS",
+    "CHECK_SUMMARY_PREVIEW_BUDGET",
+    "META_SEPARATOR",
+    "NEXT_STEP_ABSENT",
+    "NOT_CAPTURED_INLINE_MAX",
+    "NOT_CAPTURED_NOUNS",
+    "NOT_CAPTURED_OVERFLOW",
+    "NOT_CAPTURED_PREFIX",
+    "NOT_CAPTURED_SUBSUMED_BY",
+    "TASK_GOAL_ABSENT",
+    "check_meta_line",
+    "check_summary_preview",
+    "checks_heading_line",
+    "collapse_not_captured_keys",
+    "not_captured_line",
+    "split_sentences",
     "ORIGIN_LABELS",
+    "RECORD_SECTION_LABEL_KEYS",
     "RECEIPT_FIELD_LABELS",
     "TASK_LIST_FIELD_LABELS",
     "REPORTED_COST_CONFIDENCES",

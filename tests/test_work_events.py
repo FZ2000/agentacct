@@ -187,3 +187,71 @@ def test_invalid_transport_cannot_gain_provenance() -> None:
     )
 
     assert normalized.transport == "unknown"
+
+
+def test_task_goal_survives_every_link_from_metadata_to_the_receipt() -> None:
+    """The goal an agent records must reach `dimensions.task.goal`.
+
+    This is pinned end to end because it broke in the MIDDLE and nothing
+    noticed: the MCP accepted `task_goal`, and receipt._task_dimension read it
+    off the work item, but WorkEvent dropped it in between -- so the record page
+    said "No goal was recorded for this task" for tasks whose agent had recorded
+    one. Each link was individually reasonable; only the whole chain is the
+    behaviour, so only the whole chain is worth asserting.
+    """
+    from agentacct.receipt import _task_dimension
+    from agentacct.work_events import WorkEvent
+
+    goal = "Amounts pasted out of the bank's export reach the ledger or are refused outright."
+    event = WorkEvent.from_v1_event(
+        {
+            "event_id": "evt_goal",
+            "event_type": "section_started",
+            "created_at": 1789600000.0,
+            "source": "claude-code",
+            "metadata": {
+                "section_id": "import-contract",
+                "section_status": "started",
+                "section_title": "Make every helper refuse junk the same way",
+                "task_goal": goal,
+            },
+        }
+    )
+    assert event.task_goal == goal, "WorkEvent dropped the goal off the metadata"
+    assert event.to_dict()["task_goal"] == goal, "the serialized event dropped the goal"
+
+    item = {"task_goal": event.to_dict()["task_goal"], "title": "a step title"}
+    assert _task_dimension({"work_items": [item]}, "t")["goal"] == goal
+
+
+def test_a_later_section_never_overwrites_the_goal_the_task_was_opened_for() -> None:
+    """The goal is recorded ONCE, on a task's first section, so it is
+    first-write-wins -- unlike `summary`, which is deliberately last-write-wins.
+    A later section restating it differently must not redefine what the task was
+    for, and a later section omitting it must not erase it.
+    """
+    from agentacct.receipt import _task_dimension
+
+    opened_for = "Stop bad rows aborting the whole import."
+    later = {"task_goal": "something a later step thought it was doing"}
+    assert (
+        _task_dimension({"work_items": [{"task_goal": opened_for}, later]}, "t")["goal"]
+        == opened_for
+    )
+    assert (
+        _task_dimension({"work_items": [{"task_goal": opened_for}, {"title": "step"}]}, "t")["goal"]
+        == opened_for
+    )
+
+
+def test_a_task_with_no_goal_says_so_instead_of_borrowing_a_step_title() -> None:
+    """`objectives` is the list of SECTION TITLES, which are steps. Falling back
+    to one would answer "what was this for" with "what someone did next", which
+    is the confusion the goal field exists to end.
+    """
+    from agentacct.receipt import _task_dimension
+
+    dimension = _task_dimension({"work_items": [{"title": "Accept accounting negatives"}]}, "t")
+    assert dimension["goal"] is None
+    assert dimension["goal_absent_text"], "an absent goal must be a NAMED state"
+    assert "Accept accounting negatives" not in (dimension["goal_absent_text"] or "")

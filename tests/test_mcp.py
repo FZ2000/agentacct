@@ -1451,7 +1451,7 @@ def test_stale_inherited_context_never_produces_exact_attribution(tmp_path):
         server,
         2,
         "agentacct_record_section",
-        {"source": "claude-code", "section_id": "conversation-b-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+        {"source": "claude-code", "section_id": "conversation-b-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
     )
     _record_trusted_usage(server, session_id="conversation-a-session")
 
@@ -1689,7 +1689,7 @@ def test_mcp_section_inherits_hook_client_context(tmp_path):
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "hook-join", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "hook-join", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
         )
     )
     metadata = section_payload["event"]["metadata"]
@@ -2033,7 +2033,7 @@ def test_concurrent_hook_contexts_refuse_inheritance_end_to_end(tmp_path):
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "ambiguous-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "ambiguous-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
         )
     )
     metadata = payload["event"]["metadata"]
@@ -2071,7 +2071,7 @@ def test_concurrent_contexts_env_binding_selects_own_session(tmp_path):
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "env-bound", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "env-bound", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
         )
     )
     metadata = payload["event"]["metadata"]
@@ -2111,7 +2111,7 @@ def test_concurrent_contexts_env_binding_requires_strict_recency_end_to_end(tmp_
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "stale-env", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "stale-env", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
         )
     )["event"]["metadata"]
     assert "client_session_id" not in metadata
@@ -2137,7 +2137,7 @@ def test_concurrent_contexts_pid_lineage_selects_own_session(tmp_path):
             server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "lineage-bound", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "lineage-bound", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
         )
     )
     metadata = payload["event"]["metadata"]
@@ -2161,7 +2161,7 @@ def test_concurrent_contexts_pid_lineage_selects_own_session(tmp_path):
             sibling_server,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "sibling-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "sibling-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
         )
     )["event"]["metadata"]
     assert "client_session_id" not in sibling_metadata
@@ -2303,7 +2303,7 @@ def test_section_spanning_sessions_keeps_per_session_snapshots(tmp_path):
         server,
         2,
         "agentacct_record_section",
-        {"source": "claude-code", "section_id": "spanning-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+        {"source": "claude-code", "section_id": "spanning-work", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
     )
     _record_trusted_usage(server, session_id="conversation-a")
 
@@ -2709,7 +2709,7 @@ def test_refusal_note_with_attach_inherited_ids_does_not_claim_unattributed(tmp_
             server,
             2,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "attach-after-refusal", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "attach-after-refusal", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
         )
     )
 
@@ -2732,7 +2732,7 @@ def test_refusal_note_with_attach_inherited_ids_does_not_claim_unattributed(tmp_
             fresh,
             1,
             "agentacct_record_section",
-            {"source": "claude-code", "section_id": "bare-refusal", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "Recorded outcome for this fixture section."},
+            {"source": "claude-code", "section_id": "bare-refusal", "section_status": "completed", "files": ["src/agentacct/mcp.py"], "section_title": "Fixture section title", "summary": "The fixture store now records a joined section, so the join assertions below read a real record."},
         )
     )
     assert "stays unattributed" in bare["refused_client_context"]["note"]
