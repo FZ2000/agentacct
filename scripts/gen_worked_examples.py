@@ -22,7 +22,23 @@ timeline row is the receipt engine's own output, not hand-written prose.
 The seed uses a FIXED base time and the renderer uses relative timestamps, so
 the output is byte-for-byte reproducible.
 """
+
 from __future__ import annotations
+
+# The receipt engine renders wall-clock times, so these docs are only
+# reproducible if the zone is pinned. They were committed in one contributor's
+# LOCAL time while CI runs TZ=UTC, which made
+# test_docs_generated::test_worked_example_docs_are_in_sync a timezone bomb:
+# green on a machine in the right zone, red in CI, for a reason the diff
+# ("13:38" -> "20:38") does not explain. Pinning here means one regeneration
+# produces the same bytes on every machine, which is the only way a generated
+# file can be diffed against its source of truth.
+import os as _os
+import time as _time
+
+_os.environ["TZ"] = "UTC"
+if hasattr(_time, "tzset"):
+    _time.tzset()
 
 import sys
 import tempfile

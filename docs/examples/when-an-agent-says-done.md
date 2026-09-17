@@ -54,7 +54,7 @@ An agent worked on **"Fix the flaky checkout-total test"** and reported it done.
 
 **Gaps (4)** — what could not be proven
 
-- **Tool calls** — Tool-call capture did not cover this Task: captured 22 calls covering May 28 13:38 of a May 28 13:26–13:39 task · the ledger holds 3 recorded sections but capture saw no record_section call · the ledger holds 2 recorded checks but capture saw no record_machine_check call.
+- **Tool calls** — Tool-call capture did not cover this Task: captured 22 calls covering May 28 20:38 of a May 28 20:26–20:39 task · the ledger holds 3 recorded sections but capture saw no record_section call · the ledger holds 2 recorded checks but capture saw no record_machine_check call.
 - **Checks** — 1 completed step has no linked passing check.
 - **Checks** — No commit was recorded with this work, so it cannot be located in the repository.
 - **Tool calls** — File operations were not ordered, so the recorded paths cannot be read as a sequence of edits.
