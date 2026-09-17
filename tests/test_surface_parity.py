@@ -383,10 +383,15 @@ def _tui_receipt_text(receipt: dict[str, Any]) -> str:
 
 
 def _tui_card_text(summary: dict[str, Any]) -> str:
-    """One TUI master-list card (expanded — the selected row's Claims/Checks
-    grid), as plain text."""
+    """One TUI master-list ROW as plain text.
 
-    return _normalize(Text.from_markup(tui._work_card_markup(summary, tui._LIGHT, expanded=True)).plain)
+    The Sessions master list is a DataTable now, not a stack of expanded cards,
+    so the row builder returns its own plain-text mirror (the second element)
+    for exactly this: asserting row content without a terminal width.
+    """
+
+    _cells, plain = tui._work_row_cells(summary, tui._LIGHT, 260)
+    return _normalize(plain)
 
 
 def _text_surfaces(receipt: dict[str, Any]) -> dict[str, str]:

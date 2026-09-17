@@ -20,6 +20,15 @@ enum SnapshotRunner {
         // primitives. The fixture renderers (golden path) deliberately do NOT set
         // this, keeping their references pixel-stable.
         SnapshotMode.rendersStaticControls = true
+        // "<with checks>,<without checks>" — the docs pipeline narrows the open
+        // step set so one screenshot fits the step spine and the timeline.
+        if let spec = ProcessInfo.processInfo.environment["AGENTACCT_SNAPSHOT_EXPANDED_STEPS"] {
+            let parts = spec.split(separator: ",").map { Int($0.trimmingCharacters(in: .whitespaces)) }
+            if parts.count == 2, let a = parts[0], let b = parts[1] {
+                SnapshotMode.expandedStepsWithChecks = a
+                SnapshotMode.expandedStepsWithoutChecks = b
+            }
+        }
         var finished = false
         Task { @MainActor in
             defer { finished = true }
@@ -28,6 +37,11 @@ enum SnapshotRunner {
                 let glance = GlanceState(preloaded: snapshot)
                 let dashboard = DashboardStore()
                 await dashboard.refresh()
+                // The Work (worksets) pane's own loader is gated off in snapshot
+                // mode (deterministic rendering can't wait on its SwiftUI .task),
+                // and refresh() doesn't cover it — fetch the groupings explicitly
+                // so window-work-*.png renders populated cards, not the empty state.
+                await dashboard.fetchWorksets()
                 let selection = AppSelection()
                 // refresh() also loads the Task list. Select the newest Task
                 // (or the one named by AGENTACCT_SNAPSHOT_TASK — id or prefix —

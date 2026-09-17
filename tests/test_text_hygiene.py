@@ -45,6 +45,7 @@ ALLOWED_UNKNOWN_FALLBACKS = [
     "src/agentacct/receipt.py",
     "src/agentacct/task_intelligence.py",
     "src/agentacct/task_timeline.py",
+    "src/agentacct/tui.py",  # _agent_label: an unrecognised CLIENT key, shown de-cased rather than dropped
     "src/agentacct/tui.py",  # the Evidence-trust rail title now reads the reducer's state_title
 ]
 

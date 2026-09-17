@@ -6,8 +6,8 @@
     "architecture": "arm64"
   },
   "recorded_on": {
-    "macos_product_version": "26.6",
-    "macos_build_version": "25G72",
+    "macos_product_version": "26.5.1",
+    "macos_build_version": "25F80",
     "xcode_version": "26.6",
     "xcode_build_version": "17F113",
     "architecture": "arm64",
@@ -16,7 +16,7 @@
     "lang": "en_US.UTF-8",
     "lc_all": "en_US.UTF-8"
   },
-  "recorded_at_commit": "6946ef26dd1b3e20ddea41a42e292525b135ae5d",
-  "recorded_at_utc": "2026-09-17T03:22:12Z",
+  "recorded_at_commit": "e0fc02ac41ebe48b52f002843a086285324ac153",
+  "recorded_at_utc": "2026-09-17T03:51:29Z",
   "note": "compared_axes is the gate. recorded_on is provenance only and is never compared; drift inside macOS 26.x is absorbed by VisualSnapshotTolerance.crossMinorRenderingNoise, whose measured basis is documented in Tests/agentacctTests/Support/VisualSnapshotHarness.swift."
 }
