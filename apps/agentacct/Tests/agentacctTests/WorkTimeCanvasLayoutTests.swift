@@ -278,6 +278,76 @@ final class WorkTimeCanvasLayoutTests: XCTestCase {
         XCTAssertEqual(WorkTimeCanvasLayout.zoomedWindow(window, factor: .nan, anchorFraction: 0, within: full), window)
     }
 
+    /// The three measured task shapes, and what the window floor does to each.
+    ///
+    /// A task at or under the floor has NO narrower window, so every zoom, pan
+    /// and handle drag resolves back to the domain it was given: the control is
+    /// not slow or fiddly, it is absent, and `canNarrow` is what the surfaces
+    /// ask before drawing one. Above the floor the range is real and stated in
+    /// numbers here, so a later change to the floor cannot quietly make the
+    /// canvas unzoomable without this failing.
+    func testCanNarrowIsFalseExactlyWhenNoZoomCanChangeTheWindow() {
+        // task_7bb028c1 — 3 events, 0.30s: shorter than the floor.
+        let brief = WorkTimelineInterval(lower: 1_789_483_454, upper: 1_789_483_454.30)
+        XCTAssertFalse(WorkTimeCanvasLayout.canNarrow(brief))
+        let briefWindow = WorkTimeCanvasLayout.clampedWindow(brief, to: brief)
+        for factor in [1.25, 2.0, 1_000_000.0, 0.8, 0.001] {
+            let zoomed = WorkTimeCanvasLayout.zoomedWindow(briefWindow, factor: factor,
+                anchorFraction: 0.5, within: brief)
+            XCTAssertTrue(WorkTimeCanvasLayout.sameWindow(zoomed, briefWindow),
+                          "factor \(factor) moved a window that has nowhere to go")
+        }
+        for delta in [-1_000.0, -0.05, 0.05, 1_000] {
+            XCTAssertTrue(WorkTimeCanvasLayout.sameWindow(
+                WorkTimeCanvasLayout.pannedWindow(briefWindow, by: delta, within: brief), briefWindow),
+                "a window covering its whole domain cannot pan by \(delta)")
+        }
+        // A task exactly AT the floor is still not narrowable: the clamp floors
+        // the span at the same 5 seconds it already shows.
+        let atFloor = WorkTimelineInterval(lower: 0, upper: WorkTimeCanvasLayout.minimumVisibleSpan)
+        XCTAssertFalse(WorkTimeCanvasLayout.canNarrow(atFloor))
+
+        // task_5f7dbea9 — 9 events, 138.61s — and task_ef6818aa — 65 events,
+        // 24,954.83s: both narrowable, to the same 5-second floor.
+        for span in [138.61, 24_954.83] {
+            let recorded = WorkTimelineInterval(lower: 1_789_483_454, upper: 1_789_483_454 + span)
+            XCTAssertTrue(WorkTimeCanvasLayout.canNarrow(recorded), "span \(span)")
+            let narrowest = WorkTimeCanvasLayout.zoomedWindow(recorded, factor: .greatestFiniteMagnitude,
+                anchorFraction: 0.5, within: recorded)
+            XCTAssertEqual(narrowest.span, WorkTimeCanvasLayout.minimumVisibleSpan, accuracy: 0.000_001)
+            XCTAssertFalse(WorkTimeCanvasLayout.sameWindow(narrowest, recorded))
+        }
+
+        // Degenerate domains are never narrowable, and never crash the test.
+        for broken in [WorkTimelineInterval(lower: 5, upper: 5),
+                       .init(lower: .nan, upper: 1),
+                       .init(lower: -.greatestFiniteMagnitude, upper: .greatestFiniteMagnitude)] {
+            XCTAssertFalse(WorkTimeCanvasLayout.canNarrow(broken))
+        }
+    }
+
+    /// The floor is the AXIS's resolution, not a taste — so pin it to the axis.
+    /// At the floor the canvas still draws several one-second ticks; below it,
+    /// the axis cannot divide further, which is the whole reason the floor is
+    /// absolute rather than a fraction of the task (see `minimumVisibleSpan`).
+    func testTheWindowFloorIsTheSmallestSpanTheAxisCanStillLabel() {
+        let spacing = 140.0  // the canvas's own minimumSpacing at text scale 1
+        for width in [880.0, 1_000, 1_400] {
+            let floorWindow = WorkTimelineInterval(lower: 0, upper: WorkTimeCanvasLayout.minimumVisibleSpan)
+            let ticks = WorkTimelineTimeAxis.ticks(in: floorWindow, width: width, minimumSpacing: spacing)
+            XCTAssertEqual(ticks.step, 1, "the floor sits on the axis's finest step at width \(width)")
+            XCTAssertGreaterThanOrEqual(ticks.times.count, 3,
+                "an axis needs several labelled ticks to be a scale (width \(width))")
+            // A window a fifth of the 0.30s task — what a relative floor would
+            // allow — cannot be labelled at all: the axis has no finer step.
+            let proportional = WorkTimelineTimeAxis.ticks(in: .init(lower: 0, upper: 0.30 / 5),
+                width: width, minimumSpacing: spacing)
+            XCTAssertEqual(proportional.step, 1)
+            XCTAssertLessThanOrEqual(proportional.times.count, 1,
+                "a proportional floor would zoom into an axis with nothing on it")
+        }
+    }
+
     func testWindowSpanNeverShrinksBelowTheReadableMinimum() {
         let window = WorkTimelineInterval(lower: 120, upper: 140)
         let zoomed = WorkTimeCanvasLayout.zoomedWindow(window, factor: 1_000_000, anchorFraction: 0.5, within: full)

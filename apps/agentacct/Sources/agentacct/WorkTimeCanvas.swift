@@ -235,6 +235,11 @@ struct WorkTimeCanvas: View {
                     by: -pixels * secondsPerPixel, within: domain),
                     WorkTimeCanvasLayout.clampedWindow(window, to: domain))
             },
+            canReachEdge: { latest in
+                !WorkTimeCanvasLayout.sameWindow(WorkTimeCanvasLayout.pannedWindow(window,
+                    by: latest ? domain.upper - window.upper : domain.lower - window.lower, within: domain),
+                    WorkTimeCanvasLayout.clampedWindow(window, to: domain))
+            },
             onEdge: { latest in
                 onWindow(WorkTimeCanvasLayout.pannedWindow(window,
                     by: latest ? domain.upper - window.upper : domain.lower - window.lower, within: domain))
@@ -245,6 +250,12 @@ struct WorkTimeCanvas: View {
             onGestureEnded: { dragBaseWindow = nil },
             onGestureCancelled: { dragBaseWindow = nil },
             accessibilityValue: "\(WorkTimelineTimeAxis.label(window.lower, range: window)) to \(WorkTimelineTimeAxis.label(window.upper, range: window))",
+            // A canvas whose whole recorded span is shorter than the window
+            // floor can neither be narrowed nor panned; reading out the pinch
+            // and drag gestures there would announce a control that is not one.
+            accessibilityHelp: WorkTimeCanvasLayout.canNarrow(full)
+                ? WorkTimeCanvasHelp.navigable
+                : WorkTimeWindowScroller.notNarrowableDetail,
             content: content).renderingSurface
     }
 
@@ -657,7 +668,36 @@ struct WorkTimeWindowScroller: View {
     let onWindow: (WorkTimelineInterval) -> Void
     @State private var dragStart: WorkTimelineInterval?
 
+    /// Is this strip a control at all?
+    ///
+    /// Narrowing is the only thing its handles, its adjustable steps and its
+    /// wheel do, and `WorkTimeCanvasLayout.clampedWindow` widens every requested
+    /// window back to the recorded span when that span is at or under the floor.
+    /// The whole strip is then inert — panning included, because a window that
+    /// already covers the domain has nowhere to move — so it is replaced by the
+    /// named state rather than left looking live.
+    private var canNarrow: Bool { WorkTimeCanvasLayout.canNarrow(full) }
+
     var body: some View {
+        if canNarrow { control } else { notNarrowableState }
+    }
+
+    /// The named state that stands in for the control: the recorded span, and
+    /// that there is nothing to narrow. It is static text — no Tab stop, no
+    /// adjustable action, no cursor rect, no gesture — so nothing about it
+    /// announces or looks like a control (C13, and "absence is a named state").
+    private var notNarrowableState: some View {
+        Text(Self.notNarrowableText(span: full.upper - full.lower))
+            .workFont(.caption).foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .frame(height: 40)
+            .accessibilityIdentifier("work.timeline.window.not-narrowable")
+            .accessibilityHint(Self.notNarrowableDetail)
+            .help(Self.notNarrowableDetail)
+    }
+
+    private var control: some View {
         GeometryReader { geometry in
             let width = max(geometry.size.width - 40, 1)
             let left = domain.fraction(window.lower) * width
@@ -712,6 +752,43 @@ struct WorkTimeWindowScroller: View {
             }.renderingSurface
         }
         .frame(height: 40)
+    }
+
+    // MARK: the named state's words
+
+    /// The reducer's sentence for a window with nothing to narrow.
+    ///
+    /// The WORDS are `display_vocabulary.TIMELINE_WINDOW_NOT_NARROWABLE`; only
+    /// `{span}` is filled in here, because only a rendering surface can measure
+    /// the span. `tests/test_surface_parity.py` pins both literals to Python
+    /// character for character — the same arrangement `agoText` uses for the
+    /// freshness phrase.
+    static let notNarrowableTemplate = "Whole recorded span: {span} — nothing to narrow"
+    /// `display_vocabulary.TIMELINE_WINDOW_NOT_NARROWABLE_DETAIL`: why the
+    /// control is gone. Also the canvas's accessibility help in that state.
+    static let notNarrowableDetail = "The whole recorded span is already in view, and it is shorter than the smallest window the time axis can label, so there is no narrower view to move to."
+
+    static func notNarrowableText(span: Double) -> String {
+        notNarrowableTemplate.replacingOccurrences(of: "{span}", with: spanText(span))
+    }
+
+    /// A recorded span in words. Mirrors `display_vocabulary.timeline_span_text`
+    /// branch for branch — hundredths below a second (the state exists for spans
+    /// the axis cannot label, where whole seconds would print the forbidden
+    /// `0s`), tenths below ten, whole seconds below a minute, and the app's
+    /// shared duration words above that. An unmeasurable span is NAMED
+    /// (`TIME_SPAN_NOT_RECORDED`), never zero.
+    static func spanText(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "window not recorded" }
+        if seconds < 1 { return String(format: "%.2fs", seconds) }
+        if seconds < 10 { return String(format: "%.1fs", seconds) }
+        if seconds < 60 { return "\(Int(seconds.rounded()))s" }
+        let total = Int(seconds)
+        if total < 86_400 {
+            let hours = total / 3_600, minutes = (total % 3_600) / 60
+            return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+        }
+        return "\(total / 86_400)d \((total % 86_400) / 3_600)h"
     }
 
     /// The strip's own content: one bar per bucket of dated records, counting

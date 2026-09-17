@@ -44,11 +44,44 @@ struct WorkTimeCanvasLayout {
     /// occluder's neighbours.
     private static let stemDetourInset = 8.0
 
-    /// The smallest time window the canvas will show. Below a few seconds the
-    /// axis cannot stay meaningful and the overview pill becomes ungrabbable;
-    /// dense bursts are still separable at this scale. The maximum window is
-    /// the full recorded domain.
+    /// The smallest time window the canvas will show — and why it is an
+    /// absolute number of seconds rather than a fraction of the task.
+    ///
+    /// The floor is THE AXIS'S OWN RESOLUTION. `WorkTimelineTimeAxis.tickSteps`
+    /// begins at one second: no window can be labelled more finely than that,
+    /// and an axis needs several labelled ticks to be a scale rather than a
+    /// single stamp. At the canvas's 140pt minimum label spacing, a 5-second
+    /// window in an 880pt plot draws 5 one-second ticks 176pt apart — the
+    /// smallest window that still reads as a scale. A narrower window is not
+    /// more zoom: it is the same one-second lattice with fewer labels in it,
+    /// ending at an axis with none.
+    ///
+    /// A RELATIVE floor — a fixed fraction of `full.span`, so every task can be
+    /// zoomed to the same proportion — was considered and rejected for exactly
+    /// that reason. On the measured 0.30-second task a 1/20 floor would map a
+    /// 0.015-second window onto an axis that can draw no tick inside it, while
+    /// spreading three cards so far apart that at most one is on screen with
+    /// nothing left to place it in time. Proportional zoom is not legible zoom,
+    /// because the axis does not scale with the task.
+    ///
+    /// The consequence is that a task shorter than this floor cannot be
+    /// narrowed AT ALL. That is a state every surface must NAME rather than
+    /// offer a dead control for — see `canNarrow`.
     static let minimumVisibleSpan = 5.0
+
+    /// Is there any window narrower than the whole recorded span?
+    ///
+    /// False for a task at or under the floor: `clampedWindow` then resolves
+    /// every requested window — zoomed, dragged, incremented — back to the
+    /// domain it was given, so no zoom, handle drag or adjustable step can
+    /// change what is on screen. A surface that keeps offering those controls
+    /// advertises something it cannot do; it must name the state instead
+    /// (`display_vocabulary.TIMELINE_WINDOW_NOT_NARROWABLE`).
+    static func canNarrow(_ full: WorkTimelineInterval, minimumSpan: Double = minimumVisibleSpan) -> Bool {
+        let full = normalizedDomain(full)
+        let minimum = minimumSpan.isFinite && minimumSpan > 0 ? minimumSpan : 1
+        return full.upper - full.lower > minimum
+    }
 
     /// Upper bound on the extra time the viewport may show beyond the recorded
     /// domain. Cards are centered on their timestamps, so the earliest and
@@ -305,8 +338,22 @@ struct WorkTimeCanvasLayout {
     /// Whether two windows are the same up to floating-point noise. Used to
     /// tell a clamped (no-op) zoom or pan from a real move, so saturated
     /// input is left to the page instead of being swallowed.
+    ///
+    /// TWO tolerances, because the span and the timestamps have different
+    /// scales. A proportion of the span covers coarse rounding in a long window;
+    /// a few representable steps of the BOUNDS covers the fact that these are
+    /// absolute epoch seconds, spaced about 0.24 microseconds apart near 2026.
+    /// A fully zoomed-out canvas re-derives its span from those numbers, so the
+    /// clamp lands a step or two from where it started — with only the
+    /// span-relative tolerance (1.4e-7 on a 138-second window, below one step)
+    /// every further zoom-out was reported as a real move, consumed the key and
+    /// shifted the window by 240 nanoseconds. That is a gesture that looks
+    /// handled and is not (C13).
     static func sameWindow(_ lhs: WorkTimelineInterval, _ rhs: WorkTimelineInterval) -> Bool {
-        let tolerance = max(abs(lhs.upper - lhs.lower), abs(rhs.upper - rhs.lower), 1) * 1e-9
+        let spans = max(abs(lhs.upper - lhs.lower), abs(rhs.upper - rhs.lower), 1) * 1e-9
+        let steps = [lhs.lower, lhs.upper, rhs.lower, rhs.upper]
+            .filter { $0.isFinite }.map { $0.ulp }.max() ?? 0
+        let tolerance = max(spans, 4 * steps)
         return abs(lhs.lower - rhs.lower) <= tolerance && abs(lhs.upper - rhs.upper) <= tolerance
     }
 

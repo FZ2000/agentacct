@@ -266,6 +266,82 @@ final class WorkTimeCanvasInputTests: XCTestCase {
         XCTAssertEqual(interactions, 1)
     }
 
+    /// A saturated canvas must not OFFER the navigation it cannot perform. An
+    /// accessibility action that returns success and moves nothing tells a
+    /// screen-reader user the window changed when it did not — the same defect
+    /// as the keyboard consuming +/- and doing nothing.
+    @MainActor func testDeadNavigationIsNeitherOfferedNorReportedAsDone() {
+        var zooms = 0
+        var pans = 0
+        let dead = WorkTimeCanvasInputView(configuration: WorkTimeCanvasInput(interactiveRegions: [],
+            onPan: { _ in pans += 1 }, onZoom: { _, _ in zooms += 1 },
+            canZoom: { _, _ in false }, canPan: { _ in false },
+            accessibilityHelp: WorkTimeWindowScroller.notNarrowableDetail) { Color.clear })
+        XCTAssertEqual(dead.accessibilityCustomActions()?.count ?? 0, 0,
+                       "a canvas that cannot pan or zoom offers no navigation action")
+        XCTAssertEqual(dead.accessibilityHelp(), WorkTimeWindowScroller.notNarrowableDetail,
+                       "the help must not read out gestures the canvas ignores")
+
+        // A live canvas keeps all four, and each one actually acts.
+        let live = WorkTimeCanvasInputView(configuration: WorkTimeCanvasInput(interactiveRegions: [],
+            onPan: { _ in pans += 1 }, onZoom: { _, _ in zooms += 1 }) { Color.clear })
+        let actions = live.accessibilityCustomActions() ?? []
+        XCTAssertEqual(actions.map(\.name),
+                       ["Move earlier", "Move later", "Narrow viewing window", "Widen viewing window"])
+        XCTAssertEqual(live.accessibilityHelp(), WorkTimeCanvasHelp.navigable)
+        for action in actions { XCTAssertEqual(action.handler?(), true, "\(action.name) reported failure") }
+        XCTAssertEqual(pans, 2)
+        XCTAssertEqual(zooms, 2)
+
+        // One saturated direction hides only its own action: a window parked at
+        // the latest edge can still be moved earlier.
+        let atEdge = WorkTimeCanvasInputView(configuration: WorkTimeCanvasInput(interactiveRegions: [],
+            onPan: { _ in }, onZoom: { _, _ in },
+            canZoom: { _, _ in true }, canPan: { pixels in pixels > 0 }) { Color.clear })
+        XCTAssertEqual(atEdge.accessibilityCustomActions()?.map(\.name),
+                       ["Move earlier", "Narrow viewing window", "Widen viewing window"])
+    }
+
+    /// A drag that cannot move the window never becomes a drag: no cumulative
+    /// pan requests, and no interaction hold on a canvas nothing moved in.
+    @MainActor func testBlankDragOnASaturatedCanvasDoesNothing() {
+        var drags: [Double] = []
+        var interactions = 0
+        var clicks = 0
+        let view = WorkTimeCanvasInputView(configuration: WorkTimeCanvasInput(interactiveRegions: [],
+            onPan: { _ in }, onDrag: { drags.append($0) }, onZoom: { _, _ in },
+            canZoom: { _, _ in false }, canPan: { _ in false },
+            onInteraction: { interactions += 1 }, onBackgroundClick: { clicks += 1 }) { Color.clear })
+        view.frame = CGRect(x: 0, y: 0, width: 400, height: 180)
+        let down = CanvasEvent(); down.testLocation = CGPoint(x: 100, y: 50)
+        view.mouseDown(with: down)
+        let dragged = CanvasEvent(); dragged.testLocation = CGPoint(x: 160, y: 50)
+        view.mouseDragged(with: dragged)
+        view.mouseUp(with: dragged)
+        XCTAssertEqual(drags, [], "a saturated canvas requests no pan")
+        XCTAssertEqual(interactions, 0)
+    }
+
+    /// The span words the canvas's named state prints mirror
+    /// `display_vocabulary.timeline_span_text` branch for branch. This table and
+    /// the one in `tests/test_display_vocabulary.py` are the same table.
+    func testSpanTextMirrorsThePythonSpanWords() {
+        let cases: [(Double, String)] = [
+            (0.3, "0.30s"), (0.75, "0.75s"), (0.996, "1.00s"), (1, "1.0s"), (4.62, "4.6s"),
+            (9.9, "9.9s"), (10, "10s"), (42.4, "42s"), (59.4, "59s"),
+            (60, "1m"), (138.61, "2m"), (3_600, "1h 0m"), (24_954.83, "6h 55m"), (183_600, "2d 3h"),
+        ]
+        for (seconds, expected) in cases {
+            XCTAssertEqual(WorkTimeWindowScroller.spanText(seconds), expected, "span \(seconds)")
+        }
+        // An unmeasurable span is NAMED, never "0s".
+        for broken in [0, -1, Double.nan, .infinity] {
+            XCTAssertEqual(WorkTimeWindowScroller.spanText(broken), "window not recorded")
+        }
+        XCTAssertEqual(WorkTimeWindowScroller.notNarrowableText(span: 0.3),
+                       "Whole recorded span: 0.30s — nothing to narrow")
+    }
+
     @MainActor func testHostingBoundaryPreservesReadingSizeAndAppearance() {
         let observed = expectation(description: "Hosted content receives the containing environment")
         var fulfilled = false

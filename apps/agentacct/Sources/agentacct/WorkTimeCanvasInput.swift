@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+/// The canvas's navigation help. It describes the gestures THIS surface owns,
+/// so it is the app's own sentence rather than a payload fact — but the sentence
+/// that REPLACES it when none of those gestures can act is a named state, and
+/// that one comes from the reducer's vocabulary through `accessibilityHelp`.
+enum WorkTimeCanvasHelp {
+    static let navigable = "Pinch or Option-scroll to change the visible time span; scroll sideways or drag to move through time. The viewing window below also supports dragging and resizing."
+}
+
 /// A cursor owned by the input view through cursor rects, in the same top-left
 /// coordinates as `interactiveRegions` (C107).
 struct WorkTimeCanvasCursorRegion {
@@ -25,6 +33,9 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
     var canZoom: ((Double, Double) -> Bool)?
     /// Whether a pan would change the window; nil means always.
     var canPan: ((Double) -> Bool)?
+    /// Whether jumping to the earliest/latest edge would change the window;
+    /// nil means always.
+    var canReachEdge: ((Bool) -> Bool)?
     var onInteraction: (() -> Void)?
     var onEdge: ((Bool) -> Void)?
     var onDismiss: (() -> Void)?
@@ -38,6 +49,12 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
     /// Names THIS canvas. Two groups that both said "Time canvas" left a
     /// screen-reader user unable to tell the plot from its overview (K122).
     var accessibilityLabel: String
+    /// What this canvas can be DONE to, spoken on focus. It is a parameter and
+    /// not a constant because a canvas whose window can be neither narrowed nor
+    /// panned must not read out gestures it will ignore; the replacement
+    /// sentence is the reducer's
+    /// (`display_vocabulary.TIMELINE_WINDOW_NOT_NARROWABLE_DETAIL`).
+    var accessibilityHelp: String
     var content: Content
 
     var hostedContent: WorkTimeCanvasHostedContent<Content> {
@@ -48,6 +65,7 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
          onDrag: ((Double) -> Void)? = nil,
          onZoom: @escaping (Double, Double) -> Void,
          canZoom: ((Double, Double) -> Bool)? = nil, canPan: ((Double) -> Bool)? = nil,
+         canReachEdge: ((Bool) -> Bool)? = nil,
          onInteraction: (() -> Void)? = nil,
          onEdge: ((Bool) -> Void)? = nil, onDismiss: (() -> Void)? = nil,
          onBackgroundClick: (() -> Void)? = nil, onGestureBegan: (() -> Void)? = nil,
@@ -56,10 +74,13 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
          cursorRegions: [WorkTimeCanvasCursorRegion] = [], accessibilityValue: String = "",
          accessibilityIdentifier: String = "work.timeline.navigation",
          accessibilityLabel: String = "Activity timeline",
+         accessibilityHelp: String = WorkTimeCanvasHelp.navigable,
          @ViewBuilder content: () -> Content) {
         self.interactiveRegions = interactiveRegions
         self.onPan = onPan; self.onDrag = onDrag; self.onZoom = onZoom; self.onInteraction = onInteraction
-        self.canZoom = canZoom; self.canPan = canPan; self.cursorRegions = cursorRegions
+        self.canZoom = canZoom; self.canPan = canPan; self.canReachEdge = canReachEdge
+        self.cursorRegions = cursorRegions
+        self.accessibilityHelp = accessibilityHelp
         self.onEdge = onEdge; self.onDismiss = onDismiss
         self.onBackgroundClick = onBackgroundClick; self.onGestureBegan = onGestureBegan
         self.onGestureEnded = onGestureEnded
@@ -78,6 +99,7 @@ struct WorkTimeCanvasInput<Content: View>: NSViewRepresentable {
         view.hosting.rootView = hostedContent
         view.setAccessibilityValue(accessibilityValue)
         view.setAccessibilityLabel(accessibilityLabel)
+        view.setAccessibilityHelp(accessibilityHelp)
     }
 }
 
@@ -107,6 +129,14 @@ enum WorkTimeCanvasInputIntent {
     enum KeyAction: Equatable {
         case pan(Double), zoom(Double), edge(latest: Bool), dismiss
     }
+
+    /// ONE step per navigation action, shared by `keyAction` and the
+    /// accessibility custom actions. They were separate literals, so an action
+    /// filtered out for being a no-op could have been filtered by a different
+    /// step than the key would have used.
+    static let panStep = 48.0
+    static let zoomInFactor = 1.25
+    static let zoomOutFactor = 0.8
 
     /// Only Option-scroll resizes the visible time span; an unmodified wheel
     /// returns nil so the page keeps its scroll axis. A positive dominant delta
@@ -165,15 +195,15 @@ enum WorkTimeCanvasInputIntent {
                           modifiers: NSEvent.ModifierFlags) -> KeyAction? {
         guard modifiers.intersection([.command, .control, .option]).isEmpty else { return nil }
         switch keyCode {
-        case 123: return .pan(48) // Left: reveal earlier time.
-        case 124: return .pan(-48)
+        case 123: return .pan(panStep) // Left: reveal earlier time.
+        case 124: return .pan(-panStep)
         case 115: return .edge(latest: false)
         case 119: return .edge(latest: true)
         case 53: return .dismiss
         default:
             switch characters {
-            case "+", "=": return .zoom(1.25)
-            case "-": return .zoom(0.8)
+            case "+", "=": return .zoom(zoomInFactor)
+            case "-": return .zoom(zoomOutFactor)
             default: return nil
             }
         }
@@ -188,6 +218,7 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         didSet {
             let old = oldValue.cursorRegions.map(\.rect)
             if old != configuration.cursorRegions.map(\.rect) { window?.invalidateCursorRects(for: self) }
+            syncCustomActions()
         }
     }
     let hosting: WorkTimeCanvasHostingView<WorkTimeCanvasHostedContent<Content>>
@@ -231,13 +262,46 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         setAccessibilityLabel(configuration.accessibilityLabel)
         setAccessibilityIdentifier(configuration.accessibilityIdentifier)
         setAccessibilityValue(configuration.accessibilityValue)
-        setAccessibilityHelp("Pinch or Option-scroll to change the visible time span; scroll sideways or drag to move through time. The viewing window below also supports dragging and resizing.")
-        setAccessibilityCustomActions([
-            NSAccessibilityCustomAction(name: "Move earlier") { [weak self] in self?.perform(.pan(48)) ?? false },
-            NSAccessibilityCustomAction(name: "Move later") { [weak self] in self?.perform(.pan(-48)) ?? false },
-            NSAccessibilityCustomAction(name: "Narrow viewing window") { [weak self] in self?.perform(.zoom(1.25)) ?? false },
-            NSAccessibilityCustomAction(name: "Widen viewing window") { [weak self] in self?.perform(.zoom(0.8)) ?? false },
-        ])
+        setAccessibilityHelp(configuration.accessibilityHelp)
+        syncCustomActions()
+    }
+
+    /// Only the navigation actions that CAN act are offered.
+    ///
+    /// An adjustable action that reports success and moves nothing is the same
+    /// defect as a dead Tab stop: a screen-reader user is told the window
+    /// changed when it did not. On a task shorter than the window floor every
+    /// one of these is a no-op, and the list is then empty — the canvas's help
+    /// says so in the reducer's words instead (C13).
+    private func syncCustomActions() {
+        let intent = WorkTimeCanvasInputIntent.self
+        let candidates: [(name: String, action: WorkTimeCanvasInputIntent.KeyAction)] = [
+            ("Move earlier", .pan(intent.panStep)),
+            ("Move later", .pan(-intent.panStep)),
+            ("Narrow viewing window", .zoom(intent.zoomInFactor)),
+            ("Widen viewing window", .zoom(intent.zoomOutFactor)),
+        ]
+        let live = candidates.filter { canPerform($0.action) }
+        guard live.map(\.name) != (accessibilityCustomActions() ?? []).map(\.name) else { return }
+        setAccessibilityCustomActions(live.map { candidate in
+            NSAccessibilityCustomAction(name: candidate.name) { [weak self] in
+                self?.perform(candidate.action) ?? false
+            }
+        })
+    }
+
+    /// Would this action change the visible window? The same predicates the
+    /// wheel and pinch paths consult, so a key, an accessibility action and a
+    /// gesture can never disagree about whether the canvas is saturated.
+    private func canPerform(_ action: WorkTimeCanvasInputIntent.KeyAction) -> Bool {
+        switch action {
+        case .pan(let pixels): return configuration.canPan?(pixels) ?? true
+        case .zoom(let factor): return configuration.canZoom?(factor, 0.5) ?? true
+        case .edge(let latest):
+            guard configuration.onEdge != nil else { return false }
+            return configuration.canReachEdge?(latest) ?? true
+        case .dismiss: return dragging || magnifying || configuration.onDismiss != nil
+        }
     }
 
     required init?(coder: NSCoder) { return nil }
@@ -370,7 +434,10 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         let point = convert(event.locationInWindow, from: nil)
         guard point.x.isFinite else { return }
         if !dragging {
-            guard abs(point.x - dragStart.x) > 3 else { return }
+            // A drag that cannot move the window never becomes a drag: no
+            // closed-hand cursor, no interaction hold, no pan request that
+            // resolves back to the window it started from.
+            guard abs(point.x - dragStart.x) > 3, canDragToPan else { return }
             dragging = true
             configuration.onInteraction?()
             NSCursor.closedHand.set()
@@ -405,8 +472,15 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
         }
     }
 
+    /// Returns false for an action this canvas cannot carry out, so the key
+    /// event reaches the page instead of being swallowed — the same policy the
+    /// wheel and pinch paths already follow for saturated input (C13). Before
+    /// this, +/- and the arrows were consumed and did nothing on a task shorter
+    /// than the window floor, which is what "the scroll interaction is still not
+    /// working" looked like from the outside.
     @discardableResult
     private func perform(_ action: WorkTimeCanvasInputIntent.KeyAction) -> Bool {
+        guard canPerform(action) else { return false }
         switch action {
         case .pan(let pixels): configuration.onInteraction?(); configuration.onPan(pixels)
         case .zoom(let factor): configuration.onInteraction?(); configuration.onZoom(factor, 0.5)
@@ -437,11 +511,24 @@ final class WorkTimeCanvasInputView<Content: View>: NSView {
     override func cursorUpdate(with event: NSEvent) { updateCursor(at: convert(event.locationInWindow, from: nil)) }
     override func mouseExited(with event: NSEvent) { if !dragging { NSCursor.arrow.set() } }
 
+    /// An open hand over the blank canvas PROMISES a drag. When neither
+    /// direction of pan can change the window that promise is false, so the
+    /// blank area keeps the plain arrow — the cursor is the first thing a reader
+    /// reads about whether a surface is a control.
     private func updateCursor(at point: NSPoint) {
         if dragging { NSCursor.closedHand.set() }
         else if let region = configuration.cursorRegions.first(where: { $0.rect.contains(point) }) { region.cursor.set() }
         else if configuration.interactiveRegions.contains(where: { $0.contains(point) }) { NSCursor.arrow.set() }
-        else { NSCursor.openHand.set() }
+        else if canDragToPan { NSCursor.openHand.set() }
+        else { NSCursor.arrow.set() }
+    }
+
+    /// Can a drag move the window in EITHER direction? One pixel is the
+    /// smallest real drag, and a window parked against one domain edge can
+    /// still be dragged away from it.
+    private var canDragToPan: Bool {
+        guard let canPan = configuration.canPan else { return true }
+        return canPan(1) || canPan(-1)
     }
 }
 
