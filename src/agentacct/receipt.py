@@ -451,7 +451,7 @@ def _shape_check(
     )
     name = check_display_name(check)
     result = _text(check.get("result")).lower() or "unknown"
-    summary = check_display_summary(check)
+    summary = check_recorded_summary(check)
     summary_preview, summary_elided = check_summary_preview(summary)
     artifact_path_redacted = check.get("artifact_path_redacted") is True
     artifact_url_redacted = check.get("artifact_url_redacted") is True
@@ -550,12 +550,11 @@ def _shape_check(
             "event_id": _text(check.get("event_id")) or None,
             "at": _number(check.get("created_at") or check.get("occurred_at")) or None,
             # Detail-on-expand fields (additive). The agent's summary,
-            # verbatim — None when it was absent or only restated
-            # "<name>: <result>".
+            # verbatim — None when it recorded none.
             "summary": summary,
-            # The summary cut where a SENTENCE ends, never mid-clause, and never
-            # before the clause that names the observed value against the
-            # expected one. ``summary`` stays verbatim beside it, so a surface
+            # The summary cut where a SENTENCE ends, never mid-clause: the first
+            # sentence whole, then as many further whole sentences as fit the
+            # budget. ``summary`` stays verbatim beside it, so a surface
             # offers the rest rather than losing it; ``summary_elided`` says
             # whether there is a rest to offer.
             "summary_preview": summary_preview,
@@ -618,38 +617,30 @@ def _shape_check(
     )
 
 
+def check_recorded_summary(check: Mapping[str, Any]) -> str | None:
+    """The summary the agent wrote, verbatim, or None.
+
+    Released servers filled an omitted ``summary`` with the literal
+    ``"<name>: <result>"``. That string is the server's, not the agent's, so a
+    stored row carrying exactly it reads as having no summary. The comparison
+    is exact on purpose: it inverts one known machine format and makes no
+    judgement about prose an agent wrote.
+    """
+
+    summary = _text(check.get("summary"))
+    if summary == f"{_text(check.get('name'))}: {_text(check.get('result'))}":
+        return None
+    return summary or None
+
+
 def check_display_name(check: Mapping[str, Any]) -> str | None:
-    """The agent's recorded check name, or None. The generic word ``check`` is
-    not a name."""
+    """The agent's recorded check name, or None. The placeholder ``check`` --
+    what a lane writes when no name was supplied -- is not a name."""
 
     name = _text(check.get("name"))
     if not name or name.lower() == "check":
         return None
     return name
-
-
-def check_display_summary(check: Mapping[str, Any]) -> str | None:
-    """The agent's summary verbatim, or None when it is absent or merely
-    restates the name and the result the card already shows.
-
-    ONE detector, shared with the write path (``semantic_rules``), so the two
-    cannot drift: a summary refused at write time is exactly a summary this
-    would have dropped, and nothing an agent sends is silently accepted and then
-    discarded here.
-    """
-
-    from .semantic_rules import summary_echoes_check
-
-    summary = _text(check.get("summary"))
-    if not summary:
-        return None
-    if summary_echoes_check(
-        name=check.get("name"),
-        result=_text(check.get("result")).lower(),
-        summary=summary,
-    ):
-        return None
-    return summary
 
 
 def check_title(check: Mapping[str, Any]) -> str:
@@ -670,7 +661,7 @@ def check_title(check: Mapping[str, Any]) -> str:
     command = "" if check.get("command_redacted") is True else _text(check.get("command"))
     return (
         check_display_name(check)
-        or check_display_summary(check)
+        or check_recorded_summary(check)
         or command
         or _text(check.get("evidence_type"))
         or "recorded check"
@@ -3300,7 +3291,7 @@ __all__ = [
     "attention_label",
     "boundary_gap_text",
     "check_display_name",
-    "check_display_summary",
+    "check_recorded_summary",
     "check_tally_parts",
     "check_tally_text",
     "check_title",

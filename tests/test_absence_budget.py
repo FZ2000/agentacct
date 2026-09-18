@@ -1,5 +1,5 @@
-"""The absence budget, the deduplicated revision contradiction, the summary that
-stops clipping the finding, and the composed check meta line.
+"""The absence budget, the deduplicated revision contradiction, the summary
+clipped where a sentence ends, and the composed check meta line.
 
 The premise, measured on a real render of task_5f7dbea9: the bottom half of the
 record page was eight statements of which six said "we do not know", and the
@@ -533,20 +533,26 @@ def test_unstamped_rows_share_one_group_because_absence_is_one_state() -> None:
     assert groups[0]["revision"] is None
 
 
-# --- P3: stop clipping the finding ----------------------------------------
+# --- P3: clip the summary where a sentence ends ---------------------------
 
 
-def test_the_preview_reaches_the_observed_versus_expected_value_past_the_budget() -> None:
+def test_the_first_sentence_is_kept_whole_even_past_the_budget() -> None:
     """The measured loss: a one-line clamp cut this summary at ``raises
-    decimal.InvalidOperation on the st…`` -- it kept "3 of 4 parse cases fail"
-    and threw away the clause naming the defect. The preview overruns the budget
-    rather than clip before the finding."""
+    decimal.InvalidOperation on the st…``. The budget decides how many sentences
+    ride along, never where one is cut."""
 
-    preview, elided = vocab.check_summary_preview(_FAILING_SUMMARY)
-    assert 'instead of returning "-1234.56"' in preview
-    assert "decimal.InvalidOperation" in preview
-    assert len(preview) > vocab.CHECK_SUMMARY_PREVIEW_BUDGET
+    long_sentence = _FAILING_SUMMARY.split(". ", 1)[1]
+    preview, elided = vocab.check_summary_preview(long_sentence, budget=80)
+    assert preview == vocab.split_sentences(long_sentence)[0]
+    assert len(preview) > 80
     assert elided is True
+
+
+def test_further_whole_sentences_ride_along_only_while_they_fit_the_budget() -> None:
+    sentences = vocab.split_sentences(_FAILING_SUMMARY)
+    assert vocab.check_summary_preview(_FAILING_SUMMARY) == (sentences[0], True)
+    roomy = len(" ".join(sentences[:2]))
+    assert vocab.check_summary_preview(_FAILING_SUMMARY, budget=roomy) == (" ".join(sentences[:2]), True)
 
 
 def test_the_preview_never_ends_mid_sentence_and_carries_no_ellipsis() -> None:
@@ -591,7 +597,7 @@ def test_the_row_carries_the_preview_beside_the_verbatim_summary() -> None:
     row = next(row for row in _measured_rows() if row["summary"] == _FAILING_SUMMARY)
     assert row["summary_elided"] is True
     assert row["summary_preview"] and row["summary_preview"] != row["summary"]
-    assert 'instead of returning "-1234.56"' in row["summary_preview"]
+    assert row["summary"].startswith(row["summary_preview"])
 
 
 def test_an_absent_summary_leaves_the_preview_absent_rather_than_empty() -> None:

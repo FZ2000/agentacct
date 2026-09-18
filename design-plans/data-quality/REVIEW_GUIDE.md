@@ -124,6 +124,15 @@ including the before/after of the session-link fix and the upgrade path for a
 machine that already has the old Codex config. Output committed at
 `design-plans/data-quality/evidence/VERIFICATION.txt`.
 
+That transcript reads 29 of 30. The one miss is the replay check, which runs the
+rules over the *recording machine's own live ledger* rather than a fixture, so
+its figure moves with whatever store the tool is pointed at (it rose between two
+runs a few minutes apart while this was written). In the sample
+`audit-agent-data.py --replay` prints, the refusals are the file-anchor rule,
+with a few missing summaries: records written before the rules existed, or
+through an older installed server that does not enforce them -- the population
+RULES.md accepts rather than backfills. The < 1% bar predates that history.
+
 To watch the loop a user and an agent are actually in — the refusal, the retry
 that fixes it, what the card and the receipt then render — and to see the search
 for what is still wrong:

@@ -81,10 +81,10 @@ def _identity(server: SentinelMCPServer, event_id: str) -> str:
 # --- D1: identity is not the display name -----------------------------------
 
 
-def test_the_name_field_no_longer_defaults_to_a_word_the_rules_refuse(tmp_path) -> None:
-    """The old default was ``"check"``, which GENERIC_CHECK_NAMES refuses on
-    sight: a default value that is immediately rejected is a trap, not a
-    convenience. Removing it must not make a nameless, pointerless check legal."""
+def test_the_name_field_has_no_default_and_a_check_that_identifies_nothing_is_refused(tmp_path) -> None:
+    """``name`` carries no schema default, so an omitted label is absent rather
+    than a placeholder the agent never wrote. Dropping the default must not make
+    a nameless, pointerless check legal."""
 
     from agentacct.mcp import TOOLS
 
@@ -112,7 +112,7 @@ def test_the_name_field_is_described_as_a_label_beside_a_command(tmp_path) -> No
 
 def test_the_refusal_example_shows_a_prose_name_beside_a_command(tmp_path) -> None:
     server = SentinelMCPServer(store_dir=tmp_path / "state")
-    message = _error(_check(server, name="check", command=None, exit_code=None))
+    message = _error(_check(server, name=None, command=None, exit_code=None))
     assert message is not None
     assert 'name="percentage() rounds half-up"' in message
     assert 'command="python -m pytest tests/test_percent.py"' in message
@@ -285,7 +285,6 @@ def test_a_failed_check_with_no_summary_is_refused_with_the_reason(tmp_path) -> 
     assert message is not None
     assert "a reviewer cannot act on a failure with no description" in message
     assert "observed vs expected" in message
-    assert "do not restate the name" in message
 
 
 def test_an_error_check_with_no_summary_is_refused_too(tmp_path) -> None:
@@ -294,23 +293,13 @@ def test_an_error_check_with_no_summary_is_refused_too(tmp_path) -> None:
     assert message is not None and "a check recorded as error requires `summary`" in message
 
 
-def test_a_summary_that_only_restates_the_name_and_result_is_refused(tmp_path) -> None:
-    """The exact shape task_7bb028c1 sent. receipt.check_display_summary has
-    always DISCARDED it at read time, so accepting it here let an agent comply
-    and still ship a card with no description."""
+def test_a_terse_failure_description_is_accepted_as_the_agent_wrote_it(tmp_path) -> None:
+    """Presence is the rule. 'got 3, want 4' is a complete observed-vs-expected
+    statement, and a character count cannot tell it from filler."""
 
     server = SentinelMCPServer(store_dir=tmp_path / "state")
-    message = _error(
-        _check(
-            server,
-            name="python -m pytest tests/test_percent.py",
-            result="failed",
-            exit_code=1,
-            summary="python -m pytest tests/test_percent.py: failed",
-        )
-    )
-    assert message is not None
-    assert "only restates the name and the result" in message
+    stored = _stored(_check(server, result="failed", exit_code=1, summary="got 3, want 4"))
+    assert stored["event"]["metadata"]["summary"] == "got 3, want 4"
 
 
 def test_a_real_failure_description_is_accepted(tmp_path) -> None:
@@ -334,20 +323,6 @@ def test_a_passing_check_still_needs_no_summary(tmp_path) -> None:
     server = SentinelMCPServer(store_dir=tmp_path / "state")
     stored = _stored(_check(server, summary=None))
     assert stored["event"]["metadata"].get("summary") in (None, "")
-
-
-def test_the_write_and_read_paths_use_one_echo_detector() -> None:
-    from agentacct.receipt import check_display_summary
-    from agentacct.semantic_rules import summary_echoes_check
-
-    echo = {"name": "pytest tests/test_percent.py", "result": "failed",
-            "summary": "pytest tests/test_percent.py: failed"}
-    assert summary_echoes_check(**echo) is True
-    assert check_display_summary(echo) is None
-    # A terse but real sentence is content on both paths.
-    real = {"name": "Boundary probe", "result": "failed", "summary": "Boundary probe failed."}
-    assert summary_echoes_check(**real) is False
-    assert check_display_summary(real) == "Boundary probe failed."
 
 
 # --- D2(b): a stopped section must say where to resume -----------------------
@@ -568,17 +543,6 @@ def test_a_checkpoint_that_says_where_it_stands_is_not_advised(tmp_path) -> None
     assert "advisories" not in payload
 
 
-def test_an_echoing_summary_on_a_passing_check_is_advised_not_refused(tmp_path) -> None:
-    server = SentinelMCPServer(store_dir=tmp_path / "state")
-    payload = _stored(
-        _check(server, name="pytest tests/test_percent.py", summary="pytest tests/test_percent.py: passed")
-    )
-    codes = [advisory["code"] for advisory in payload["advisories"]]
-    assert "summary_echoes_name_and_result" in codes
-    # Stored exactly as sent: an advisory never rewrites or refuses a record.
-    assert payload["event"]["metadata"]["summary"] == "pytest tests/test_percent.py: passed"
-
-
 def test_at_most_two_advisories_come_back_worst_for_the_reader_first() -> None:
     """The measured failure: a whole recorded session returned exactly ONE
     advisory -- a 6-character card-title overrun -- while the same session
@@ -592,7 +556,6 @@ def test_at_most_two_advisories_come_back_worst_for_the_reader_first() -> None:
         result="failed",
         exit_code=0,
         command=None,
-        summary="some real description of the failure",
         duplicate_name_in_section=True,
     )
     assert len(advisories) == ADVISORY_RESPONSE_LIMIT == 2

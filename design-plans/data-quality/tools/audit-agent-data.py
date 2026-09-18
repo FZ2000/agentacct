@@ -391,7 +391,7 @@ def replay_findings(events: list[dict[str, Any]]) -> dict[str, Any]:
     for entry in refused:
         text = entry["refusal"]
         for label in ("readable text", "letters or digits", "requires `summary`", "requires `blocker`",
-                      "needs something a reviewer", "too generic"):
+                      "nothing a reviewer can re-run", "records no `name`"):
             if label in text:
                 by_rule[label] += 1
                 break

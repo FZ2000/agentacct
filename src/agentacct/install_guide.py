@@ -343,12 +343,11 @@ _RECORDING_CONTRACT_LINES = (
     "tests/test_percent.py\". `result` is the verdict on the work: failed = the check "
     "shows a defect, not_reproduced = the probe ran and the problem did not appear.",
     "- A failed or error check must carry a `summary` saying what failed and what was "
-    "observed versus expected; restating the name and the result is refused. Add "
-    "`rest_of_work=usable|unusable|unknown` so a reviewer knows whether the failure "
-    "blocks them — you already know, and 'one case still red' does not say. Re-run a "
-    "check with the same `command` and `section_id` (or the same `check_key`) so a pass "
-    "supersedes the earlier failure; error means it could not run, skipped means you "
-    "chose not to run it.",
+    "observed versus expected. Add `rest_of_work=usable|unusable|unknown` so a reviewer "
+    "knows whether the failure blocks them — you already know, and 'one case still red' "
+    "does not say. Re-run a check with the same `command` and `section_id` (or the same "
+    "`check_key`) so a pass supersedes the earlier failure; error means it could not "
+    "run, skipped means you chose not to run it.",
     # The ONE skip rule. Two bullets used to pull opposite ways when unsure ("a
     # short section beats a gap" vs "recording nothing is better than noise").
     "- Record every meaningful step; skip only trivial throwaway commands.",

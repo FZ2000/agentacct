@@ -186,7 +186,7 @@ def main() -> int:
     refusals = {
         "a whitespace-only title": ({"section_title": "   "}, "section_title"),
         "a check with nothing re-runnable": (
-            {"source": "codex", "name": "check", "result": "passed"}, "too generic"),
+            {"source": "codex", "name": "check", "result": "passed"}, "nothing a reviewer can re-run"),
     }
     for label, (arguments, expected) in refusals.items():
         base = {"source": "codex", "section_id": "r", "section_status": "started"}
@@ -235,6 +235,7 @@ def main() -> int:
         "section_title": "Deploy to staging",
         "blocker": "The staging database rejects the migration without an owner role.",
         "next_step": "Ask the platform team to grant the owner role.",
+        "files": ["deploy/staging.yml"],
     }, msg_id=9)
     status, err = mcp_call(server, "agentacct_work_status", {}, msg_id=10)
     blocked = (status or {}).get("blocked_sections") or []

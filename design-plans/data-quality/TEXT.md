@@ -154,7 +154,7 @@ point / severity / false-positive budget):
 
 | Rule | Claim | Enforced at |
 | --- | --- | --- |
-| **T1** | `summary` on a terminal section leads with an outcome sentence: the first line is ≥ 20 characters and contains a verb-like token, no leading bullet | MCP check — *advisory*, because a wrong refusal loses real work |
+| **T1** | `summary` on a terminal section is asked for consequence-first, then mechanism, with the same facts written weak and strong | the `summary` field description in the tool schema — no runtime check on the prose; it is shown as written ([RULES.md](RULES.md), "Prose is asked for and shown, never graded") |
 | **T2** | A summary containing a list must use one consistent bullet form; mixed markers are collapsed to `-` | normalize at write |
 | **T3** | Titles within one client session must be distinct; a repeat is refused with both titles named | refused (`section_id` reuse shows this is a real pattern) |
 | **T4** | No user-visible copy string exceeds 140 characters on one line; longer explanation moves behind `ContextHelp` | a source-level test over the Swift/Python string tables |

@@ -260,9 +260,9 @@ def test_check_events_carry_name_revision_reciprocal_link_and_command_state():
     assert rerun["supersedes_check_event_id"] == "check-1"
     assert rerun["revision_label"] == "revision not captured"
     assert rerun["command_state_text"] is None
-    # A synthesized "<name>: <result>" summary is not the agent's prose.
+    # A server-synthesized "<name>: <result>" summary is not the agent's prose.
     assert rerun["summary"] is None
-    # A generic "check" is no name; the title falls back to the summary.
+    # The placeholder "check" is no name; the title falls back to the summary.
     task["task_evidence_events"][1].update(name="check", summary="Retried the suite")
     rerun = next(row for row in build_timeline_events(task) if row["event_id"] == "rerun")
     assert rerun["name"] is None and rerun["title"] == "Retried the suite"

@@ -9,8 +9,8 @@ are covered here:
   recorded once. Without it "completed" is unjudgeable. It cannot be derived:
   ``objectives`` is section titles echoed back, and section titles are STEPS.
 * **the consequence**: a summary may state a true outcome and still leave a
-  reader with nothing to decide. Shape and consequence are two axes and are
-  never merged.
+  reader with nothing to decide, so the `summary` description asks for the
+  consequence first and shows the same facts written both ways.
 * **the cost of a failure** (`rest_of_work`): whether the rest of the work is
   still usable. A bounded field, because the page has to group on it; the
   sentence naming the cost stays in the prose slot the record already has.
@@ -45,18 +45,14 @@ from agentacct.mcp import (
     SentinelMCPServer,
 )
 from agentacct.semantic_rules import (
-    MINIMUM_TASK_GOAL_CHARACTERS,
     REST_OF_WORK_LABELS,
     REST_OF_WORK_STATES,
     check_advisories,
-    classify_summary_shape,
     failure_cost_advisory,
-    names_a_consequence,
     rest_of_work_label,
     rest_of_work_state,
     section_advisories,
     task_goal_advisory,
-    task_goal_echoes_title,
 )
 
 
@@ -172,27 +168,21 @@ def test_a_goal_in_another_session_scope_does_not_silence_the_advisory(tmp_path)
     assert _codes(other) == ["task_without_goal"]
 
 
-def test_a_goal_that_is_the_section_title_again_is_advised() -> None:
-    """Section titles are STEPS. Echoing one back states what is being done
-    now, not what the task is for."""
+def test_a_recorded_goal_is_accepted_as_the_agent_wrote_it(tmp_path) -> None:
+    """The advisory is about PRESENCE. What the goal says is taught by the
+    field description and shown to the reader, never graded -- not for being
+    short, and not for matching the section title."""
 
-    assert task_goal_echoes_title("Parse money strings", "parse  MONEY strings.")
-    assert not task_goal_echoes_title(GOAL, "Parse money strings")
-    advisory = task_goal_advisory(
-        section_status="started",
-        task_goal="Parse money strings",
-        section_title="Parse money strings",
-    )
-    assert advisory is not None
-    assert advisory["code"] == "task_goal_echoes_section_title"
-
-
-def test_a_goal_too_short_to_state_a_purpose_is_advised() -> None:
-    thin = "x" * (MINIMUM_TASK_GOAL_CHARACTERS - 1)
-    advisory = task_goal_advisory(section_status="started", task_goal=thin, section_title="Step")
-    assert advisory is not None and advisory["code"] == "task_goal_thin"
-    fat = "y" * MINIMUM_TASK_GOAL_CHARACTERS
-    assert task_goal_advisory(section_status="started", task_goal=fat, section_title="Step") is None
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    for index, goal in enumerate((GOAL, "Parse money strings", "Ship it")):
+        payload = _section(
+            server,
+            section_id=f"goal-{index}",
+            section_title="Parse money strings",
+            task_goal=goal,
+        )
+        assert payload["event"]["metadata"]["task_goal"] == goal
+        assert _codes(payload) == []
 
 
 def test_the_missing_goal_advisory_fires_only_on_an_opening_section() -> None:
@@ -234,17 +224,7 @@ STRONG_SUMMARY = (
 )
 
 
-def test_shape_and_consequence_are_two_axes_and_are_never_merged() -> None:
-    """The weak summary scores WELL on shape: it is a real outcome. Merging the
-    axes would have graded it and said nothing."""
-
-    assert classify_summary_shape(WEAK_SUMMARY) == "outcome"
-    assert not names_a_consequence(WEAK_SUMMARY)
-    assert classify_summary_shape(STRONG_SUMMARY) == "outcome"
-    assert names_a_consequence(STRONG_SUMMARY)
-
-
-def test_a_terminal_mechanism_only_summary_is_advised_but_stored(tmp_path) -> None:
+def test_a_terminal_mechanism_only_summary_is_stored_as_sent_and_not_advised(tmp_path) -> None:
     server = SentinelMCPServer(store_dir=tmp_path / "state")
     payload = _section(
         server,
@@ -254,46 +234,10 @@ def test_a_terminal_mechanism_only_summary_is_advised_but_stored(tmp_path) -> No
         next_step="Guard the strip() path in parse_amount and re-run the parse tests.",
         files=["moneyutil/core.py"],
     )
-    # Stored exactly as sent; an advisory never rewrites or refuses a record.
+    # The description teaches the consequence; the write path shows what the
+    # agent wrote and never grades its prose.
     assert payload["event"]["metadata"]["summary"] == WEAK_SUMMARY
-    assert "summary_without_consequence" in _codes(payload)
-
-
-def test_a_consequence_first_summary_is_not_advised(tmp_path) -> None:
-    server = SentinelMCPServer(store_dir=tmp_path / "state")
-    payload = _section(
-        server,
-        task_goal=GOAL,
-        section_status="completed",
-        summary=STRONG_SUMMARY,
-        files=["moneyutil/core.py"],
-    )
     assert _codes(payload) == []
-
-
-def test_the_consequence_advisory_stays_off_a_non_terminal_section() -> None:
-    assert (
-        section_advisories(
-            section_title="Parse money strings",
-            section_status="checkpoint",
-            summary=WEAK_SUMMARY,
-            next_step="Guard the strip() path.",
-        )
-        == []
-    )
-
-
-def test_the_consequence_advisory_never_doubles_up_on_a_shape_advisory() -> None:
-    """`summary_advice` owns process / status / thin. Two hints about one
-    sentence is nagging, not teaching, so only an OUTCOME summary is asked for
-    a consequence."""
-
-    process = section_advisories(
-        section_title="Parse money strings",
-        section_status="completed",
-        summary="Reviewed the parser and inspected the redirect handling in detail",
-    )
-    assert "summary_without_consequence" not in [advisory["code"] for advisory in process]
 
 
 def test_the_summary_description_carries_a_worked_weak_vs_strong_contrast() -> None:
@@ -378,31 +322,12 @@ def test_a_passing_check_is_never_asked_what_it_costs() -> None:
     )
 
 
-def test_unusable_must_name_what_it_blocks_in_the_prose_already_written() -> None:
+def test_every_declared_cost_state_is_a_complete_answer() -> None:
     """The BIT is the field; the SENTENCE stays in the slot the record already
-    has. A bare `unusable` with a count for prose is advised."""
+    has, where the description asks for it and the reader sees it."""
 
-    counted = failure_cost_advisory(
-        reports_a_failure=True,
-        rest_of_work="unusable",
-        narrative="One case still red; 6 of 7 parse tests pass.",
-    )
-    assert counted is not None and counted["code"] == "unusable_without_named_cost"
-    named = failure_cost_advisory(
-        reports_a_failure=True,
-        rest_of_work="unusable",
-        narrative=(
-            "parse_amount raises on the stripped string, so the importer must not run on "
-            "unvalidated input yet."
-        ),
-    )
-    assert named is None
-    # `usable` and `unknown` are complete answers on their own: they do not owe
-    # a cost sentence, because they are not claiming a cost.
-    for state in ("usable", "unknown"):
-        assert failure_cost_advisory(
-            reports_a_failure=True, rest_of_work=state, narrative="One case still red."
-        ) is None
+    for state in REST_OF_WORK_STATES:
+        assert failure_cost_advisory(reports_a_failure=True, rest_of_work=state) is None
 
 
 def test_a_blocked_section_is_asked_what_the_stop_costs(tmp_path) -> None:
@@ -428,7 +353,6 @@ def test_a_completed_section_is_never_asked_what_a_failure_costs() -> None:
         for advisory in section_advisories(
             section_title="Parse money strings",
             section_status="completed",
-            summary=STRONG_SUMMARY,
         )
     ]
     assert "failure_without_cost" not in codes

@@ -163,8 +163,8 @@ def test_collapse_functions_are_deterministic_and_idempotent(value: str) -> None
 
 
 @pytest.mark.parametrize("status", ["completed", "handed_off", "blocked", "started", "checkpoint"])
-@pytest.mark.parametrize("summary", [None, "", "   ", "short", "x" * 39, "x" * 40, "x" * 1200])
-@pytest.mark.parametrize("blocker", [None, "", "tiny", "x" * 20])
+@pytest.mark.parametrize("summary", [None, "", "   ", "short", "x" * 1200])
+@pytest.mark.parametrize("blocker", [None, "", "   ", "tiny", "x" * 1200])
 def test_terminal_outcome_gate_is_total(status: str, summary, blocker) -> None:
     """Every combination either passes or raises InvalidParams -- no other exit.
 
@@ -355,7 +355,7 @@ def test_every_lane_refuses_the_same_incomplete_records(tmp_path) -> None:
             with pytest.raises(ValueError) as raised:
                 service.record_event(dict(event), transport=transport)
             message = str(raised.value)
-            assert "requires `summary`" in message or "too generic" in message, (transport, label, message)
+            assert "requires `summary`" in message or "nothing a reviewer can re-run" in message, (transport, label, message)
 
     # And the MCP tool itself refuses the same two records, which is what makes
     # the refusal reach an agent as actionable JSON-RPC guidance.

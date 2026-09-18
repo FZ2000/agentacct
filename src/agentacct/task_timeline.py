@@ -331,7 +331,7 @@ def build_timeline_events(task: Mapping[str, Any], checks: Sequence[Mapping[str,
                 sections_by_event.setdefault(event_id, []).append(event)
 
     from .finding_disposition import finding_target_digest
-    from .receipt import check_display_name, check_display_summary, check_title, revision_label
+    from .receipt import check_display_name, check_recorded_summary, check_title, revision_label
     episodes = {_text(row.get("target_digest")): row for row in _rows(task.get("finding_episodes"))}
     check_rows = list(task_checks(task) if checks is None else checks)
     # Which run of each check is the CURRENT one. `supersession_state` only
@@ -418,7 +418,7 @@ def build_timeline_events(task: Mapping[str, Any], checks: Sequence[Mapping[str,
                      + ([SALIENCE_RECOVERY_RUN] if _text(check.get("supersedes_check_event_id")) else [])
                  ),
                  "scope": _text(check.get("check_identity") or check.get("resolution_scope")) or None,
-                 "summary": check_display_summary(check), "files": _files(check.get("files")),
+                 "summary": check_recorded_summary(check), "files": _files(check.get("files")),
                  "section_record_id": parent["id"] if parent else None,
                  "section_record_ids": [row["id"] for row in parents], "section_title": parent["title"] if parent else None,
                  "superseded": superseded,

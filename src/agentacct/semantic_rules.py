@@ -35,18 +35,6 @@ _DISPLAY_MEANINGFUL_WHITESPACE = frozenset("\t\n\v\f\r")
 
 _DISPLAY_LINE_BREAKS = str.maketrans({"\t": " ", "\n": " ", "\r": " ", "\v": " ", "\f": " "})
 
-# Names that carry no identity. A name is a LABEL now (supersession keys on
-# ``check_key``/command, not on the label), but a label that says nothing still
-# leaves a card a reader cannot tell from any other.
-GENERIC_CHECK_NAMES = frozenset({"check", "test", "tests", "verify", "build", "run", "lint"})
-
-# A terminal section's outcome prose must be substantial enough to read.
-MINIMUM_SUMMARY_CHARACTERS = 40
-MINIMUM_BLOCKER_CHARACTERS = 20
-# A failure description has to carry the assertion and the observed value; that
-# is shorter prose than a section outcome, so it gets its own, lower floor.
-MINIMUM_FAILURE_DESCRIPTION_CHARACTERS = 20
-
 TERMINAL_STATUSES = frozenset({"completed", "blocked", "handed_off"})
 
 # Statuses that end a section by handing it on rather than finishing it. Both
@@ -184,192 +172,6 @@ def has_readable_title(value: Any) -> bool:
     return readable >= 2
 
 
-# --- summary shape: an advisory signal, never a refusal ----------------------
-# The measured gap (RULES.md / ASSESSMENT.md): terminal sections carry a summary
-# ~99% of the time, but only ~3-15% state WHAT CHANGED; ~41% describe process and
-# ~20% restate the status word. A content rule here would be a heuristic that
-# occasionally REFUSES a legitimate outcome summary -- the data-loss failure this
-# module exists to avoid -- so this classifier drives an MCP-response ADVISORY
-# only. It is deliberately conservative: an unrecognized shape is treated as an
-# outcome (no nag), so a false "reads as process" only ever adds one ignorable
-# line, and never blocks a write.
-
-# A change/verification verb is the signal that a summary states an outcome.
-# Every marker below matches as a WHOLE word (see ``_whole_word_pattern``):
-# a substring match let 'fixed-size' count as 'fixed', 'unresolved' as
-# 'resolved' and 'known ' as 'now '.
-_OUTCOME_MARKERS = (
-    "fixed", "added", "removed", "deleted", "renamed", "migrated", "wired",
-    "replaced", "bumped", "implemented", "introduced", "corrected", "resolved",
-    "updated", "created", "built", "verified", "covered", "now", "passing",
-    "passes", "so that", "resulting in", "no longer", "returns", "raises",
-)
-# Investigation verbs with no accompanying change read as process.
-_PROCESS_MARKERS = (
-    "reviewed", "inspected", "looked at", "looked into", "explored", "examined",
-    "analyzed", "analysed", "investigated", "worked on", "read through",
-    "read the", "went through", "dug into", "spent time", "continued",
-    "started to", "began",
-)
-# A summary that is only a status word restates the section_status.
-_STATUS_ONLY = (
-    "done", "complete", "completed", "in progress", "wip", "ongoing",
-    "blocked", "handed off", "finished", "wrapped up", "still working",
-)
-
-
-def _whole_word_pattern(phrases: tuple[str, ...], *, anchored: bool = False) -> re.Pattern[str]:
-    """One case-insensitive pattern matching any phrase as whole words.
-
-    A hyphen counts as part of a word on both sides, so 'fixed-size' is not
-    'fixed' and 'Wiped' is not 'wip'. ``anchored`` requires the phrase to open
-    the text (after leading punctuation or space), which is how a status LEAD is
-    recognized.
-    """
-
-    lead = r"^[\W_]*" if anchored else r"(?<![\w-])"
-    return re.compile(f"{lead}(?:{_phrase_alternatives(phrases)})" + r"(?![\w-])", re.IGNORECASE)
-
-
-def _phrase_alternatives(phrases: tuple[str, ...]) -> str:
-    """Regex alternation of phrases, longest first, any whitespace between words."""
-
-    return "|".join(
-        r"\s+".join(re.escape(word) for word in phrase.split())
-        for phrase in sorted(phrases, key=len, reverse=True)
-    )
-
-
-_OUTCOME_PATTERN = _whole_word_pattern(_OUTCOME_MARKERS)
-_PROCESS_PATTERN = _whole_word_pattern(_PROCESS_MARKERS)
-_STATUS_LEAD_PATTERN = _whole_word_pattern(_STATUS_ONLY, anchored=True)
-# A status word that is the whole summary, give or take punctuation and other
-# status words ("Done.", "Completed, wrapped up").
-_STATUS_ONLY_PATTERN = re.compile(
-    r"^[\W_]*(?:(?:" + _phrase_alternatives(_STATUS_ONLY) + r")(?![\w-])[\W_]*)+$",
-    re.IGNORECASE,
-)
-
-
-def classify_summary_shape(value: Any) -> str:
-    """Classify a section summary as ``outcome`` / ``process`` / ``status`` /
-    ``thin``. Conservative: only a clear process or status restatement is
-    flagged; anything ambiguous is ``outcome`` so the advisory never nags a
-    legitimate summary. Purely lexical -- no model call. Every marker matches
-    as a whole word."""
-
-    text = readable_text_or_none(value)
-    if text is None or len(text) < 15:
-        return "thin"
-    first = text.split(".")[0].strip()
-    if _OUTCOME_PATTERN.search(text):
-        return "outcome"
-    # A leading status word restates section_status. Safe to flag even when
-    # more text follows, because a real outcome ("Completed the migration and
-    # added tests") already returned above on its change verb; the advice for
-    # a status LEAD is to lead with the result, not to drop the rest.
-    if _STATUS_LEAD_PATTERN.search(first):
-        return "status"
-    if _PROCESS_PATTERN.search(first):
-        return "process"
-    return "outcome"
-
-
-def is_status_word_only(value: Any) -> bool:
-    """True when the summary is nothing but status words and punctuation."""
-
-    text = readable_text_or_none(value)
-    return text is not None and _STATUS_ONLY_PATTERN.match(text) is not None
-
-
-_SUMMARY_ADVICE = {
-    "process": "A human reviewer reads this summary to decide whether to trust the task, and it currently describes what you DID, not what CHANGED. Rewrite as: <what changed> + <what verifies it>. e.g. 'Fixed the login redirect (auth/login.py); the two new redirect tests pass' — not 'Reviewed the login flow and inspected the redirects'.",
-    "status": "This summary restates the status word instead of the result. A reviewer already sees the status; tell them what CHANGED and how it was checked. e.g. 'Added a rate limiter to the login route; the new limit test passes' — not 'Done'.",
-    "thin": "This summary is too short for a reviewer to act on. State what CHANGED and what verifies it, naming the file(s) touched. e.g. 'Cached the parser result in config.py; existing config tests still pass'.",
-}
-
-#: A status word followed by real content: the content may well be the result,
-#: so the advice is only to move it first -- never to discard it.
-STATUS_LEAD_ADVICE = "Lead with the result, e.g. what changed or was found."
-
-
-def summary_advice(section_status: str, summary: Any) -> dict[str, str] | None:
-    """For a TERMINAL section whose summary does not state an outcome, an
-    advisory the MCP response carries back in the same turn. ``None`` when the
-    summary already reads as an outcome or the status is not terminal. Stores
-    nothing; acts only on the live response, so it is replay-safe."""
-
-    if section_status not in {"completed", "handed_off"}:
-        return None
-    shape = classify_summary_shape(summary)
-    hint = _SUMMARY_ADVICE.get(shape)
-    if hint is None:
-        return None
-    if shape == "status" and not is_status_word_only(summary):
-        hint = STATUS_LEAD_ADVICE
-    return {"shape": shape, "hint": hint}
-
-
-# --- the second axis: does the prose say what the work is FOR or COSTS? ------
-#
-# Deliberately NOT merged into ``classify_summary_shape``. Shape says what the
-# summary IS (outcome / process / status / thin). Consequence says whether it
-# tells a reader anything they can act on. They are two axes and a summary can
-# score well on one and badly on the other -- which is exactly the measured
-# failure this rule exists for. This summary is fully compliant on shape and a
-# reviewer still called it meaningless:
-#
-#   "Handing off with parenthesised negatives working and one case still red.
-#    ($12.34) and ($1,234.56) parse to the signed value; parse_amount("($12.34")
-#    still returns "12.34" instead of raising ValueError. 6 of 7 parse tests
-#    pass, the full suite is 15 passed 1 failed, and the change is uncommitted."
-#
-# Every clause is true, every number is real, and it never says what the work is
-# FOR or what the one red case COSTS the reader. Merging the two axes would have
-# graded it "outcome" and said nothing.
-_CONSEQUENCE_MARKERS = (
-    # what the reader may now do, or must not
-    "safe to", "not safe", "unsafe", "ready to", "not ready", "can now",
-    "cannot", "can't", "do not", "don't", "must not", "should not",
-    "no longer", "still cannot", "still unusable",
-    # who or what is affected
-    "callers", "caller", "users", "user-facing", "anyone", "downstream",
-    "in production", "on disk", "for the reader", "reviewer",
-    # the shape of the cost
-    "blocks", "blocked by", "unblocks", "unusable", "unreviewable",
-    "wrong", "silently", "data loss", "corrupts", "crashes", "at risk",
-    # explicit consequence connectives
-    "so that", "so the", "so a", "so any", "resulting in", "which means",
-    "meaning", "means that", "until", "unless",
-)
-_CONSEQUENCE_PATTERN = _whole_word_pattern(_CONSEQUENCE_MARKERS)
-
-
-def names_a_consequence(value: Any) -> bool:
-    """True when prose says what the work lets a reader DO, or what it costs
-    them -- not merely what changed. Purely lexical and deliberately generous:
-    it is read by non-blocking advisories only, so a false positive costs a
-    reader nothing and a false negative costs them one ignorable hint."""
-
-    text = readable_text_or_none(value)
-    return text is not None and _CONSEQUENCE_PATTERN.search(text) is not None
-
-
-#: A summary that states a real outcome and still leaves a reader with nothing
-#: to decide. The advice carries the weak/strong contrast rather than a rule,
-#: because the measured lesson of the last contract round is that descriptions
-#: teach where refusals only block.
-SUMMARY_WITHOUT_CONSEQUENCE_ADVICE = (
-    "This summary says what CHANGED but not what it means for the reader. Open with the "
-    "consequence -- what they should now believe or do -- then the mechanism. "
-    "Weak: 'Added parse_amount(); 6 of 7 parse tests pass and the change is uncommitted.' "
-    "Strong: 'Money strings from the CSV import can now be parsed, except bare "
-    "'($12.34' which still returns a positive value instead of raising -- so the importer "
-    "must not be pointed at unvalidated input yet. parse_amount() in moneyutil/core.py; "
-    "6 of 7 parse tests pass.' The record is stored as sent."
-)
-
-
 # --- what a failure COSTS ----------------------------------------------------
 #
 # FIELD-VS-SENTENCE, decided and justified here because the page depends on it:
@@ -407,13 +209,6 @@ REST_OF_WORK_MISSING_ADVICE = (
     "Set `rest_of_work` to usable, unusable or unknown. The record is stored as sent."
 )
 
-REST_OF_WORK_UNUSABLE_ADVICE = (
-    "`rest_of_work=unusable` says this failure blocks the rest, and the prose does not say "
-    "WHO or WHAT it blocks. Name the cost in the same field you already filled -- "
-    "'so the importer must not be pointed at unvalidated input yet', not 'one case still "
-    "red'. The record is stored as sent."
-)
-
 
 def rest_of_work_state(value: Any) -> str | None:
     """The declared state, or ``None`` when nothing usable was declared. Never
@@ -434,7 +229,6 @@ def failure_cost_advisory(
     *,
     reports_a_failure: bool,
     rest_of_work: Any,
-    narrative: Any,
 ) -> dict[str, str] | None:
     """Non-blocking advisory for a failure that does not say what it costs.
 
@@ -442,22 +236,13 @@ def failure_cost_advisory(
     failed or errored check), so this rule never has to know either schema.
     """
 
-    if not reports_a_failure:
+    if not reports_a_failure or rest_of_work_state(rest_of_work) is not None:
         return None
-    state = rest_of_work_state(rest_of_work)
-    if state is None:
-        return {
-            "code": "failure_without_cost",
-            "field": "rest_of_work",
-            "hint": REST_OF_WORK_MISSING_ADVICE,
-        }
-    if state == "unusable" and not names_a_consequence(narrative):
-        return {
-            "code": "unusable_without_named_cost",
-            "field": "rest_of_work",
-            "hint": REST_OF_WORK_UNUSABLE_ADVICE,
-        }
-    return None
+    return {
+        "code": "failure_without_cost",
+        "field": "rest_of_work",
+        "hint": REST_OF_WORK_MISSING_ADVICE,
+    }
 
 
 # --- the task's goal: what the work was FOR ----------------------------------
@@ -471,8 +256,6 @@ def failure_cost_advisory(
 # the receipt title on three of five, equals an unrelated section title on a
 # fourth, and is empty on the fifth. Section titles are STEPS. A task with 44 of
 # them does not have 44 objectives; it has one goal and 44 steps.
-MINIMUM_TASK_GOAL_CHARACTERS = 20
-
 TASK_GOAL_ADVICE = (
     "This task has no `goal` on record, so a reader cannot judge what finishing it would "
     "mean. Pass `task_goal` on this section: what you were ASKED to achieve, in the "
@@ -480,40 +263,11 @@ TASK_GOAL_ADVICE = (
     "parse_amount()'. Recorded once per task; later sections inherit it."
 )
 
-TASK_GOAL_ECHOES_TITLE_ADVICE = (
-    "`task_goal` repeats this section's title, so it states the STEP rather than the goal. "
-    "A section title is what you are doing now; the goal is what the whole task is for, in "
-    "the requester's terms. The record is stored as sent."
-)
-
-TASK_GOAL_THIN_ADVICE = (
-    "`task_goal` is too short to state a purpose. Say what the requester wanted to be true "
-    "when the task is done, not the change you plan to make. The record is stored as sent."
-)
-
-
-def _comparable(value: Any) -> str:
-    """Case- and punctuation-insensitive form, for 'is this the same sentence'."""
-
-    text = readable_text_or_none(value)
-    if text is None:
-        return ""
-    return re.sub(r"[\W_]+", " ", text).strip().lower()
-
-
-def task_goal_echoes_title(goal: Any, title: Any) -> bool:
-    """True when the goal is just the section title again."""
-
-    left = _comparable(goal)
-    right = _comparable(title)
-    return bool(left) and left == right
-
 
 def task_goal_advisory(
     *,
     section_status: Any,
     task_goal: Any,
-    section_title: Any = None,
     goal_recorded_earlier: bool = False,
 ) -> dict[str, str] | None:
     """Non-blocking advisory about the task-level goal.
@@ -524,20 +278,9 @@ def task_goal_advisory(
     """
 
     status = str(section_status or "").strip().lower()
-    text = readable_text_or_none(task_goal)
-    if text is None:
-        if status != "started" or goal_recorded_earlier:
-            return None
-        return {"code": "task_without_goal", "field": "task_goal", "hint": TASK_GOAL_ADVICE}
-    if task_goal_echoes_title(text, section_title):
-        return {
-            "code": "task_goal_echoes_section_title",
-            "field": "task_goal",
-            "hint": TASK_GOAL_ECHOES_TITLE_ADVICE,
-        }
-    if len(text) < MINIMUM_TASK_GOAL_CHARACTERS:
-        return {"code": "task_goal_thin", "field": "task_goal", "hint": TASK_GOAL_THIN_ADVICE}
-    return None
+    if status != "started" or goal_recorded_earlier or readable_text_or_none(task_goal) is not None:
+        return None
+    return {"code": "task_without_goal", "field": "task_goal", "hint": TASK_GOAL_ADVICE}
 
 
 # --- write-time advisories: non-blocking, never a refusal --------------------
@@ -573,23 +316,13 @@ _ADVISORY_RANK: tuple[str, ...] = (
     # A task with no stated purpose costs the reader every other judgement on
     # the page: they cannot grade "completed" against anything.
     "task_without_goal",
-    # A record that CLAIMS this failure blocks the rest and never says what it
-    # blocks: a stated consequence with nothing behind it, which is worse than
-    # an unstated one.
-    "unusable_without_named_cost",
     "duplicate_check_name_in_section",
     "check_without_command_or_artifact",
     "failed_with_exit_code_zero",
-    "summary_echoes_name_and_result",
-    # Below the defects in what WAS recorded, above the prose notes: a missing
-    # cost leaves a reader undecided, but the record itself is still readable.
+    # Below the defects in what WAS recorded: a missing cost leaves a reader
+    # undecided, but the record itself is still readable.
     "failure_without_cost",
     "checkpoint_without_next_step",
-    # Below the hard defects: the prose is real, it just does not carry the
-    # reader to a decision.
-    "summary_without_consequence",
-    "task_goal_echoes_section_title",
-    "task_goal_thin",
     "title_over_card_budget",
 )
 
@@ -613,7 +346,6 @@ def section_advisories(
     section_title: Any,
     section_status: Any = None,
     next_step: Any = None,
-    summary: Any = None,
     blocker: Any = None,
     task_goal: Any = None,
     goal_recorded_earlier: bool = False,
@@ -624,8 +356,6 @@ def section_advisories(
     * an opening section that states no task-level ``task_goal``, so nothing on
       the record says what finishing it would mean.
     * a stopped section that does not say what the stop COSTS a reader.
-    * a terminal summary that states a real outcome and still leaves the reader
-      with nothing to decide.
     * a section still at ``checkpoint`` with no ``next_step``: the one record a
       reader lands on mid-task, with nothing saying where the work stands.
     * a section title longer than the card title budget.
@@ -636,7 +366,6 @@ def section_advisories(
     goal_advisory = task_goal_advisory(
         section_status=status,
         task_goal=task_goal,
-        section_title=section_title,
         goal_recorded_earlier=goal_recorded_earlier,
     )
     if goal_advisory is not None:
@@ -646,25 +375,9 @@ def section_advisories(
     cost_advisory = failure_cost_advisory(
         reports_a_failure=status == "blocked" or (status == "handed_off" and _supplied(blocker)),
         rest_of_work=rest_of_work,
-        narrative=blocker or summary,
     )
     if cost_advisory is not None:
         advisories.append(cost_advisory)
-    # Only on a terminal section whose summary already reads as an outcome:
-    # `summary_advice` owns the process / status / thin shapes, and two hints
-    # about one sentence is nagging, not teaching.
-    if (
-        status in TERMINAL_STATUSES
-        and classify_summary_shape(summary) == "outcome"
-        and not names_a_consequence(summary)
-    ):
-        advisories.append(
-            {
-                "code": "summary_without_consequence",
-                "field": "summary",
-                "hint": SUMMARY_WITHOUT_CONSEQUENCE_ADVICE,
-            }
-        )
     if status == "checkpoint" and not _supplied(next_step):
         advisories.append(
             {
@@ -692,7 +405,6 @@ def check_advisories(
     artifact_path: Any = None,
     artifact_url: Any = None,
     command: Any = None,
-    summary: Any = None,
     duplicate_name_in_section: bool = False,
     rest_of_work: Any = None,
 ) -> list[dict[str, str]]:
@@ -709,8 +421,6 @@ def check_advisories(
       cleanly and nothing else shows a defect, which is the shape of a probe that
       could not reproduce a problem -- and ``failed`` alone marks the task a
       Finding.
-    * a summary that only restates the name and the result: it is dropped at
-      read time, so the card ends up with no description at all.
     * a failing check that does not say what the failure COSTS: whether the rest
       of the work is still usable is the question a reviewer opened the record
       to answer, and the agent already knew it at write time.
@@ -722,7 +432,6 @@ def check_advisories(
     cost_advisory = failure_cost_advisory(
         reports_a_failure=str(result or "").strip().lower() in FAILURE_RESULTS,
         rest_of_work=rest_of_work,
-        narrative=summary,
     )
     if cost_advisory is not None:
         advisories.append(cost_advisory)
@@ -767,18 +476,6 @@ def check_advisories(
                 ),
             }
         )
-    if summary_echoes_check(name=name, result=result, summary=summary):
-        advisories.append(
-            {
-                "code": "summary_echoes_name_and_result",
-                "field": "summary",
-                "hint": (
-                    "This `summary` only restates the name and the result, which every surface already "
-                    "shows, so it is dropped at read time and the card ends with no description. Say what "
-                    "the check showed. The record is stored as sent."
-                ),
-            }
-        )
     title_advisory = _title_budget_advisory("name", name)
     if title_advisory is not None:
         advisories.append(title_advisory)
@@ -788,20 +485,18 @@ def check_advisories(
 # --- rule checks over a semantic record -------------------------------------
 
 
-_TERMINAL_REQUIREMENTS: dict[str, tuple[str, int, str, str]] = {
+_TERMINAL_REQUIREMENTS: dict[str, tuple[str, str, str]] = {
     "completed": (
         "summary",
-        MINIMUM_SUMMARY_CHARACTERS,
         "describe what actually changed and what was verified",
         "<what changed, then what was verified>",
     ),
     "handed_off": (
         "summary",
-        MINIMUM_SUMMARY_CHARACTERS,
         "say what is complete and what remains",
         "<what is complete, then what remains>",
     ),
-    "blocked": ("blocker", MINIMUM_BLOCKER_CHARACTERS, "state the concrete blocker", "<the concrete blocker>"),
+    "blocked": ("blocker", "state the concrete blocker", "<the concrete blocker>"),
 }
 
 #: The example value shown for a title the refusal cannot know.
@@ -850,19 +545,17 @@ def inherited_section_title(supplied: Any, recorded: Any) -> str | None:
     return readable_text_or_none(recorded) if has_readable_title(recorded) else None
 
 
-def _missing_terminal_field(status: str, *, summary: Any, blocker: Any) -> tuple[str, int, str, str, str] | None:
+def _missing_terminal_field(status: str, *, summary: Any, blocker: Any) -> tuple[str, str, str] | None:
     requirement = _TERMINAL_REQUIREMENTS.get(status)
     if requirement is None:
         return None
-    key, minimum, advice, placeholder = requirement
+    key = requirement[0]
     supplied = summary if key == "summary" else blocker
-    text = supplied if isinstance(supplied, str) else ""
-    # Measure the prose the way it will be stored, once.
-    prose = collapse_narrative_text(text)
-    if len(prose) >= minimum:
+    # Judge the prose the way it will be stored: text that collapses to nothing
+    # is not a summary.
+    if isinstance(supplied, str) and collapse_narrative_text(supplied):
         return None
-    received = f"{key} of {len(prose)} characters" if prose else f"no {key}"
-    return key, minimum, advice, placeholder, received
+    return requirement
 
 
 def section_refusal(
@@ -911,11 +604,8 @@ def section_refusal(
     elif title and (status in _TERMINAL_REQUIREMENTS or status in TERMINAL_STATUSES):
         example_args.append(f"section_title={_quoted(collapse_display_text(title))}")
     if terminal is not None:
-        key, minimum, advice, placeholder, received = terminal
-        reasons.append(
-            f"section_status={status} requires `{key}` (at least {minimum} characters): {advice}. "
-            f"Received: {received}"
-        )
+        key, advice, placeholder = terminal
+        reasons.append(f"section_status={status} requires `{key}`: {advice}")
         example_args.append(f"{key}={_quoted(placeholder)}")
     if continuation_missing:
         reasons.append(
@@ -996,7 +686,7 @@ def require_reproducible_check(
     Two shapes satisfy this, in descending order of auditability:
 
     * a pointer -- `command`, `files`, or an artifact reference/path/url;
-    * a specific check name plus an exit code, which records what ran and what it
+    * a check name plus an exit code, which records what ran and what it
       returned even when the exact invocation is not spelled out. Eleven of the
       336 checks in the real ledger have exactly this shape -- an integration
       suite named precisely, with its exit status and no verbatim command -- and
@@ -1006,17 +696,17 @@ def require_reproducible_check(
     before this function is reached, because its evidence is two summaries that
     never appear among these fields.
 
-    What is refused is the record that says nothing: a generic name, no pointer,
-    and no exit code.
+    What is refused is the record that says nothing: no pointer and no exit
+    code.
     """
     if command or files or artifact_ref or artifact_path or artifact_url:
         return
-    if exit_code is not None and not is_generic_check_name(name):
+    if exit_code is not None and _supplied(name):
         return
     raise SemanticRecordError(
         f"machine check `{name}` (result={result}) records nothing a reviewer can re-run or inspect: "
         "pass `command` (the exact command), `files` (the files it covered), or `artifact_ref`/"
-        "`artifact_path`/`artifact_url` (what it produced). A specific `name` with an `exit_code` also "
+        "`artifact_path`/`artifact_url` (what it produced). A `name` with an `exit_code` also "
         "counts. If this was a manual observation, record it with agentacct_record_event instead."
     )
 
@@ -1031,127 +721,55 @@ def _supplied(value: Any) -> bool:
     return bool(value.strip()) if isinstance(value, str) else value is not None
 
 
-def is_generic_check_name(name: Any) -> bool:
-    if not isinstance(name, str):
-        return True
-    stripped = name.strip()
-    return len(stripped) < 4 or stripped.lower() in GENERIC_CHECK_NAMES
-
-
 def require_check_identity(name: Any, *, command: Any = None, files: Any = None) -> None:
-    """A check card must say what it is, in words a reader can tell apart (R6).
+    """A check card must say what it is (R6).
 
     ``name`` is a LABEL for what the check proves, not the check's identity:
     supersession keys on ``check_key`` / (command, evidence_type, section_id),
     so re-running the same command under a rewritten label still supersedes the
     earlier failure. What this rule protects is the reader, not the key -- a card
-    labelled "check" is indistinguishable from every other card labelled "check".
+    with no label and nothing else saying what ran cannot be told from any other.
 
-    A specific label stands on its own. A generic or missing one is tolerated
-    only when something else says what ran: a command or a file list.
+    A missing label is tolerated only when something else says what ran: a
+    command or a file list.
     """
-    if name is not None and not is_generic_check_name(name):
+    if _supplied(name) or command or files:
         return
-    if command or files:
-        return
-    if name is None or not str(name).strip():
-        raise SemanticRecordError(
-            "machine check records no `name` and no `command`/`files`, so its card would carry nothing "
-            "a reader can identify. Pass `name` (a short label for what this check proves, e.g. "
-            'name="percentage() rounds half-up") and `command` (the exact command you ran, e.g. '
-            'command="python -m pytest tests/test_percent.py").'
-        )
     raise SemanticRecordError(
-        f"machine check name {name!r} is too generic to identify the check; every other check with the "
-        "same label renders as the same card. `name` is a short label for what the check PROVES -- not "
-        'the command, which has its own field. For example name="percentage() rounds half-up", '
-        'command="python -m pytest tests/test_percent.py".'
+        "machine check records no `name` and no `command`/`files`, so its card would carry nothing "
+        "a reader can identify. Pass `name` (a short label for what this check proves, e.g. "
+        'name="percentage() rounds half-up") and `command` (the exact command you ran, e.g. '
+        'command="python -m pytest tests/test_percent.py").'
     )
 
 
 # --- D2: the three refusals that make a record readable ----------------------
 # Each one uses the one-call refusal shape that made section summaries reliable:
-# it names the rule, says what was received, and shows a corrected call the agent
+# it names the rule and shows a corrected call the agent
 # can send back verbatim. Measured cost against the installed ledger (1,893
 # records replayed through the live write path): (a) 0 refusals -- no stored
-# failed/error check lacks a description; the echo shape appears 0 times in 418
-# checks; (b) 5 refusals; (c) 92 refusals, all of them terminal sections of a
-# file-touching kind that named no file anywhere in the section. A refusal
-# rejects the CALL and never touches an already-stored record.
+# failed/error check lacks a description; (b) 5 refusals; (c) 92 refusals, all
+# of them terminal sections of a file-touching kind that named no file anywhere
+# in the section. A refusal rejects the CALL and never touches an already-stored
+# record.
 
 
-#: Punctuation an echo may trail without becoming content.
-_ECHO_TRAILING = " \t.;:!?-–—…"
-
-#: Separators that join a label and a verdict into the SAME visible line the
-#: card already shows. Deliberately punctuation-only: a bare space would make
-#: "Boundary probe failed." -- a real, if terse, sentence -- an echo, and a
-#: write-time refusal must never reject text the read-time rule would keep.
-_ECHO_SEPARATORS = (": ", " - ", " – ", " — ", " = ")
-
-
-def summary_echoes_check(*, name: Any, result: Any, summary: Any) -> bool:
-    """True when a check summary only restates what the card already shows.
-
-    ``receipt.check_display_summary`` has always DISCARDED the synthesized
-    ``"<name>: <result>"`` line at read time, which left an agent complying
-    with the contract ("I sent a summary") while the card showed none. This is
-    the same test, moved to the write path and widened by exactly the
-    punctuation and separators that produce the identical display: the label
-    alone, the verdict alone, or the two joined.
-    """
-
-    text = readable_text_or_none(summary)
-    if text is None:
-        return False
-    stripped = text.strip(_ECHO_TRAILING).casefold()
-    if not stripped:
-        return True
-    label = collapse_display_text(str(name)).strip(_ECHO_TRAILING).casefold() if isinstance(name, str) else ""
-    verdict = str(result or "").strip().casefold()
-    candidates: set[str] = set()
-    if verdict:
-        candidates.add(verdict)
-    if label:
-        candidates.add(label)
-        if verdict:
-            for separator in _ECHO_SEPARATORS:
-                candidates.add(f"{label}{separator}{verdict}".strip())
-    return stripped in candidates
-
-
-def require_failure_description(
-    *,
-    result: Any,
-    name: Any,
-    summary: Any,
-) -> None:
+def require_failure_description(*, result: Any, summary: Any) -> None:
     """D2(a): a failed or error check must describe the failure.
 
-    A reviewer cannot act on a failure with no description. The card already
-    shows the label and the verdict, so a summary that restates them is the same
-    as none -- it is dropped at read time and the card ends up blank. What the
-    reviewer needs is the assertion that failed and the observed value.
+    A reviewer cannot act on a failure with no description: the card already
+    shows the label and the verdict, and what they need is the assertion that
+    failed and the observed value.
     """
 
     verdict = str(result or "").strip().lower()
-    if verdict not in FAILURE_RESULTS:
+    if verdict not in FAILURE_RESULTS or readable_text_or_none(summary) is not None:
         return
-    text = readable_text_or_none(summary)
-    if text is not None and not summary_echoes_check(name=name, result=result, summary=summary):
-        if len(text) >= MINIMUM_FAILURE_DESCRIPTION_CHARACTERS:
-            return
-        received = f"a {len(text)}-character summary"
-    elif text is None:
-        received = "no summary"
-    else:
-        received = "a summary that only restates the name and the result"
     raise SemanticRecordError(
-        f"a check recorded as {verdict} requires `summary` (at least "
-        f"{MINIMUM_FAILURE_DESCRIPTION_CHARACTERS} characters): a reviewer cannot act on a failure with "
-        "no description. Give the assertion that failed and the observed vs expected value -- do not "
-        f"restate the name. Received: {received}. For example: "
-        'summary="percentage(1, 3) returned 33.33, expected 33.34 (assert round_half_up failed)".'
+        f"a check recorded as {verdict} requires `summary`: a reviewer cannot act on a failure with "
+        "no description. Give the assertion that failed and the observed vs expected value. "
+        'For example: summary="percentage(1, 3) returned 33.33, expected 33.34 (assert round_half_up '
+        'failed)".'
     )
 
 
@@ -1265,7 +883,7 @@ def validate_semantic_record(
         # ``agent_authored_check`` is the exception, set only by the MCP lane an
         # agent calls directly. ``name`` used to default to "check" there, so a
         # nameless agent check was ALWAYS judged; the marker keeps that true now
-        # that the trap default is gone, without extending the rule to records no
+        # that ``name`` has no default, without extending the rule to records no
         # agent wrote.
         if not _supplied(name) and not fields.get("agent_authored_check"):
             return
@@ -1273,18 +891,14 @@ def validate_semantic_record(
         # before the before/after short-circuit below only for the evidence lane:
         # the outcome lane's two summaries ARE its description.
         if not (_supplied(fields.get("before_summary")) or _supplied(fields.get("after_summary"))):
-            require_failure_description(
-                result=fields.get("result"),
-                name=name,
-                summary=fields.get("summary"),
-            )
+            require_failure_description(result=fields.get("result"), summary=fields.get("summary"))
         # The before/after outcome lane records a repair, and the two summaries
         # with their exit codes ARE the evidence -- a shape the CLI and HTTP lanes
         # use deliberately, sometimes carrying only the default check name. An
         # empty string is not evidence, so this tests for content, not presence.
         if _supplied(fields.get("before_summary")) or _supplied(fields.get("after_summary")):
             return
-        # Identity before reproducibility: a check called "check" with nothing
+        # Identity before reproducibility: a check with no name and nothing
         # else cannot be referred to at all, which is more fundamental than a
         # missing pointer and yields the more actionable message.
         require_check_identity(name, command=fields.get("command"), files=fields.get("files"))

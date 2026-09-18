@@ -1158,34 +1158,15 @@ def checks_heading_line(
 
 # --- the check summary, clipped where a sentence ends -----------------------
 # The measured failure: a one-line clamp cut check 0 of task_5f7dbea9 at
-# ``raises decimal.InvalidOperation on the st…`` -- it kept "3 of 4 parse cases
-# fail" and threw away the clause that names the defect. A character count
-# cannot know where the finding is, so the preview is cut at a SENTENCE boundary
-# and the budget YIELDS to the sentence that carries the observed-vs-expected
-# value. A shorter preview that omits the finding is not a smaller version of the
-# summary; it is a different, useless statement.
+# ``raises decimal.InvalidOperation on the st…``. A preview that ends mid-clause
+# is not a smaller version of the summary, so it is cut at a SENTENCE boundary:
+# the first sentence is kept whole whatever its length, and the budget only
+# decides how many further whole sentences ride along.
 
 #: How many characters the record page's two-line summary slot carries at its
 #: ~1150pt measure. A SOFT budget: it decides how many WHOLE sentences ride
 #: along, never where a sentence is cut.
 CHECK_SUMMARY_PREVIEW_BUDGET = 200
-
-#: The words with which a summary states an observed value against an expected
-#: one. The preview always reaches the first sentence carrying one of these,
-#: whatever the budget says -- that sentence IS the finding.
-CHECK_SUMMARY_CONTRAST_MARKERS: tuple[str, ...] = (
-    "instead of",
-    "instead",
-    "expected",
-    "expects",
-    "rather than",
-    "where a ",
-    "but got",
-    "returned",
-    "returns",
-    "raises",
-    "raised",
-)
 
 #: A sentence ends at ``.``/``!``/``?``, optionally closed by a quote or bracket,
 #: and followed by whitespace. ``decimal.InvalidOperation`` and ``$1,234.56)``
@@ -1206,11 +1187,6 @@ def split_sentences(text: Any) -> list[str]:
     return [part.strip() for part in _SENTENCE_BOUNDARY.split(body) if part.strip()]
 
 
-def _names_a_contrast(sentence: str) -> bool:
-    lowered = sentence.lower()
-    return any(marker in lowered for marker in CHECK_SUMMARY_CONTRAST_MARKERS)
-
-
 def check_summary_preview(
     summary: Any, budget: int = CHECK_SUMMARY_PREVIEW_BUDGET
 ) -> tuple[str | None, bool]:
@@ -1222,10 +1198,7 @@ def check_summary_preview(
     The rules, in order:
 
     1. the first sentence is always kept, however long it is;
-    2. the run is extended to the first sentence that names an
-       observed-vs-expected value, EVEN PAST THE BUDGET -- never clip before the
-       finding;
-    3. further sentences ride along only while the run fits the budget.
+    2. further sentences ride along only while the run fits the budget.
 
     ``(None, False)`` for an absent summary: absence is the caller's to name.
     """
@@ -1234,12 +1207,8 @@ def check_summary_preview(
     if not sentences:
         return None, False
     limit = budget if isinstance(budget, int) and not isinstance(budget, bool) and budget > 0 else 0
-    required = next(
-        (index for index, sentence in enumerate(sentences) if _names_a_contrast(sentence)),
-        0,
-    )
-    kept = sentences[: required + 1]
-    for sentence in sentences[required + 1 :]:
+    kept = sentences[:1]
+    for sentence in sentences[1:]:
         candidate = " ".join([*kept, sentence])
         if len(candidate) > limit:
             break
@@ -2412,7 +2381,6 @@ __all__ = [
     "EVIDENCE_GRADE_LABELS",
     "EVIDENCE_GRADE_NOT_CHECK_RELEVANT",
     "EVIDENCE_GRADE_NOT_GRADED",
-    "CHECK_SUMMARY_CONTRAST_MARKERS",
     "CHECK_SUMMARY_PREVIEW_BUDGET",
     "META_SEPARATOR",
     "NEXT_STEP_ABSENT",

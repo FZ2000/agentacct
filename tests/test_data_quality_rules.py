@@ -148,11 +148,19 @@ def test_completed_section_without_a_summary_is_refused_with_a_fix(tmp_path) -> 
     assert "section_id=\"rules-section\"" in message
 
 
-def test_completed_section_with_a_short_summary_is_refused(tmp_path) -> None:
+def test_completed_section_with_a_whitespace_only_summary_is_refused(tmp_path) -> None:
     server = SentinelMCPServer(store_dir=tmp_path / "state")
-    message = _error(_section(server, section_status="completed", summary="done"))
+    message = _error(_section(server, section_status="completed", summary=" \n\t ", files=["src/agentacct/api.py"]))
     assert message is not None
-    assert "at least 40 characters" in message
+    assert "requires `summary`" in message
+
+
+def test_completed_section_with_a_one_line_outcome_is_accepted(tmp_path) -> None:
+    """Presence is the rule, not a character count: a real outcome can be short."""
+    server = SentinelMCPServer(store_dir=tmp_path / "state")
+    outcome = "Bumped requests to 2.32.3; CI green."
+    stored = _stored(_section(server, section_status="completed", summary=outcome, files=["pyproject.toml"]))
+    assert stored["event"]["metadata"]["summary"] == outcome
 
 
 def test_completed_section_with_a_real_summary_is_accepted(tmp_path) -> None:
@@ -258,24 +266,23 @@ def test_before_after_outcome_lane_stays_supported(tmp_path) -> None:
     assert stored["event"]["metadata"]["files"] == ["scripts/smoke.sh"]
 
 
-def test_generic_check_name_without_evidence_is_refused(tmp_path) -> None:
-    """Supersession keys on the name, so a bare "check" that says nothing else
-    cannot identify what would be superseded."""
+def test_check_with_no_name_command_or_files_is_refused_with_an_example(tmp_path) -> None:
     server = SentinelMCPServer(store_dir=tmp_path / "state")
-    message = _error(_call(server, "agentacct_record_machine_check", {"source": "codex", "name": "check", "result": "passed"}))
+    message = _error(_call(server, "agentacct_record_machine_check", {"source": "codex", "result": "passed"}))
     assert message is not None
-    # The refusal must name the field and show a usable example.
     # The refusal must show a LABEL alongside a command, never a command as a
     # name: the old example ('name="pytest tests/test_mcp.py"') is exactly what
     # taught agents to put the command in the name field.
-    assert "too generic" in message
+    assert "no `name`" in message
     assert 'name="percentage() rounds half-up"' in message
     assert 'command="python -m pytest tests/test_percent.py"' in message
 
 
-def test_generic_name_with_a_command_is_accepted(tmp_path) -> None:
-    """A command is the identity in practice: `pytest -q` says exactly what ran."""
+def test_a_short_check_name_is_accepted_as_the_agent_wrote_it(tmp_path) -> None:
+    """The label is the agent's to choose; the rule is only that one exists."""
     server = SentinelMCPServer(store_dir=tmp_path / "state")
+    stored = _stored(_check(server, name="e2e", command=None, exit_code=0))
+    assert stored["event"]["metadata"]["name"] == "e2e"
     stored = _stored(_check(server, name="check", command="pytest -q"))
     assert stored["event"]["metadata"]["name"] == "check"
 
@@ -364,97 +371,6 @@ def test_a_real_outcome_summary_is_evidence(tmp_path) -> None:
         "before_summary": "failed before", "after_summary": "passed after",
     }))
     assert stored["event"]["metadata"]["result"] == "passed"
-
-
-# --- Summary-shape advisory (a nudge, never a refusal) ------------------------
-# The write-time nudge toward "what changed". Two hard invariants: it is an
-# ADVISORY carried in the response (the record is always stored), and it is
-# conservative (an ambiguous summary is treated as an outcome, never nagged).
-
-from agentacct.semantic_rules import classify_summary_shape, summary_advice  # noqa: E402
-
-
-def test_classify_summary_shape_flags_process_and_status_but_not_outcomes() -> None:
-    assert classify_summary_shape("Reviewed the login flow and looked at the handler") == "process"
-    assert classify_summary_shape("Investigated the flaky test but changed nothing yet") == "process"
-    assert classify_summary_shape("In progress on the parser; still working the edges") == "status"
-    assert classify_summary_shape("Fixed the login redirect and covered it with two tests") == "outcome"
-    assert classify_summary_shape("Added a rate limiter to the login route; the test passes") == "outcome"
-    # Ambiguous / unknown shapes default to outcome so the advisory never nags.
-    assert classify_summary_shape("Rate limiter for the login route, plus a regression test") == "outcome"
-    assert classify_summary_shape("done") == "thin"
-
-
-def test_summary_advice_only_fires_for_terminal_non_outcome_summaries() -> None:
-    assert summary_advice("completed", "Reviewed the login flow")["shape"] == "process"
-    assert summary_advice("handed_off", "In progress; still going")["shape"] == "status"
-    # An outcome summary is never nagged.
-    assert summary_advice("completed", "Fixed the redirect and added a passing test") is None
-    # Non-terminal statuses are never nagged (checkpoints are progress notes).
-    assert summary_advice("checkpoint", "Reviewed the login flow") is None
-    assert summary_advice("started", "Reviewed the login flow") is None
-
-
-def test_record_section_advises_on_a_process_summary_but_still_stores_it(tmp_path) -> None:
-    server = SentinelMCPServer(store_dir=tmp_path / "state")
-    process_summary = "Reviewed the login flow and inspected the session handler in detail"
-    payload = _stored(
-        _section(
-            server,
-            section_status="completed",
-            summary=process_summary,
-            files=["src/agentacct/api.py"],
-        )
-    )
-    # Stored (not refused): the event is present and carries the summary.
-    assert payload["event"]["event_type"] == "section_completed"
-    assert payload["event"]["metadata"]["summary"] == process_summary
-    # Advised, in the same response.
-    assert payload["summary_advice"]["shape"] == "process"
-    assert any("what changed" in w.lower() for w in payload["warnings"])
-
-
-def test_record_section_does_not_advise_on_an_outcome_summary(tmp_path) -> None:
-    server = SentinelMCPServer(store_dir=tmp_path / "state")
-    payload = _stored(
-        _section(
-            server,
-            section_status="completed",
-            summary="Fixed the redirect and added a passing test",
-            files=["src/agentacct/api.py"],
-        )
-    )
-    assert payload["event"]["event_type"] == "section_completed"
-    assert "summary_advice" not in payload
-
-
-def test_status_words_match_as_whole_words_only() -> None:
-    """C67: a status word is a whole word. 'Wiped' is not 'wip' and
-    'Completely' is not 'complete', so neither reads as a status restatement."""
-    assert classify_summary_shape("Wiped the stale cache directory before the rerun") == "outcome"
-    assert classify_summary_shape("Completely rewrote the parser docs section") == "outcome"
-    # A real status lead still reads as status, case-insensitively.
-    assert classify_summary_shape("Completed source walkthrough. Found a P1 ambiguity in routing") == "status"
-    assert classify_summary_shape("WIP: parser edges still being explored") == "status"
-
-
-def test_outcome_and_process_markers_match_as_whole_words_only() -> None:
-    """A change verb inside another word ('fixed-size', 'unresolved', 'known')
-    is not a change verb, so an investigation-first summary is still process."""
-    assert classify_summary_shape("Reviewed the fixed-size buffer handling code") == "process"
-    assert classify_summary_shape("Reviewed the unresolved handler paths") == "process"
-    assert classify_summary_shape("Reviewed the known issues list thoroughly") == "process"
-    # The whole word still counts, anywhere in the text.
-    assert classify_summary_shape("Reviewed the handler and fixed the redirect") == "outcome"
-
-
-def test_a_status_word_lead_followed_by_content_is_told_to_lead_with_the_result() -> None:
-    lead = summary_advice("completed", "Completed source walkthrough. Found a P1 ambiguity in routing")
-    assert lead == {"shape": "status", "hint": "Lead with the result, e.g. what changed or was found."}
-    # Only a summary that is nothing but status words gets the restatement hint.
-    only = summary_advice("completed", "Done. Completed, wrapped up!!")
-    assert only is not None and only["shape"] == "status"
-    assert "restates the status word" in only["hint"]
 
 
 # --- Write-time advisories (non-blocking, never a refusal) --------------------

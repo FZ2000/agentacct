@@ -180,8 +180,8 @@ def part_one(root: pathlib.Path) -> None:
     if refusal:
         show("refusal:", refusal)
 
-    # 1.4 — the agent retries with a status word.
-    _payload, short = mcp_call(
+    # 1.4 — the agent retries with whitespace where the outcome should be.
+    _payload, blank = mcp_call(
         server,
         "agentacct_record_section",
         {
@@ -189,17 +189,18 @@ def part_one(root: pathlib.Path) -> None:
             "section_id": "rate-limit",
             "section_status": "completed",
             "section_title": "Add rate-limit to login",
-            "summary": "Done.",
+            "summary": " \n ",
+            "files": ["src/auth/login.py"],
         },
     )
     check(
-        "1.4 a two-word summary is refused, with both numbers in the message",
-        short is not None and "at least 40 characters" in short and "summary of 5 characters" in short,
-        f"stored text cannot be 'Done.': {short.splitlines()[0][:120] if short else ''}",
+        "1.4 a summary that is only whitespace is refused like a missing one",
+        blank is not None and "requires `summary`" in blank,
+        f"presence is judged on the text as it would be stored: {blank.splitlines()[0][:120] if blank else ''}",
     )
 
-    # 1.5 — a long-enough summary that says nothing about the outcome. This is
-    # accepted, and that limit belongs in the demo rather than in a footnote.
+    # 1.5 — a summary that says nothing about the outcome. This is accepted,
+    # and that limit belongs in the demo rather than in a footnote.
     _payload, prose = mcp_call(
         server,
         "agentacct_record_section",
@@ -213,7 +214,7 @@ def part_one(root: pathlib.Path) -> None:
         },
     )
     check(
-        "1.5 process prose over the minimum is ACCEPTED — the rule requires prose, not usefulness",
+        "1.5 process prose is ACCEPTED — the rule requires prose, not usefulness",
         prose is None,
         "this is a known limit, not a bug in the demo: see Part 4.3 for how much of the store reads this way",
     )
@@ -270,11 +271,11 @@ def part_two(root: pathlib.Path) -> None:
         _payload, error = mcp_call(server, "agentacct_record_machine_check", defaults)
         return error
 
-    unnamed = record(name="check", command=None, files=[], exit_code=None)
+    unnamed = record(name=None, command=None, files=[], exit_code=None)
     check(
-        "2.1 a check called \"check\" with no pointer is refused, and says what to send instead",
+        "2.1 a check with no name and no pointer is refused, and says what to send instead",
         unnamed is not None
-        and "too generic to identify" in unnamed
+        and "records no `name`" in unnamed
         and 'name="percentage() rounds half-up"' in unnamed
         and 'command="python -m pytest tests/test_percent.py"' in unnamed,
         "the example shows a LABEL beside a command; a command IN the name field is what produced two "
@@ -283,14 +284,14 @@ def part_two(root: pathlib.Path) -> None:
 
     unanchored = record(name="login smoke test", command=None, files=[], exit_code=None)
     check(
-        "2.2 a specific name with no pointer and no exit code is refused",
+        "2.2 a name with no pointer and no exit code is refused",
         unanchored is not None and "records nothing a reviewer can re-run" in unanchored,
         "and it names the honest alternative for a manual observation",
     )
 
     tolerated = record(name="login smoke test", exit_code=0)
     check(
-        "2.3 the tolerated shape — a specific name plus an exit code — is accepted",
+        "2.3 the tolerated shape — a name plus an exit code — is accepted",
         tolerated is None,
         "11 of the 336 checks in the real ledger have exactly this shape; refusing them would discard real evidence",
     )
@@ -337,7 +338,7 @@ def part_two(root: pathlib.Path) -> None:
     check(
         "2.7 once a run exists, a repair is accepted with the default name and no command",
         guarded.exit_code == 0 and repaired is None,
-        "the two summaries and their exit codes ARE the evidence, so the generic name is not carrying it",
+        "the two summaries and their exit codes ARE the evidence, so the default name is not carrying it",
     )
 
 

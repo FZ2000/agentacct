@@ -1195,6 +1195,21 @@ def test_check_run_history_names_earlier_failures_and_supersession() -> None:
     ) == "150/156 passed · 4 failed · 2 superseded"
 
 
+def test_only_the_servers_own_placeholder_summary_reads_as_absent() -> None:
+    """The one summary that is hidden is one no agent wrote."""
+
+    from agentacct.receipt import check_recorded_summary
+
+    # Exactly what a released server stored when `summary` was omitted.
+    assert check_recorded_summary({"name": "pytest", "result": "passed", "summary": "pytest: passed"}) is None
+    # Anything else is the agent's and is shown as written -- including prose
+    # that merely resembles the placeholder, which is not ours to second-guess.
+    for written in ("pytest passed", "pytest: passed.", "Pytest: Passed", "pytest: passed on CI"):
+        check = {"name": "pytest", "result": "passed", "summary": written}
+        assert check_recorded_summary(check) == written
+    assert check_recorded_summary({"name": "pytest", "result": "passed"}) is None
+
+
 def test_check_rows_carry_title_revision_artifact_and_command_state() -> None:
     check = _check("passed", name="check", at=200.0)
     check.update({
@@ -1210,7 +1225,9 @@ def test_check_rows_carry_title_revision_artifact_and_command_state() -> None:
     })
     task = _task([{"work_id": "w", "latest_status": "completed", "updated_at": 100.0}], task_checks=[check])
     row = _receipt(task)["dimensions"]["evidence"]["checks"][0]
-    # "check" is not a name, and "<name>: <result>" is not a summary.
+    # "check" is the placeholder a lane writes for an unnamed check, and
+    # "<name>: <result>" is what released servers stored for an omitted summary.
+    # Neither is the agent's, so the title falls through to the evidence type.
     assert row["name"] is None
     assert row["summary"] is None
     assert row["title"] == "build"
@@ -1602,9 +1619,15 @@ def test_attention_label_never_repeats_the_reason_or_the_task_title() -> None:
     receipt = _receipt(_task([blocked]))
     lines = receipt_attention_lines(receipt)
     assert lines[:2] == ["Blocker", ""]
-    # An older payload's "Blocker · <step>" never prints the reason twice.
-    old = {"attention": {"reason_label": "Blocker", "label": "Blocker · deploy"}}
-    assert receipt_attention_lines(old)[:2] == ["Blocker", "deploy"]
+    # A step title is the agent's own words and prints as written, even when it
+    # happens to contain the reason noun. Only a failed check's label is split,
+    # because only that one is built by the reducer.
+    titled = {"attention": {"kind": "blocker", "reason_label": "Blocker",
+                            "label": "Triage the release blocker in CI"}}
+    assert receipt_attention_lines(titled)[:2] == ["Blocker", "Triage the release blocker in CI"]
+    failed = {"attention": {"kind": "failed_check", "reason_label": "Failed check",
+                            "label": "Failed typecheck check · mypy · exit 1"}}
+    assert receipt_attention_lines(failed)[:2] == ["Failed typecheck check", "mypy · exit 1"]
 
 
 def test_vocabulary_built_display_strings_never_leak_snake_case_keys() -> None:

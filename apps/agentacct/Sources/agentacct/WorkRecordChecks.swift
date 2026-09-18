@@ -226,12 +226,11 @@ struct RecordChecksSection: View {
                                 .workFont(.caption).foregroundStyle(Theme.amber)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        // The finding, WHOLE. `summary_preview` is the shortest
-                        // run of complete sentences that still reaches the
-                        // observed-vs-expected clause, so it is deliberately
-                        // NOT clamped to a line count: a one-line clamp cut
-                        // `raises decimal.InvalidOperation on the st…` — exactly
-                        // the words that name the defect.
+                        // `summary_preview` is a run of WHOLE sentences chosen
+                        // by the reducer, so it is deliberately NOT clamped to
+                        // a line count: a one-line clamp cut
+                        // `raises decimal.InvalidOperation on the st…`
+                        // mid-clause.
                         if let summary = PayloadAbsence.text(check.summaryPreview)
                             ?? PayloadAbsence.text(check.summary) {
                             Text(verbatim: summary).workFont(.caption).foregroundStyle(Theme.muted)

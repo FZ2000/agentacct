@@ -33,7 +33,6 @@ from .semantic_rules import (
     check_advisories,
     inherited_section_title,
     section_advisories,
-    summary_advice,
     validate_semantic_record,
 )
 from .storage import METADATA_MAX_BYTES, json_utf8_size, validate_run_id
@@ -176,9 +175,8 @@ TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "run_id": {"type": "string", "default": "latest"},
-                # No default. The old default was the word "check", which
-                # GENERIC_CHECK_NAMES refuses on sight -- a default value that is
-                # immediately rejected is a trap, not a convenience.
+                # No default: a label the agent never wrote says nothing about
+                # what the check proves.
                 "name": {
                     "type": "string",
                     "description": (
@@ -234,9 +232,7 @@ TOOLS: list[dict[str, Any]] = [
                     "description": (
                         "What the check showed, in your words. REQUIRED when result is failed or error: "
                         "a reviewer cannot act on a failure with no description, so give the assertion "
-                        "that failed and the observed vs expected value. Do not restate the name and "
-                        "the result -- a summary that only says '<name>: <result>' is dropped at read "
-                        "time and the card ends up with no description at all. Optional on a passing "
+                        "that failed and the observed vs expected value. Optional on a passing "
                         "check: when omitted, nothing is synthesized. On a failure, say what it COSTS "
                         "as well as what broke -- 'so the importer must not be pointed at unvalidated "
                         "input yet', not just 'one case still red'."
@@ -1670,11 +1666,10 @@ class SentinelMCPServer:
             )
             has_outcome_fields = any(key in arguments for key in {"before_exit_code", "after_exit_code", "before_summary", "after_summary"}) or not has_evidence_fields
             run_id = _optional_str(arguments, "run_id", "latest")
-            # `name` no longer defaults to the word "check": that value is
-            # refused by GENERIC_CHECK_NAMES the moment it reaches the rules, so
-            # the default only ever manufactured a refusal or an unreadable card.
-            # The run-scoped before/after OUTCOME lane still needs some label for
-            # its own record, and that is the one place the old word survives.
+            # `name` has no default: a label the agent never wrote says nothing
+            # about what the check proves. The run-scoped before/after OUTCOME
+            # lane still needs some label for its own record, and that is the one
+            # place the placeholder word survives.
             # Uncapped, exactly as before: the only length gate `name` ever had
             # is the metadata size limit, and adding one here would refuse a call
             # that worked yesterday.
@@ -1780,7 +1775,7 @@ class SentinelMCPServer:
                         )
                 evidence_project_dir = _optional_limited_str(arguments, "project_dir", None, max_length=1000)
                 # Quality gates (RULES.md R5/R6): a check must name what it ran
-                # or what it produced, and its name must identify it. Both are
+                # or what it produced, and something must identify it. Both are
                 # measured on what will actually be STORED, which is why the
                 # files list is filtered first: a caller whose only entry names
                 # the project root ends up with no files at all, and that record
@@ -1790,9 +1785,6 @@ class SentinelMCPServer:
                 evidence_artifact_ref = _optional_limited_str(arguments, "artifact_ref", None, max_length=240)
                 evidence_artifact_path = _optional_limited_str(arguments, "artifact_path", None, max_length=500)
                 evidence_artifact_url = _optional_limited_str(arguments, "artifact_url", None, max_length=500)
-                # A generic name is refused only when it is the check's ONLY
-                # identifier; a command, file list or artifact identifies it,
-                # and so does a specific name.
                 mangled_fields = _detect_mangled_tool_call_fields(
                     "agentacct_record_machine_check", arguments, MACHINE_CHECK_NARRATIVE_KEYS
                 )
@@ -1893,7 +1885,6 @@ class SentinelMCPServer:
                     artifact_path=recorded_check_metadata.get("artifact_path"),
                     artifact_url=recorded_check_metadata.get("artifact_url"),
                     command=recorded_check_metadata.get("command"),
-                    summary=recorded_check_metadata.get("summary"),
                     # Measured against what is already STORED for this section,
                     # excluding this record itself (an idempotent replay must
                     # advise exactly like the write that stored it).
@@ -2245,14 +2236,6 @@ class SentinelMCPServer:
                     *_context_join_warnings(join_hint_quality),
                 ],
             }
-            # Summary-shape advisory (write-time nudge, never a refusal): for a
-            # terminal section whose PERSISTED summary reads as process/status
-            # rather than an outcome, carry one ignorable hint back in the same
-            # turn so the agent can restate it. The record is already stored.
-            advice = summary_advice(section_status, recorded_metadata.get("summary"))
-            if advice is not None:
-                payload["summary_advice"] = advice
-                payload["warnings"].append(advice["hint"])
             # Ranked and capped (never a refusal): the measured failure was a
             # 6-character title overrun being the ONLY advisory a whole session
             # saw, while that session also left a checkpoint with no
@@ -2261,7 +2244,6 @@ class SentinelMCPServer:
                 section_title=recorded_metadata.get("section_title"),
                 section_status=recorded_metadata.get("section_status"),
                 next_step=recorded_metadata.get("next_step"),
-                summary=recorded_metadata.get("summary"),
                 blocker=recorded_metadata.get("blocker"),
                 task_goal=recorded_metadata.get("task_goal"),
                 # The goal is a TASK-level field recorded once: a later section

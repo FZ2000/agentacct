@@ -27,13 +27,13 @@ agentacct recording-fix verification
   [PASS] all three transports refuse a terminal section with no outcome
          refused by: http(yes), cli(yes), mcp(yes)
   [PASS] the MCP refusal tells the agent what to add
-         section_status=completed requires `summary` (at least 40 characters): describe what actually changed and what was verifi...
+         section_status=completed requires `summary`: describe what actually changed and what was verified; section_status=comple...
 
 3. Incomplete reports are refused; complete ones are accepted
   [PASS] refused: a whitespace-only title
          section_title must contain readable text, not only whitespace (received 3 characters)...
   [PASS] refused: a check with nothing re-runnable
-         machine check name 'check' is too generic to identify the check; a later check with the same name would supers...
+         machine check `check` (result=passed) records nothing a reviewer can re-run or inspect: pass `command` (the ex...
   [PASS] accepted: a complete section
          stored
   [PASS] accepted: a check naming what it ran, with an exit code
@@ -49,7 +49,7 @@ agentacct recording-fix verification
 
 5. The recording contract reaches the agent, inside its line budget
   [PASS] the contract stays within 14 lines
-         7 bullets (a long directive competes with the user's request)
+         9 bullets (a long directive competes with the user's request)
   [PASS] the contract tells the agent about client_session_id
          
   [PASS] the contract tells the agent about turn_id
@@ -72,11 +72,12 @@ agentacct recording-fix verification
          checked limits 1, 5, 54, 100
 
 7. The rules do not refuse records the real store already accepted
-  [PASS] replaying every stored record through the rules refuses < 1%
-         9 of 1541 refused (0.58%); by type: {'section_completed': 5, 'machine_check': 3, 'section_checkpoint': 1}
+  [FAIL] replaying every stored record through the rules refuses < 1%
+         133 of 2004 refused (6.64%); by type: {'section_completed': 116, 'machine_check': 6, 'section_blocked': 3, 'section_checkpoint': 3, 'section_handed_off': 5}
   [PASS] the historian's own sections already carry resolved session ids
          at least one recorded section is session-linked in the live store
 
 ========================================================================
-30 of 30 checks passed
-All claims in the PR verified on this head.
+29 of 30 checks passed
+FAILED:
+  - replaying every stored record through the rules refuses < 1%

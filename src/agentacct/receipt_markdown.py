@@ -251,16 +251,9 @@ def _timeline_rows(receipt: Mapping[str, Any]) -> list[tuple[str, str, str, str,
     return rows
 
 
-def _words_in_order(needle: str, haystack: str) -> bool:
-    """True when every word of ``needle`` appears in ``haystack`` in order."""
-
-    words = iter(haystack.casefold().split())
-    return all(word in words for word in needle.casefold().split())
-
-
 def receipt_attention_lines(receipt: Mapping[str, Any]) -> list[str]:
     """The Attention block as plain lines, in the reducer's own words: the
-    reason, then the proof label (empty when it only repeats the reason), the recorded blocker/finding text, the recorded next
+    reason, then the proof label (empty when the step title is the Task's own), the recorded blocker/finding text, the recorded next
     step and the current disposition. Markdown, the CLI and the TUI all print
     these exact lines (each adds only its own emphasis)."""
 
@@ -269,15 +262,14 @@ def receipt_attention_lines(receipt: Mapping[str, Any]) -> list[str]:
         return []
     reason = _text(attention.get("reason_label")) or "Needs attention"
     label = _text(attention.get("label"))
-    # The label never repeats the reason noun printed before it. An older
-    # payload's ``Blocker · <step>`` prints as ``Blocker`` then ``<step>``; a
-    # label whose lead segment already carries every reason word in order
-    # (``Failed test check`` for ``Failed check``) becomes the reason itself.
-    head, _, rest = label.partition(" · ")
-    if label.casefold().startswith(reason.casefold()):
-        label = label[len(reason):].lstrip(" ·")
-    elif head and _words_in_order(reason, head):
-        reason, label = head, rest
+    # A failed check's label is reducer-built (``attention_label``): its lead
+    # segment is the reason with the check kind folded in (``Failed build
+    # check``), so it replaces the bare reason rather than printing beside it.
+    # Every other kind's label is the step title the agent wrote, and prints as
+    # written.
+    if attention.get("kind") == "failed_check":
+        head, _, rest = label.partition(" · ")
+        reason, label = head or reason, rest
     lines = [reason, label]
     if _text(attention.get("summary")):
         lines.append(_text(attention["summary"]))

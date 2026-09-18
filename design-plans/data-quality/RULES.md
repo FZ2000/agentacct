@@ -47,7 +47,7 @@ show a copy-pasteable corrected call. Example shape:
 
 ```text
 section_status=completed requires `summary` describing what actually changed.
-Received: no summary. Re-send the same section_id with summary, for example:
+Re-send the same section_id with summary, for example:
   agentacct_record_section(source="codex", section_id="add-rate-limit",
     section_status="completed", section_title="Add rate-limit to login",
     summary="Added a 5/minute limiter and covered it with 3 tests.")
@@ -77,9 +77,9 @@ Measured against the real ledger before merge, and re-measured after:
 | R2 control-character collapse | **implemented** | `_collapse_display_text` / `_collapse_narrative_text` |
 | R4 terminal outcome required | **implemented** | `_require_terminal_outcome`, called before the section context is built |
 | R5 reproducible check | **implemented** | `_require_reproducible_check`, measured on the *stored* files list |
-| R6 identifiable check name | **implemented** | `_check_has_identity` + `_require_check_identity` |
+| R6 a check carries something that identifies it | **implemented** | `require_check_identity`: a `name`, or a `command` / `files` list |
 | D1 identity split from display name | **implemented** | `check_key` on `agentacct_record_machine_check`; server-derived key over (command, evidence_type, section_id) in `work_ledger._evidence_event`. `name` is a LABEL and no longer defaults to `"check"`. A stored row whose name IS the command keeps the historical `(type, name, "")` hash, so nothing already in the store moves. |
-| D2a failure must describe itself | **implemented** | `require_failure_description`; `summary_echoes_check` is the SAME detector `receipt.check_display_summary` uses at read time, so a refusal never rejects text the reader would have kept |
+| D2a failure must describe itself | **implemented** | `require_failure_description`: a `failed` / `error` check owes a readable `summary`. Presence only; the summary is shown as written |
 | D2b stopped section must say where to resume | **implemented** | `section_refusal` (`handed_off` / `blocked` require `next_step`) |
 | D2c terminal section must anchor its files | **implemented** | `_missing_file_anchor`, folded into the one-call `section_refusal` |
 | D3 ranked, capped advisories | **implemented** | `rank_advisories` + `ADVISORY_RESPONSE_LIMIT`; `check_advisories` / `section_advisories` |
@@ -95,8 +95,8 @@ legitimate and refusing them would lose real evidence:
 
 - A check carrying `before_exit_code` / `after_exit_code` with their summaries —
   the CLI and HTTP repair lane records a fix this way and never names a command.
-- A generic name when a command, file list or artifact already identifies the
-  check, and a section that is `started` or `checkpoint` with no prose.
+- A check with no `name` when a command or file list already identifies it, and
+  a section that is `started` or `checkpoint` with no prose.
 - A terminal section of a kind that does not change files. D2c's escape is
   **named, never invented**: `review`, `research`, `planning` and `docs` — the
   same four kinds `task_outcome` already treats as not check-relevant — close
@@ -111,8 +111,7 @@ through the live write path): refusals rise from 15 (0.79%) to 116 (6.13%).
 The breakdown is 109 terminal sections of a file-touching kind that named no
 file anywhere in the section, 1 stopped section with no `next_step`, and 6
 pre-existing R5 refusals; D2a refuses **0** stored checks (no stored failed or
-error check lacks a description, and the echo shape appears 0 times in 418
-checks). D2c is the whole cost, and it is the rule the user chose with that
+error check lacks a description). D2c is the whole cost, and it is the rule the user chose with that
 number in view. A refusal rejects the CALL: `--replay` still exits 0 and no
 stored record is altered or dropped.
 
@@ -194,10 +193,11 @@ not hundreds.
 
 ### R4. A terminal section must carry its outcome — tier R
 
-**Claim:** `completed` requires a `summary` of at least 40 characters.
-`blocked` requires a `blocker` of at least 20 characters; `next_step` is strongly
-requested but not required. `handed_off` requires a `summary`. A refusal names
-the field the status requires and shows the corrected call.
+**Claim:** `completed` requires a readable `summary`. `blocked` requires a
+`blocker`; `next_step` is strongly requested but not required. `handed_off`
+requires a `summary`. The requirement is presence -- text that survives
+normalization -- never a character count. A refusal names the field the status
+requires and shows the corrected call.
 
 **Why:** a finished chapter with nothing to read is the single most visible hole
 in the timeline — the canvas card shows only title plus "Reported completed"
@@ -238,20 +238,22 @@ the only kind a reviewer can re-run.
 and no artifact should be recorded with `agentacct_record_event` (a note), not as
 a machine check — the refusal must say so, because that is the honest alternative.
 
-### R6. A check name is an identity, not a default — tier R
+### R6. A check carries something that identifies it — tier R
 
-**Claim:** `name` may not be the schema default or a bare generic word
-(`check`, `test`, `tests`, `verify`, `build`) when it is the only identity the
-check has. A short specific name (`pytest tests/test_mcp.py`, `pnpm build:web`)
-is required.
+**Claim:** a machine check supplies a `name`, or else a `command` or a `files`
+list. The schema has no default `name`, so an omitted one is absent rather than
+a placeholder. What the label says is the agent's to choose: the field
+description asks for what the check PROVES, and every surface shows it as
+written.
 
-**Why:** supersession keys on the name, so two unrelated checks both called
-"check" would supersede each other (`src/agentacct/mcp.py:105-108`). The schema
-defaults `name` to `"check"` (`:103`), so the failure mode is one omitted argument
-away. Measured: 0 generic names in the store today; this is a guard, and it costs
-nothing to add.
+**Why:** a card with no label and nothing else saying what ran cannot be told
+from any other. Supersession does not depend on the label -- it keys on
+`check_key` / (command, evidence_type, section_id) -- so this rule protects the
+reader, not the key.
 
-**Enforcement point:** the check branch, before supersession scope is computed.
+**Enforcement point:** the check branch, before reproducibility (R5) is judged,
+because a check that cannot be referred to at all yields the more actionable
+message.
 
 
 ### R7. Usage rows are not work items — tier A
@@ -324,6 +326,26 @@ files are written once at onboard and never refreshed, which is why the `title`
 alias had to be kept forever (`src/agentacct/mcp.py:1414-1418`) — new rules must
 reach already-onboarded machines, so the schema descriptions carry the weight.
 
+## Prose is asked for and shown, never graded
+
+An earlier round judged agent-written prose with word lists, phrase matching and
+length floors: a summary-shape classifier, a "names a consequence" test, goal and
+check-summary echo detectors, a generic-check-name list, and minimum lengths of
+40 / 20 / 20 characters on `summary`, `blocker` and a failure description. An
+evaluation against real ledger summaries removed all of it:
+
+- the lexical verdict agreed with a human reader on 25-50% of summaries, against
+  88% for the constant answer "always useful";
+- it would have attached an advisory to 94% of completed sections;
+- it refused real outcomes -- `Bumped requests to 2.32.3; CI green.` at 36
+  characters, and the failure summary `got 3, want 4` -- while accepting filler
+  of the right length, and could be gamed.
+
+The rules that remain are structural: field presence, enum membership, path
+shape, the unfilled-placeholder refusal, and text hygiene. What the prose should
+SAY is carried by the tool and field descriptions (the mechanism that measurably
+changed what agents wrote), and every surface shows the agent's words as written.
+
 ## Reliability evidence
 
 Three independent checks, all re-runnable, before calling any rule reliable.
@@ -349,8 +371,7 @@ one shape the rule still declines, and it declines it for the right reason.
 
 This replay is what caught the rule being too strict the first time: it initially
 refused **11** checks that had a precise name and an exit code but no verbatim
-command. Those are real evidence, so R5 now accepts a specific name plus an exit
-code.
+command. Those are real evidence, so R5 now accepts a name plus an exit code.
 
 ### 2. Fuzz the validators — 1,415 generated cases
 

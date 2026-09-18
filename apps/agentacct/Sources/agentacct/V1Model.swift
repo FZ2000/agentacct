@@ -1929,9 +1929,9 @@ struct ReceiptCheck: Decodable, Identifiable {
     /// heading. It replaces the four words a surface used to punctuate as four
     /// sentences.
     var metaLine: String? = nil
-    /// The shortest run of WHOLE sentences from the start of `summary` that
-    /// still contains the finding. It never ends mid-clause and carries no
-    /// ellipsis, so it must not be clamped to a line count.
+    /// A run of WHOLE sentences from the start of `summary`: the first always,
+    /// then as many more as fit the reducer's budget. It never ends mid-clause
+    /// and carries no ellipsis, so it must not be clamped to a line count.
     var summaryPreview: String? = nil
     /// True when `summary` holds more than `summaryPreview` shows.
     var summaryElided: Bool? = nil
