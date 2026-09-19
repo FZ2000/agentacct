@@ -63,16 +63,39 @@ enum CLIPayloadInspector {
                 guard !relative.utf8.contains(0),
                       let values = try? child.resourceValues(
                           forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
-                      ),
-                      values.isSymbolicLink != true,
-                      let attributes = try? fm.attributesOfItem(atPath: child.path),
+                      )
+                else { return false }
+                let pathBytes = Data(relative.utf8)
+
+                if values.isSymbolicLink == true {
+                    // A framework must keep its canonical aliases (Versions/Current
+                    // and the top-level binary/Resources) to stay a codesignable
+                    // bundle. Bind the link's path and target into the identity so
+                    // a changed target changes the fingerprint, but never follow it:
+                    // the target must be relative with no ".." component, which
+                    // confines it to the tree even through symlinked intermediates
+                    // so no stable path can alias bytes outside the payload.
+                    guard let target = try? fm.destinationOfSymbolicLink(atPath: child.path),
+                          !target.hasPrefix("/"),
+                          symlinkTargetIsConfined(target)
+                    else { return false }
+                    records.append(record(
+                        kind: 0x4C,
+                        path: pathBytes,
+                        mode: 0,
+                        size: 0,
+                        digest: Data(target.utf8)
+                    ))
+                    continue
+                }
+
+                guard let attributes = try? fm.attributesOfItem(atPath: child.path),
                       let permissions = attributes[.posixPermissions] as? NSNumber,
                       permissions.intValue & 0o022 == 0,
                       !requireCurrentUserOwner || currentUserOwns(attributes)
                 else { return false }
 
                 let mode = permissions.intValue & 0o777
-                let pathBytes = Data(relative.utf8)
                 if values.isDirectory == true {
                     records.append(record(
                         kind: 0x44,
@@ -116,6 +139,18 @@ enum CLIPayloadInspector {
             return false
         }
         return values.isDirectory == true && values.isSymbolicLink != true
+    }
+
+    /// A relative symlink target is confined to the payload iff it contains no
+    /// ".." component. A forward-only relative target can only descend from the
+    /// link's own (in-payload) directory, so following it — even through other
+    /// forward-only symlinks — can never climb out of the tree. ".." must be
+    /// rejected rather than resolved lexically: after a symlinked component, the
+    /// OS resolves ".." against that component's physical target, not the
+    /// lexical path, so a ".." target that looks in-root can physically escape.
+    /// Absolute targets are rejected by the caller before this is reached.
+    private static func symlinkTargetIsConfined(_ target: String) -> Bool {
+        !target.split(separator: "/", omittingEmptySubsequences: false).contains("..")
     }
 
     private static func currentUserOwns(_ attributes: [FileAttributeKey: Any]) -> Bool {
@@ -183,6 +218,7 @@ enum SetupClient: String, CaseIterable, Identifiable {
     case claudeCode = "claude-code"
     case openCode = "opencode"
     case hermes
+    case deepseekHarness = "dsh"
 
     var id: String { rawValue }
 
@@ -192,6 +228,7 @@ enum SetupClient: String, CaseIterable, Identifiable {
         case .claudeCode: return "Claude Code"
         case .openCode: return "OpenCode"
         case .hermes: return "Hermes"
+        case .deepseekHarness: return "DeepSeek Harness"
         }
     }
 }
@@ -242,6 +279,13 @@ final class SetupModel: ObservableObject {
     /// Endpoint readiness after reconnect, separate from original onboarding and
     /// never evidence that the selected client has captured any new work.
     @Published private(set) var reconnectCompletedAt: Date?
+    /// Why the last launch-time upgrade check carried the recorder no further,
+    /// when a recorder is present but could not be upgraded. nil after a clean
+    /// upgrade or when the installed recorder already matches this app. This is
+    /// the signal that the launch upgrade never fails silently: it is set by
+    /// `upgradeInstalledCLIIfNeeded` (which already does the heavy checks), never
+    /// recomputed during rendering, so it does not traverse/hash payloads.
+    @Published private(set) var recorderUpgradeDiagnostic: String?
     private var pendingRuntimeRecovery = false
 
     private let fm = FileManager.default
@@ -474,12 +518,43 @@ final class SetupModel: ObservableObject {
         return partial.provenance != packaged.provenance
     }
 
+    /// Why a *present* recorder could not be carried to this app's version, from
+    /// payloads the caller already computed. Meaningful only in the launch
+    /// upgrade's skip branch, where the upgrade context is known nil and no
+    /// recovery is pending, so it names the recognition failure rather than
+    /// re-deciding. nil when nothing recognizable is wrong. Takes precomputed
+    /// values so it never re-hashes payloads, and is never called during render.
+    private func blockedRecorderUpgradeReason(
+        packaged: PackagedCLI?,
+        installed: InstalledCLI?
+    ) -> String? {
+        // The app cannot upgrade anything if it cannot verify its own bundled
+        // recorder. Probe the raw bundle directory rather than `bundledCLIDir`,
+        // which is derived from `packagedCLI` and so is nil exactly when
+        // verification failed — the case we want to name here.
+        if let resourceURL = bundleResourceURL,
+           isRegularDirectory(resourceURL.appendingPathComponent("cli", isDirectory: true)),
+           packaged == nil {
+            return "the recorder bundled with this app could not be verified"
+        }
+        // A recorder executable is present but was not recognized as an app-owned
+        // install (payload identity, ownership, or wrapper mismatch), so its
+        // version cannot be compared or upgraded. The caller's guard already
+        // established there is no recoverable partial first install.
+        if installed == nil, fm.isExecutableFile(atPath: installedBinary.path) {
+            return "the installed recorder could not be recognized as app-owned"
+        }
+        return nil
+    }
+
     // MARK: run
 
     func setUp() async {
         guard case .idle = phase else { return }
         guard reconnectPhase != .working else { return }
         defer { refreshPresentation() }
+        // A proceeding setup supersedes any earlier launch-upgrade skip reason.
+        recorderUpgradeDiagnostic = nil
         if pendingRuntimeRecovery {
             await retryRuntimeAfterFailedUpgrade()
             guard phase == .done, selectedClient != nil else { return }
@@ -564,6 +639,9 @@ final class SetupModel: ObservableObject {
     func reset() {
         guard reconnectPhase != .working else { return }
         phase = .idle
+        // A fresh setup attempt supersedes any earlier launch-upgrade diagnostic
+        // so a repaired recorder never keeps showing a stale skip reason.
+        recorderUpgradeDiagnostic = nil
     }
 
     /// Start only the verified app-owned recorder. This operation cannot update
@@ -675,14 +753,27 @@ final class SetupModel: ObservableObject {
             return .notNeeded
         }
         defer { refreshPresentation() }
+        // Evaluate the payload-hashing checks once and share them between the
+        // upgrade decision and the skip diagnostic, so a normal already-current
+        // launch hashes the recorder payloads at most once.
+        let packaged = packagedCLI
+        let installed = installedCLIState
+        let initialContext = automaticUpgradeContext(packaged: packaged, installed: installed)
         guard pathExists(runtimeTransactionJournal)
-                || automaticUpgradeContext != nil
+                || initialContext != nil
                 || recoverablePartialFirstInstall != nil
                 || damagedManagedVersionedInstall
         else {
+            // Never skip silently: if a recorder is present but could not be
+            // carried to this app's version, record why so it is diagnosable
+            // instead of an invisible no-op.
+            let reason = blockedRecorderUpgradeReason(packaged: packaged, installed: installed)
+            recorderUpgradeDiagnostic = reason
+            if let reason { append("Recorder update skipped: \(reason)") }
             return .notNeeded
         }
 
+        recorderUpgradeDiagnostic = nil
         log = []
         let transactionLock: CLITransactionLock
         do {
@@ -1359,8 +1450,17 @@ final class SetupModel: ObservableObject {
     }
 
     private var automaticUpgradeContext: AutomaticUpgradeContext? {
-        guard let packaged = packagedCLI,
-              let installed = installedCLIState,
+        automaticUpgradeContext(packaged: packagedCLI, installed: installedCLIState)
+    }
+
+    /// Same decision from already-computed payloads, so a caller that also needs
+    /// the individual `packagedCLI` / `installedCLIState` results can evaluate
+    /// those payload hashes once and reuse them here instead of recomputing.
+    private func automaticUpgradeContext(
+        packaged: PackagedCLI?,
+        installed: InstalledCLI?
+    ) -> AutomaticUpgradeContext? {
+        guard let packaged, let installed,
               installed.provenance != packaged.provenance
                 || installed.payloadIdentity != packaged.payloadIdentity
         else { return nil }
