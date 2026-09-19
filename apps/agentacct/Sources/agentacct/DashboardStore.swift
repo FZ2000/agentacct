@@ -191,7 +191,8 @@ final class DashboardStore {
     init(
         preloaded fixture: DashboardSnapshotFixture,
         workState: SnapshotWorkStoreState = .populated,
-        usageState: SnapshotUsageStoreState? = nil
+        usageState: SnapshotUsageStoreState? = nil,
+        ingestionOverride: V1IngestionSnapshot? = nil
     ) {
         client = GlanceClient()
         savedWork = nil
@@ -199,7 +200,7 @@ final class DashboardStore {
         usage = usageState?.summary ?? fixture.usage
         usageDays = usageState?.days ?? 7
         attention = fixture.attention
-        ingestion = fixture.ingestion?.ingestion
+        ingestion = ingestionOverride ?? fixture.ingestion?.ingestion
         switch workState {
         case .populated:
             receiptTasks = fixture.tasks.tasks
