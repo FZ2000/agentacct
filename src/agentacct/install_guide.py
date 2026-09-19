@@ -296,7 +296,8 @@ _RECORDING_CONTRACT_LINES = (
     "client name), a stable `section_id` (the SAME id for this section's "
     "started/checkpoint/terminal calls), `section_status=started`, and a short "
     "`section_title`. Long task: send `section_status=checkpoint` updates rather than "
-    "one giant section.",
+    "one giant section. If unsure whether something is worth recording, record it: "
+    "a short section beats a gap; skip only genuinely trivial throwaway commands.",
     "- Pass `client_session_id` when you know it — the only key that links this work to "
     "the session's token and cost usage. Never guess it: an installed hook bridge fills "
     "it in, and a wrong id is worse than a missing one. Add `turn_id` when your client "
@@ -319,13 +320,13 @@ _RECORDING_CONTRACT_LINES = (
     # checks — so this cues only the honest close, and the machine_check bullet
     # below owns the evidence. Triggers stay unambiguous (a mid-task "looks good"
     # must not fire it).
-    "- When the user signals the whole job is done (\"ship it\", or after a merge), record a final `section_status=completed` summarizing the whole deliverable, and leave no section on `started`/`checkpoint`.",
+    "- When the user signals the whole job is done (\"ship it\", or after a merge), "
+    "record a final `section_status=completed` summarizing the whole deliverable, "
+    "and leave no section on `started`/`checkpoint`.",
     "- After tests, a build, a lint, a smoke test or a browser check, call "
     "`agentacct_record_machine_check` with `command` (what you ran) or `files` (what it "
     "covered) plus `exit_code`; a check naming neither cannot be audited and is "
     "refused.",
-    "- If unsure whether something is worth recording, record it: a short section beats "
-    "a gap. Skip only genuinely trivial throwaway commands.",
     "- Keep MCP/event evidence separate from token/cost claims: MCP events prove what "
     "work happened; a token or cost figure is only real if it comes from actual client "
     "usage the importer read — never fabricate one.",

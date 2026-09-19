@@ -48,6 +48,8 @@ ALLOWED_UNKNOWN_FALLBACKS = [
     "src/agentacct/task_timeline.py",
     "src/agentacct/tui.py",
     "src/agentacct/tui.py",
+    # _source_lozenge: a source row's recorded `state` (0.11.x Diagnostics verifiers).
+    "src/agentacct/tui.py",
 ]
 
 ALLOWED_IDENTITY_FALLBACKS = {
@@ -181,9 +183,9 @@ def test_one_line_copy_stays_within_budget() -> None:
 
 def test_recorded_unknown_and_display_unknown_stay_inventoried() -> None:
     """`unknown` is a real recorded value, so display code using the same literal
-    as a stand-in for "unreadable" is genuinely ambiguous. The six sites that do
-    were each checked and all six pass a recorded value through; this test pins
-    that inventory so a seventh is a decision, not an accident."""
+    as a stand-in for "unreadable" is genuinely ambiguous. The seven sites that do
+    were each checked and all seven pass a recorded value through; this test pins
+    that inventory so an eighth is a decision, not an accident."""
     found = []
     for path in PRODUCT_SURFACES:
         for _ in re.finditer(r'(?:or|\?\?)\s*"unknown"', _read(path)):
