@@ -793,7 +793,7 @@ def test_plan_share_headline_is_calibrated_or_nothing() -> None:
     )
     assert (
         plan_share_headline({"pct": None, "calibration_state": "never"})
-        == "undefined for this client"
+        == "not applicable for this client"
     )
     # Absent payload stays a dash, never a fabricated zero.
     assert plan_share_headline(None) == "—"

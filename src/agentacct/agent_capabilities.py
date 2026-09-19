@@ -300,6 +300,28 @@ _OPENCLAW_USAGE_FIXTURE = _verification_record(
         "tests/test_client_usage.py::test_discover_openclaw_usage_reads_jsonl_tokens_and_cost",
     ),
 )
+_DSH_USAGE_FIXTURE = _verification_record(
+    "synthetic_fixture",
+    verified_at="2026-09-15",
+    evidence_refs=(
+        "tests/test_client_usage.py::test_discover_dsh_usage_reads_zstd_jsonl_tokens_and_no_cost",
+    ),
+)
+_DSH_ONBOARD_FIXTURE = _verification_record(
+    "synthetic_fixture",
+    verified_at="2026-09-15",
+    evidence_refs=(
+        "tests/test_onboard_global.py::test_onboard_global_agent_dsh_writes_home_patch_and_instructions",
+    ),
+)
+_DSH_MCP_LIVE = _verification_record(
+    "live_smoke",
+    verified_at="2026-09-16",
+    client_versions=("0.1.5-rc.1",),
+    evidence_refs=(
+        "docs/adapter-capability-evidence.md#2026-09-16-deepseek-harness-dsh-015-rc1-mcp-self-reporting-smoke",
+    ),
+)
 _CURSOR_LIVE = _verification_record(
     "live_smoke",
     verified_at="2026-07-17",
@@ -727,6 +749,91 @@ _CLIENTS: tuple[dict[str, Any], ...] = (
         "limitations": ["Remain experimental until real fixtures, namespace hardening, routing, and per-model lanes exist."],
     },
     {
+        "client": "dsh",
+        "display_name": "DeepSeek Harness",
+        "roadmap_phase": "phase_1",
+        "source_formats": ["Zstandard-compressed assistant/message JSONL"],
+        "session_scope": "Usage-bearing assistant/message events in per-session dsh logs.",
+        "zero_usage_observation": "unavailable",
+        "namespace_hardening": "not_hardened",
+        "verified_stability": _stability_record(
+            "single_machine_live_observation",
+            verified_at="2026-09-16",
+            client_versions=("0.1.5-rc.1",),
+            evidence_refs=(
+                "docs/adapter-capability-evidence.md#2026-09-16-deepseek-harness-dsh-015-rc1-mcp-self-reporting-smoke",
+            ),
+            limitations=(
+                "One machine, one dsh version (0.1.5-rc.1), and the recording task was explicitly requested; spontaneous recording and multi-version stability are not claimed.",
+                "Usage-import (session-log parsing) remains synthetic-fixture only; the schema was verified against dsh source and two independent third-party parsers, not a live usage-log smoke.",
+            ),
+        ),
+        "capabilities": {
+            "session_discovery": _capability_record(
+                "experimental",
+                "Session ids from the dsh session header (falling back to the session directory name) of per-session logs.",
+                activation="opt_in_project",
+                verification=_DSH_USAGE_FIXTURE,
+                limitations=(
+                    "Subagent session logs are counted as separate sessions; overlap with parent aggregation is not de-duplicated.",
+                ),
+            ),
+            "usage_import": _capability_record(
+                "experimental",
+                "Input, output, cache, and reasoning tokens from assistant/message events (Zstandard-compressed JSONL).",
+                activation="opt_in_project",
+                verification=_DSH_USAGE_FIXTURE,
+                limitations=(
+                    "Synthetic happy-path fixture only; malformed/schema-drift diagnostics are incomplete.",
+                    "dsh does not persist a cost, so only agentacct's local pricing-table estimate is possible.",
+                ),
+                usage_basis="client_reported",
+                cost_basis="unknown",
+            ),
+            "mechanical_capture": _unavailable_capability("No typed dsh plugin-hook adapter is implemented."),
+            "mcp_semantics": _capability_record(
+                "verified_partial",
+                "`agentacct onboard --agent dsh` writes the @deepseek-ai/dsh-mcp-client registration into $DSH_HOME/cordis.patch.yml (the home patch over every profile) and the record-your-work directive into $DSH_HOME/AGENTS.md. A live dsh 0.1.5-rc.1 session loaded the plugin in-box and recorded a work section over MCP (source=dsh); `setup mcp --agent dsh` previews the same registration.",
+                activation="one_command_global",
+                verification=_DSH_MCP_LIVE,
+                limitations=("Verified on one machine and version with an explicitly-requested recording; spontaneous (uninstructed) recording and multi-version behavior are not claimed.",),
+            ),
+            "model_attribution": _capability_record(
+                "experimental",
+                "Model/provider from an assistant message source within one session log.",
+                activation="opt_in_project",
+                verification=_DSH_USAGE_FIXTURE,
+                limitations=("A multi-model session is currently aggregated under the final/current model.",),
+            ),
+            "cache_read": _capability_record(
+                "experimental",
+                "cacheReadTokens when an assistant/message event reports it.",
+                activation="opt_in_project",
+                verification=_DSH_USAGE_FIXTURE,
+                limitations=("Synthetic fixture only; missing remains unknown.",),
+                usage_basis="client_reported",
+            ),
+            "cache_write": _capability_record(
+                "experimental",
+                "cacheWriteTokens when an assistant/message event reports it.",
+                activation="opt_in_project",
+                verification=_DSH_USAGE_FIXTURE,
+                limitations=("Synthetic fixture only; missing remains unknown.",),
+                usage_basis="client_reported",
+            ),
+            "automatic_install": _capability_record(
+                "verified_partial",
+                "`agentacct onboard --agent dsh` writes the record-your-work directive to $DSH_HOME/AGENTS.md and the @deepseek-ai/dsh-mcp-client registration to $DSH_HOME/cordis.patch.yml (the home patch over every profile the CLI boots), verified end to end on a live dsh 0.1.5-rc.1 session.",
+                activation="one_command_global",
+                verification=_DSH_MCP_LIVE,
+                limitations=(
+                    "One machine and version: the bundled @deepseek-ai/dsh-mcp-client plugin resolved in-box in this smoke, and onboarding still prints the `dsh plugin add` fallback for environments where it does not.",
+                ),
+            ),
+        },
+        "limitations": ["Usage-import lanes remain synthetic-fixture experimental until a live dsh usage-log smoke and namespace hardening exist; the MCP self-reporting lanes are verified on one machine/version."],
+    },
+    {
         "client": "cursor",
         "display_name": "Cursor",
         "roadmap_phase": "phase_1",
@@ -1017,6 +1124,127 @@ def agent_capability_manifest() -> dict[str, Any]:
     return deepcopy(manifest)
 
 
+# --- Docs matrix renderer -----------------------------------------------------
+
+# Short column headers for the per-lane matrix, in CAPABILITY_NAMES order, plus a
+# one-line gloss shown in the legend so nothing is abbreviated without a key.
+_MATRIX_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("session_discovery", "Sessions", "session discovery"),
+    ("usage_import", "Usage", "usage / cost import"),
+    ("mechanical_capture", "Mechanical", "mechanical activity capture (commands, files, tool categories)"),
+    ("mcp_semantics", "MCP", "MCP tool semantics (sections, checks, files)"),
+    ("model_attribution", "Model", "model attribution"),
+    ("cache_read", "Cache R", "cache-read token capture"),
+    ("cache_write", "Cache W", "cache-creation token capture"),
+    ("automatic_install", "Install", "one-command install"),
+)
+
+def _matrix_cell(state: str) -> str:
+    # unavailable renders as an em dash so a wall of "unavailable" does not drown
+    # the lanes that ARE implemented; every other state is spelled out verbatim so
+    # verified_partial and experimental are never flattened into one badge.
+    return "—" if state == "unavailable" else state
+
+
+def render_capability_matrix_markdown() -> str:
+    """Render the capability manifest as a self-contained Markdown coverage matrix.
+
+    This is the doc surface the module docstring names: it consumes
+    :func:`agent_capability_manifest` (already validated) and renders the eight
+    lanes per client WITHOUT collapsing ``verified`` / ``verified_partial`` /
+    ``experimental`` / ``unavailable`` into a single "supported" badge — the
+    honesty the manifest enforces, carried into the docs. It is generated, never
+    hand-written, so it cannot drift from the code that is the source of truth.
+
+    Refresh semantics and the per-path usage/cost truth live in the usage truth
+    table; the dated evidence behind each ``verified*`` rating lives in the
+    adapter capability evidence doc. Both are linked rather than duplicated, so
+    this table stays the single rendering of the manifest and nothing is copied
+    where it could drift.
+    """
+
+    manifest = agent_capability_manifest()
+    clients = manifest["clients"]
+    out: list[str] = []
+
+    out.append("# Coverage matrix — what agentacct proves, per agent")
+    out.append("")
+    out.append(
+        "<!-- GENERATED by scripts/gen_coverage_matrix.py from "
+        "src/agentacct/agent_capabilities.py — do not edit by hand. -->"
+    )
+    out.append("")
+    out.append(
+        f"Generated from the capability manifest; last reviewed {manifest['last_reviewed_at']}. "
+        "Integration breadth is not uniform verification: a client can have a proven usage lane and an "
+        "experimental capture lane at the same time. Each lane is rated on its own, and the states are "
+        "never flattened into one \"supported\" badge."
+    )
+    out.append("")
+    out.append("**States**")
+    out.append("")
+    out.append("- `verified` — works, with real, dated evidence.")
+    out.append("- `verified_partial` — works, with real evidence but a narrow, bounded scope.")
+    out.append("- `experimental` — implemented, but the evidence is synthetic or absent.")
+    out.append("- `—` (`unavailable`) — not implemented.")
+    out.append("")
+    out.append("**Lanes**")
+    out.append("")
+    for _name, header, gloss in _MATRIX_COLUMNS:
+        out.append(f"- **{header}** — {gloss}.")
+    out.append("")
+
+    header_cells = "Agent | " + " | ".join(header for _n, header, _g in _MATRIX_COLUMNS)
+    out.append(f"| {header_cells} |")
+    out.append("| --- | " + " | ".join("---" for _ in _MATRIX_COLUMNS) + " |")
+    for row in clients:
+        caps = row["capabilities"]
+        cells = [_matrix_cell(caps[name]["state"]) for name, _h, _g in _MATRIX_COLUMNS]
+        out.append(f"| {row['display_name']} | " + " | ".join(cells) + " |")
+    out.append("")
+
+    out.append("## Per-agent detail")
+    out.append("")
+    roadmap_only: list[str] = []
+    for row in clients:
+        caps = row["capabilities"]
+        if all(cap["state"] == "unavailable" for cap in caps.values()):
+            roadmap_only.append(row["display_name"])
+            continue
+        usage = caps["usage_import"]
+        stability = row["verified_stability"]
+        formats = ", ".join(f"`{fmt}`" for fmt in row.get("source_formats") or []) or "—"
+        out.append(f"### {row['display_name']}")
+        out.append("")
+        out.append(f"- **Collection path:** {formats}")
+        out.append(f"- **Session scope:** {row['session_scope']}")
+        out.append(f"- **Usage / cost basis:** `{usage['usage_basis']}` / `{usage['cost_basis']}`")
+        stability_line = f"`{stability['level']}`"
+        if stability.get("verified_at"):
+            stability_line += f" ({stability['verified_at']})"
+        out.append(f"- **Validation scope:** {stability_line}")
+        for limitation in row.get("limitations") or []:
+            out.append(f"- {limitation}")
+        out.append("")
+    if roadmap_only:
+        out.append(
+            "**Roadmap only (no implementation or verification yet):** " + ", ".join(roadmap_only) + "."
+        )
+        out.append("")
+
+    out.append(
+        "Refresh semantics (import-once vs `--refresh`, watcher heartbeat, snapshot TTL) and the full "
+        "per-path usage/cost truth are in the [usage & cost truth table](usage-truth-table.md). The dated "
+        "evidence behind each `verified*` rating is in [adapter capability evidence](adapter-capability-evidence.md). "
+        "Live source detection and importer health are separate from this static manifest — see "
+        "`agentacct capabilities agents` for the machine-local reading."
+    )
+    out.append("")
+
+    text = "\n".join(out).rstrip("\n")
+    return text + "\n"
+
+
 __all__ = [
     "ACTIVATION_MODES",
     "CAPABILITY_NAMES",
@@ -1024,5 +1252,6 @@ __all__ = [
     "SCHEMA_VERSION",
     "VERIFICATION_LEVELS",
     "agent_capability_manifest",
+    "render_capability_matrix_markdown",
     "validate_agent_capability_manifest",
 ]

@@ -10,6 +10,7 @@ keep polling cheap (one ledger build shared across routes and polls).
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -265,6 +266,62 @@ def test_pagination_disclose_totals_and_truncation(tmp_path):
     beyond = _sessions(client, limit=2, offset=10)
     assert beyond["sessions"] == []
     assert beyond["truncated"] is False
+
+
+def test_client_filter_precedes_pagination_without_changing_store_totals(tmp_path):
+    service = SentinelService(tmp_path)
+    now = time.time()
+    for index in range(55):
+        _record_usage(service, client="claude-code", session_id=f"busy-{index}", tokens=1, updated_at=now - index)
+    for index in range(3):
+        _record_usage(service, client="codex", session_id=f"target-{index}", tokens=1, updated_at=now - 100 - index)
+    client = TestClient(create_local_api_app(store_dir=tmp_path, v1_auth_token=TOKEN))
+
+    response = client.get("/v1/sessions", headers=AUTH, params={"client": "codex", "roots_only": "false", "limit": 1, "offset": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["client"] == "codex"
+    assert payload["total_sessions"] == 58
+    assert payload["filtered_total"] == 3
+    assert payload["returned"] == 1
+    assert payload["offset"] == 1
+    assert payload["truncated"] is True
+    assert [row["client_session_id"] for row in payload["sessions"]] == ["target-1"]
+    assert {row["client"] for row in payload["sessions"]} == {"codex"}
+
+    rest = client.get("/v1/sessions", headers=AUTH, params={"client": "codex", "limit": 2, "offset": 2}).json()
+    assert [row["client_session_id"] for row in rest["sessions"]] == ["target-2"]
+    assert rest["truncated"] is False
+    unknown = client.get("/v1/sessions", headers=AUTH, params={"client": "unknown-client"}).json()
+    assert unknown["sessions"] == []
+    assert unknown["filtered_total"] == 0
+    assert unknown["total_sessions"] == 58
+    assert _sessions(client, limit=1)["sessions"][0]["client"] == "claude-code"
+
+
+def test_client_and_root_filters_both_apply_before_slice_without_mutating_cached_rows():
+    from agentacct.v1_sessions import slice_sessions_payload
+
+    rows = [
+        {"client": "claude-code", "client_session_id": "other-root", "is_root": True},
+        {"client": "codex", "client_session_id": "target-child", "is_root": False},
+        {"client": "codex", "client_session_id": "target-root", "is_root": True},
+    ]
+    view = {"rows": rows, "total_sessions": 3, "total_root_sessions": 2, "generated_at": 100}
+
+    roots = slice_sessions_payload(view, roots_only=True, limit=1, offset=0, client="codex")
+    everyone = slice_sessions_payload(view, roots_only=False, limit=1, offset=0, client="codex")
+
+    assert [row["client_session_id"] for row in roots["sessions"]] == ["target-root"]
+    assert roots["filtered_total"] == 1
+    assert roots["total_root_sessions"] == 2
+    assert roots["truncated"] is False
+    assert [row["client_session_id"] for row in everyone["sessions"]] == ["target-child"]
+    assert everyone["filtered_total"] == 2
+    assert everyone["truncated"] is True
+    assert all("is_root" in row for row in rows)
+    assert roots["generated_at"] == 100
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +819,54 @@ def test_ledger_routes_share_one_cached_build(tmp_path, monkeypatch):
     assert calls["count"] == 2  # the fingerprint saw the new event
 
 
+def test_legacy_routes_reuse_dashboard_snapshot_fingerprint(tmp_path, monkeypatch):
+    # The legacy routes were rerouted from a no-arg _derived_work_ledger() (which
+    # re-parsed the ledger and re-hashed events_fingerprint on every poll) to the
+    # /v1 pattern: events, fingerprint = _dashboard_events(); _derived_work_ledger(
+    # events, fingerprint=fingerprint). On an UNCHANGED store the dashboard snapshot
+    # is a stable object, so its fingerprint is computed once and reused — no
+    # per-route rehash. Pre-reroute this counter would tick once PER route.
+    service = SentinelService(tmp_path)
+    _record_usage(service, session_id="root-a", tokens=100, updated_at=time.time() - 60)
+
+    calls = {"count": 0}
+    real_fp = api_module.events_fingerprint
+
+    def _counting_fp(events):
+        calls["count"] += 1
+        return real_fp(events)
+
+    monkeypatch.setattr(api_module, "events_fingerprint", _counting_fp)
+    client = TestClient(create_local_api_app(store_dir=tmp_path, v1_auth_token=TOKEN))
+
+    # Populate the dashboard snapshot cache once (deterministic regardless of the
+    # background warm thread), then measure only the unchanged-store polls.
+    assert client.get("/overview").status_code == 200
+    calls["count"] = 0
+
+    expected_key = {
+        "/overview": "overview",
+        "/timeline": "timeline",
+        "/work-items": "work_items",
+        "/sessions": "sessions",
+        "/attention": "attention_groups",
+    }
+    for path, key in expected_key.items():
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["schema_version"]
+        assert key in body
+    # No per-route rehash: the cached snapshot fingerprint served all five routes.
+    assert calls["count"] == 0
+
+    # A new event bumps the revision → a fresh snapshot → the fingerprint is
+    # recomputed exactly once for the changed store.
+    _record_usage(service, session_id="root-b", tokens=50, updated_at=time.time() - 30)
+    assert client.get("/overview").status_code == 200
+    assert calls["count"] == 1
+
+
 def test_sessions_view_cache_rebuilds_only_on_event_change(tmp_path, monkeypatch):
     service = SentinelService(tmp_path)
     _record_usage(service, session_id="root-a", tokens=100, updated_at=time.time() - 60)
@@ -786,9 +891,10 @@ def test_sessions_view_cache_rebuilds_only_on_event_change(tmp_path, monkeypatch
     assert calls["count"] == 2
 
 
-def test_ledger_cache_expires_by_age_even_when_events_are_unchanged():
-    """The ledger's secondary inputs (run reports, cost events, observations)
-    are outside the fingerprint — the TTL is what bounds their staleness."""
+def test_ledger_cache_is_reused_for_the_same_key_regardless_of_age():
+    """No wall-clock TTL: the same composite key reuses the SAME built object
+    however much time passes; a changed key rebuilds. Age can never trigger a
+    rebuild anymore — the cache has no time input at all."""
 
     calls = {"count": 0}
 
@@ -796,12 +902,63 @@ def test_ledger_cache_expires_by_age_even_when_events_are_unchanged():
         calls["count"] += 1
         return {"n": calls["count"]}
 
-    cache = WorkLedgerCache(max_age_seconds=30.0)
-    t0 = time.time()
-    assert cache.ledger(1, _build, now=t0) == {"n": 1}
-    assert cache.ledger(1, _build, now=t0 + 29) == {"n": 1}   # fresh: same fp, inside TTL
-    assert cache.ledger(1, _build, now=t0 + 31) == {"n": 2}   # TTL expired → rebuild
-    assert cache.ledger(2, _build, now=t0 + 31.5) == {"n": 3}  # fp change → rebuild
+    cache = WorkLedgerCache()
+    first = cache.ledger(1, _build)
+    assert first == {"n": 1}
+    assert cache.ledger(1, _build) is first  # identity: reused, not rebuilt
+    assert cache.ledger(2, _build) == {"n": 2}  # key change → rebuild
+    assert calls["count"] == 2
+
+
+def test_secondary_store_change_invalidates_ledger_cache_without_a_ledger_event(tmp_path, monkeypatch):
+    """Honesty regression: a fingerprint-invisible store append (here a cost
+    event, but the same holds for a run outcome or a client_hook mechanical
+    check drained straight to the evidence spool) MUST invalidate the ledger
+    cache, so the reduced view can never lag behind an independent check.
+    Dropping the TTL is only sound because the cache key folds these in."""
+
+    service = SentinelService(tmp_path)
+    _record_usage(service, session_id="root-a", tokens=100, updated_at=time.time() - 60)
+
+    calls = {"count": 0}
+    real_build = api_module.build_work_ledger
+
+    def _counting_build(*args, **kwargs):
+        calls["count"] += 1
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, "build_work_ledger", _counting_build)
+    client = TestClient(create_local_api_app(store_dir=tmp_path, v1_auth_token=TOKEN))
+
+    assert client.get("/v1/sessions", headers=AUTH).status_code == 200
+    assert calls["count"] == 1
+    # No change between polls → the composite key is stable → cache hit.
+    assert client.get("/v1/sessions", headers=AUTH).status_code == 200
+    assert calls["count"] == 1
+
+    # Append a cost event WITHOUT recording any primary ledger event, so the
+    # events fingerprint is unchanged; only the secondary store moved.
+    cost_path = tmp_path / "cost_events.jsonl"
+    with cost_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "event_id": "cost_test",
+                    "created_at": time.time(),
+                    "run_id": None,
+                    "decision": "record",
+                    "reason": "",
+                    "estimated_cost_usd": 0.0,
+                    "estimated_input_tokens": 0,
+                    "estimated_output_tokens": 0,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+
+    assert client.get("/v1/sessions", headers=AUTH).status_code == 200
+    assert calls["count"] == 2  # secondary-store change invalidated the cache
 
 
 # ---------------------------------------------------------------------------
@@ -856,6 +1013,10 @@ def test_detail_steps_carry_tui_grade_depth(tmp_path):
     step = steps[0]
     assert step["section_id"] == "s1"
     assert step["latest_status"] == "completed"
+    assert isinstance(step["latest_event_id"], str) and step["latest_event_id"]
+    # Native first-capture confirmation needs the observed section event, not
+    # the session's last-activity timestamp (which can be a usage import).
+    assert step["latest_event_id"] == f"evt_sec_claude-code_root-a_s1_{int(now - 600)}"
     assert step["kind"] == "implementation"
     assert step["title"] == "build the thing"
     assert step["started_at"] is not None and step["updated_at"] is not None

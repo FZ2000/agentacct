@@ -63,16 +63,39 @@ enum CLIPayloadInspector {
                 guard !relative.utf8.contains(0),
                       let values = try? child.resourceValues(
                           forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
-                      ),
-                      values.isSymbolicLink != true,
-                      let attributes = try? fm.attributesOfItem(atPath: child.path),
+                      )
+                else { return false }
+                let pathBytes = Data(relative.utf8)
+
+                if values.isSymbolicLink == true {
+                    // A framework must keep its canonical aliases (Versions/Current
+                    // and the top-level binary/Resources) to stay a codesignable
+                    // bundle. Bind the link's path and target into the identity so
+                    // a changed target changes the fingerprint, but never follow it:
+                    // the target must be relative with no ".." component, which
+                    // confines it to the tree even through symlinked intermediates
+                    // so no stable path can alias bytes outside the payload.
+                    guard let target = try? fm.destinationOfSymbolicLink(atPath: child.path),
+                          !target.hasPrefix("/"),
+                          symlinkTargetIsConfined(target)
+                    else { return false }
+                    records.append(record(
+                        kind: 0x4C,
+                        path: pathBytes,
+                        mode: 0,
+                        size: 0,
+                        digest: Data(target.utf8)
+                    ))
+                    continue
+                }
+
+                guard let attributes = try? fm.attributesOfItem(atPath: child.path),
                       let permissions = attributes[.posixPermissions] as? NSNumber,
                       permissions.intValue & 0o022 == 0,
                       !requireCurrentUserOwner || currentUserOwns(attributes)
                 else { return false }
 
                 let mode = permissions.intValue & 0o777
-                let pathBytes = Data(relative.utf8)
                 if values.isDirectory == true {
                     records.append(record(
                         kind: 0x44,
@@ -116,6 +139,18 @@ enum CLIPayloadInspector {
             return false
         }
         return values.isDirectory == true && values.isSymbolicLink != true
+    }
+
+    /// A relative symlink target is confined to the payload iff it contains no
+    /// ".." component. A forward-only relative target can only descend from the
+    /// link's own (in-payload) directory, so following it — even through other
+    /// forward-only symlinks — can never climb out of the tree. ".." must be
+    /// rejected rather than resolved lexically: after a symlinked component, the
+    /// OS resolves ".." against that component's physical target, not the
+    /// lexical path, so a ".." target that looks in-root can physically escape.
+    /// Absolute targets are rejected by the caller before this is reached.
+    private static func symlinkTargetIsConfined(_ target: String) -> Bool {
+        !target.split(separator: "/", omittingEmptySubsequences: false).contains("..")
     }
 
     private static func currentUserOwns(_ attributes: [FileAttributeKey: Any]) -> Bool {
@@ -176,6 +211,28 @@ enum CLIPayloadInspector {
 // target file. Old directories (and a legacy top-level `_internal`) are kept so
 // already-running MCP/hook processes never see their side files replaced.
 
+/// Global onboarding accepts one named client. An explicit choice never expands
+/// to whatever other clients the CLI happens to discover on this machine.
+enum SetupClient: String, CaseIterable, Identifiable {
+    case codex
+    case claudeCode = "claude-code"
+    case openCode = "opencode"
+    case hermes
+    case deepseekHarness = "dsh"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .codex: return "Codex"
+        case .claudeCode: return "Claude Code"
+        case .openCode: return "OpenCode"
+        case .hermes: return "Hermes"
+        case .deepseekHarness: return "DeepSeek Harness"
+        }
+    }
+}
+
 @MainActor
 final class SetupModel: ObservableObject {
     enum Phase: Equatable {
@@ -187,6 +244,48 @@ final class SetupModel: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var log: [String] = []
+    /// Display advice only. Rendering must not traverse/hash recorder payloads.
+    /// Operations continue to use the fresh checks below, never this snapshot.
+    struct Presentation: Equatable {
+        var canSetUp = false
+        var needsSetup = false
+        var canRunInteractiveSetup = false
+        var reconnectUnavailableReason: String? = "Checking the installed recorder…"
+    }
+    @Published private(set) var presentation = Presentation()
+
+    func refreshPresentation() {
+        let value = Presentation(
+            canSetUp: bundledCLIDir != nil,
+            needsSetup: shouldOfferSetup,
+            canRunInteractiveSetup: canRunInteractiveSetup,
+            reconnectUnavailableReason: reconnectUnavailableReason
+        )
+        if presentation != value { presentation = value }
+    }
+    /// nil retains the legacy automatic selection used by SetupSheet.
+    @Published private(set) var selectedClient: SetupClient?
+    /// Completion of the command is an activation boundary, never capture proof.
+    @Published private(set) var onboardingCompletedAt: Date?
+    @Published private(set) var isRunningOnboard = false
+    enum ReconnectPhase: Equatable {
+        case idle
+        case working
+        case done
+        case failed(String)
+    }
+    @Published private(set) var reconnectPhase: ReconnectPhase = .idle
+    @Published private(set) var reconnectLog: [String] = []
+    /// Endpoint readiness after reconnect, separate from original onboarding and
+    /// never evidence that the selected client has captured any new work.
+    @Published private(set) var reconnectCompletedAt: Date?
+    /// Why the last launch-time upgrade check carried the recorder no further,
+    /// when a recorder is present but could not be upgraded. nil after a clean
+    /// upgrade or when the installed recorder already matches this app. This is
+    /// the signal that the launch upgrade never fails silently: it is set by
+    /// `upgradeInstalledCLIIfNeeded` (which already does the heavy checks), never
+    /// recomputed during rendering, so it does not traverse/hash payloads.
+    @Published private(set) var recorderUpgradeDiagnostic: String?
     private var pendingRuntimeRecovery = false
 
     private let fm = FileManager.default
@@ -227,14 +326,24 @@ final class SetupModel: ObservableObject {
         }
         self.transactionLockObserver = transactionLockObserver
         self.readinessPause = readinessPause
+        // Injected installers are available in inert previews without probing
+        // the host machine. Live availability is published after synchronization.
+        presentation.canRunInteractiveSetup = installer != nil
     }
 
     /// Deterministic state injection for offscreen review renders. Live setup
     /// still uses the production initializer above and reaches these states
     /// only through `setUp()`.
-    init(preloaded phase: Phase, log: [String]) {
+    init(
+        preloaded phase: Phase,
+        log: [String],
+        selectedClient: SetupClient? = nil,
+        onboardingCompletedAt: Date? = nil
+    ) {
         self.phase = phase
         self.log = Array(log.suffix(200))
+        self.selectedClient = selectedClient
+        self.onboardingCompletedAt = onboardingCompletedAt
         installer = nil
         processRunner = ProcessRunner.run
         home = FileManager.default.homeDirectoryForCurrentUser
@@ -251,12 +360,115 @@ final class SetupModel: ObservableObject {
         readinessPause = { try await Task.sleep(nanoseconds: 500_000_000) }
     }
 
+    /// Interactive design review must remain inert even inside a distributable
+    /// app containing a valid recorder. Preloaded screenshot state alone does
+    /// not replace runtime dependencies, so review scenes use this initializer.
+    convenience init(
+        reviewPhase: Phase,
+        selectedClient: SetupClient? = nil,
+        onboardingCompletedAt: Date? = nil
+    ) {
+        self.init(
+            installer: { URL(fileURLWithPath: "/synthetic-review/agentacct") },
+            processRunner: { _, arguments in
+                AsyncThrowingStream { continuation in
+                    continuation.yield("Synthetic review only: \(arguments.joined(separator: " "))")
+                    continuation.yield("No configuration files were changed.")
+                    continuation.finish()
+                }
+            },
+            homeDirectory: URL(fileURLWithPath: "/Users/review"),
+            bundleResourceURL: nil,
+            bundleInfoDictionary: nil,
+            storeDirectory: { URL(fileURLWithPath: "/synthetic-review/state") }
+        )
+        phase = reviewPhase
+        self.selectedClient = selectedClient
+        self.onboardingCompletedAt = onboardingCompletedAt
+        log = ["Synthetic review fixture. No configuration files were changed."]
+    }
+
     // MARK: locations
 
     /// The CLI embedded in the app bundle (Contents/Resources/cli), if this is
     /// a packaged build. nil for a dev app built without the frozen CLI.
     var bundledCLIDir: URL? {
         packagedCLI?.directory
+    }
+
+    var canRunInteractiveSetup: Bool { installer != nil || bundledCLIDir != nil }
+    var recordingStorePath: String? { try? storeDirectory().path }
+
+    /// Inspect the verified bundle without installing it, creating a lock,
+    /// changing selected client, or touching runtime state.
+    func previewSetupContent(for client: SetupClient) async -> SetupContentPreviewState {
+        guard !SnapshotMode.enabled else {
+            return .unavailable("Native review mode uses a supplied fixture. It does not inspect this Mac's client configuration.")
+        }
+        guard let packaged = packagedCLI else {
+            return .unavailable("This build has no validated packaged recorder to generate managed content. File summaries remain available; use a packaged app with setup preview support to inspect its proposal.")
+        }
+        do {
+            let store = try storeDirectory().standardizedFileURL.resolvingSymlinksInPath()
+            let executable = packaged.directory.appendingPathComponent("agentacct")
+            func verifyIdentity() throws {
+                guard let current = packagedCLI,
+                      current.provenance == packaged.provenance,
+                      current.payloadIdentity == packaged.payloadIdentity,
+                      try storeDirectory().standardizedFileURL.resolvingSymlinksInPath() == store else {
+                    throw SetupError.stableInstallChanged
+                }
+            }
+            try verifyIdentity()
+            var lines: [String] = []
+            var byteCount = 0
+            for try await line in processRunner(executable, ["setup", "preview", "--agent", client.rawValue, "--user", "--json", "--store-dir", store.path]) {
+                try Task.checkCancellation()
+                byteCount += line.utf8.count + 1
+                guard byteCount <= 1_000_000 else {
+                    return .failed("The recorder returned a preview larger than this window can display.")
+                }
+                lines.append(line)
+            }
+            try Task.checkCancellation()
+            try verifyIdentity()
+            guard let preview = try? JSONDecoder().decode(SetupContentPreview.self, from: Data(lines.joined(separator: "\n").utf8)),
+                  preview.validates(client: client, store: store),
+                  ReleaseVersion(preview.cliVersion) == packaged.releaseVersion else {
+                return .failed("The packaged recorder did not return a supported preview for this client, store, and app version. Existing file contents were not displayed.")
+            }
+            return .available(preview)
+        } catch is CancellationError {
+            return .idle
+        } catch ProcessRunnerError.nonzeroExit(2) {
+            return .unavailable("This packaged recorder could not provide the setup preview command. Use a matching app release with preview support; no setup command was requested.")
+        } catch {
+            return .failed("The read-only preview could not complete. The recorder payload or recording store may have changed; refresh the preview before continuing.")
+        }
+    }
+
+    var canReconnectRecorder: Bool { reconnectUnavailableReason == nil }
+
+    var reconnectUnavailableReason: String? {
+        guard let packaged = packagedCLI else {
+            return "This build cannot verify a packaged recorder for reconnect. Open the matching packaged agentacct app, or start your development backend separately."
+        }
+        guard let installed = installedCLIState,
+              installed.provenance == packaged.provenance,
+              installed.payloadIdentity == packaged.payloadIdentity else {
+            return "Recorder-only reconnect requires the app-owned recorder that matches this app. Open the packaged app and complete its recorder update first."
+        }
+        guard !pendingRuntimeRecovery, !pathExists(runtimeTransactionJournal),
+              !onboardingPendingForCurrentInstall else {
+            return "An interrupted recorder setup still needs recovery. Reopen the packaged app to finish that protected setup before reconnecting."
+        }
+        return nil
+    }
+
+    func selectClientForSetup(_ client: SetupClient) {
+        if case .working = phase { return }
+        if reconnectPhase == .working { return }
+        selectedClient = client
     }
 
     private var installedCLIDir: URL { home.appendingPathComponent(".local/share/agentacct/cli", isDirectory: true) }
@@ -306,13 +518,47 @@ final class SetupModel: ObservableObject {
         return partial.provenance != packaged.provenance
     }
 
+    /// Why a *present* recorder could not be carried to this app's version, from
+    /// payloads the caller already computed. Meaningful only in the launch
+    /// upgrade's skip branch, where the upgrade context is known nil and no
+    /// recovery is pending, so it names the recognition failure rather than
+    /// re-deciding. nil when nothing recognizable is wrong. Takes precomputed
+    /// values so it never re-hashes payloads, and is never called during render.
+    private func blockedRecorderUpgradeReason(
+        packaged: PackagedCLI?,
+        installed: InstalledCLI?
+    ) -> String? {
+        // The app cannot upgrade anything if it cannot verify its own bundled
+        // recorder. Probe the raw bundle directory rather than `bundledCLIDir`,
+        // which is derived from `packagedCLI` and so is nil exactly when
+        // verification failed — the case we want to name here.
+        if let resourceURL = bundleResourceURL,
+           isRegularDirectory(resourceURL.appendingPathComponent("cli", isDirectory: true)),
+           packaged == nil {
+            return "the recorder bundled with this app could not be verified"
+        }
+        // A recorder executable is present but was not recognized as an app-owned
+        // install (payload identity, ownership, or wrapper mismatch), so its
+        // version cannot be compared or upgraded. The caller's guard already
+        // established there is no recoverable partial first install.
+        if installed == nil, fm.isExecutableFile(atPath: installedBinary.path) {
+            return "the installed recorder could not be recognized as app-owned"
+        }
+        return nil
+    }
+
     // MARK: run
 
     func setUp() async {
         guard case .idle = phase else { return }
+        guard reconnectPhase != .working else { return }
+        defer { refreshPresentation() }
+        // A proceeding setup supersedes any earlier launch-upgrade skip reason.
+        recorderUpgradeDiagnostic = nil
         if pendingRuntimeRecovery {
             await retryRuntimeAfterFailedUpgrade()
-            return
+            guard phase == .done, selectedClient != nil else { return }
+            phase = .idle
         }
         // A setup-sheet retry after an automatic upgrade failure must use the
         // same stop/swap/start transaction, never the first-run installer path
@@ -321,13 +567,17 @@ final class SetupModel: ObservableObject {
             let outcome = await upgradeInstalledCLIIfNeeded()
             switch outcome {
             case .upgraded, .notNeeded:
-                phase = .done
+                if selectedClient == nil {
+                    phase = .done
+                    return
+                }
+                phase = .idle
             case .failed:
-                break
+                return
             }
-            return
         }
         log = []
+        onboardingCompletedAt = nil
         do {
             let transactionLock: CLITransactionLock?
             if installer == nil {
@@ -343,8 +593,10 @@ final class SetupModel: ObservableObject {
                 if case .failed = outcome {
                     return
                 }
-                phase = .done
-                return
+                if selectedClient == nil {
+                    phase = .done
+                    return
+                }
             }
 
             try Task.checkCancellation()
@@ -360,6 +612,11 @@ final class SetupModel: ObservableObject {
                 // installed successfully. Retry onboarding through that same
                 // verified stable launcher instead of treating it as a fresh
                 // install and colliding with our own files.
+                executable = installedBinary
+            } else if selectedClient != nil, installedCLIState != nil {
+                // The safe upgrade/recovery above can keep a newer validated
+                // recorder. Configure the requested client through that owned
+                // launcher; do not attempt a first-install replacement.
                 executable = installedBinary
             } else {
                 executable = try await installCLI()
@@ -379,7 +636,105 @@ final class SetupModel: ObservableObject {
         }
     }
 
-    func reset() { phase = .idle }
+    func reset() {
+        guard reconnectPhase != .working else { return }
+        phase = .idle
+        // A fresh setup attempt supersedes any earlier launch-upgrade diagnostic
+        // so a repaired recorder never keeps showing a stale skip reason.
+        recorderUpgradeDiagnostic = nil
+    }
+
+    /// Start only the verified app-owned recorder. This operation cannot update
+    /// the CLI, recover an install transaction, or rerun client onboarding. The
+    /// explicit CLI flag also suppresses version-triggered integration resync.
+    @discardableResult
+    func reconnectRecorder() async -> Bool {
+        guard reconnectPhase != .working else { return false }
+        if case .working = phase { return false }
+        defer { refreshPresentation() }
+        reconnectLog = []
+        reconnectPhase = .working
+        do {
+            if let reason = reconnectUnavailableReason {
+                throw RecorderReconnectError.unavailable(reason)
+            }
+            guard let expected = installedCLIState, let packaged = packagedCLI else {
+                throw SetupError.stableInstallChanged
+            }
+            let store = try storeDirectory().standardizedFileURL
+            let transactionLock = try acquireTransactionLock()
+            defer { withExtendedLifetime(transactionLock) {} }
+            transactionLockObserver?()
+
+            func verify() throws {
+                guard installedCLIMatches(expected),
+                      let currentPackage = packagedCLI,
+                      currentPackage.provenance == packaged.provenance,
+                      currentPackage.payloadIdentity == packaged.payloadIdentity,
+                      expected.provenance == packaged.provenance,
+                      expected.payloadIdentity == packaged.payloadIdentity else {
+                    throw SetupError.stableInstallChanged
+                }
+                guard try storeDirectory().standardizedFileURL == store else {
+                    throw SetupError.runtimeJournalStoreChanged
+                }
+                guard !pendingRuntimeRecovery, !pathExists(runtimeTransactionJournal),
+                      !onboardingPendingForCurrentInstall else {
+                    throw RecorderReconnectError.unavailable("A recorder setup transaction appeared before reconnect. Finish its recovery before trying again.")
+                }
+            }
+            try verify()
+            let autostart = pathExists(managedAutostartFile)
+                ? try managedAutostart(installed: expected, store: store) : nil
+            if let autostart { _ = try await verifiedLaunchdJob(autostart) }
+            try verify()
+            guard autostartMatches(autostart) else { throw SetupError.unsafeAutostart }
+            try Task.checkCancellation()
+
+            reconnectLog.append("Starting the verified recorder without refreshing client configuration")
+            let arguments = ["start", "--no-sync-clients", "--store-dir", store.path, "--json"]
+            for try await line in processRunner(installedBinary, arguments) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { reconnectLog.append(trimmed) }
+                if reconnectLog.count > 200 { reconnectLog.removeFirst(reconnectLog.count - 200) }
+            }
+            try verify()
+            guard autostartMatches(autostart) else { throw SetupError.unsafeAutostart }
+            try Task.checkCancellation()
+
+            reconnectLog.append("Checking recorder endpoint and watcher readiness")
+            let output = try await runCommand(executable: installedBinary, arguments: runtimeArguments(command: "status", store: store))
+            try verify()
+            guard autostartMatches(autostart) else { throw SetupError.unsafeAutostart }
+            guard let data = output.data(using: .utf8),
+                  let status = try? JSONDecoder().decode(RuntimeStatus.self, from: data),
+                  status.isReady(store: store) else {
+                throw RecorderReconnectError.notReady
+            }
+            try Task.checkCancellation()
+            reconnectCompletedAt = Date()
+            reconnectLog.append("Recorder endpoint is ready. Fresh client capture is still unconfirmed.")
+            reconnectPhase = .done
+            return true
+        } catch {
+            let message = error.localizedDescription
+            reconnectLog.append("Reconnect stopped: \(message)")
+            reconnectPhase = .failed(message)
+            return false
+        }
+    }
+
+    private enum RecorderReconnectError: LocalizedError {
+        case unavailable(String)
+        case notReady
+
+        var errorDescription: String? {
+            switch self {
+            case .unavailable(let reason): return reason
+            case .notReady: return "The recorder start command finished, but the endpoint and watcher are not ready. Review the reconnect output and try again."
+            }
+        }
+    }
 
     enum AutomaticUpgradeOutcome: Equatable {
         case notNeeded
@@ -393,17 +748,32 @@ final class SetupModel: ObservableObject {
     /// its version changes. First-run `setUp()` remains install + onboard.
     @discardableResult
     func upgradeInstalledCLIIfNeeded() async -> AutomaticUpgradeOutcome {
+        guard reconnectPhase != .working else { return .notNeeded }
         guard case .idle = phase else {
             return .notNeeded
         }
+        defer { refreshPresentation() }
+        // Evaluate the payload-hashing checks once and share them between the
+        // upgrade decision and the skip diagnostic, so a normal already-current
+        // launch hashes the recorder payloads at most once.
+        let packaged = packagedCLI
+        let installed = installedCLIState
+        let initialContext = automaticUpgradeContext(packaged: packaged, installed: installed)
         guard pathExists(runtimeTransactionJournal)
-                || automaticUpgradeContext != nil
+                || initialContext != nil
                 || recoverablePartialFirstInstall != nil
                 || damagedManagedVersionedInstall
         else {
+            // Never skip silently: if a recorder is present but could not be
+            // carried to this app's version, record why so it is diagnosable
+            // instead of an invisible no-op.
+            let reason = blockedRecorderUpgradeReason(packaged: packaged, installed: installed)
+            recorderUpgradeDiagnostic = reason
+            if let reason { append("Recorder update skipped: \(reason)") }
             return .notNeeded
         }
 
+        recorderUpgradeDiagnostic = nil
         log = []
         let transactionLock: CLITransactionLock
         do {
@@ -974,8 +1344,12 @@ final class SetupModel: ObservableObject {
     }
 
     private func runOnboard(executable: URL) async throws {
-        phase = .working("Configuring your coding agents…")
-        append("Running: agentacct onboard --agent auto --yes")
+        let target = selectedClient?.rawValue ?? "auto"
+        phase = .working(selectedClient.map { "Configuring \($0.title) and starting the recorder…" }
+            ?? "Configuring your coding agents…")
+        isRunningOnboard = true
+        defer { isRunningOnboard = false }
+        append("Running: agentacct onboard --agent \(target) --yes")
         // Run from the INSTALLED binary so onboard stamps the stable installed
         // path into every hook/MCP config (verified end-to-end).
         let expectedInstall = executable.standardizedFileURL == installedBinary.standardizedFileURL
@@ -985,13 +1359,14 @@ final class SetupModel: ObservableObject {
            expectedInstall == nil {
             throw SetupError.stableInstallChanged
         }
-        let stream = processRunner(executable, ["onboard", "--agent", "auto", "--yes"])
+        let stream = processRunner(executable, ["onboard", "--agent", target, "--yes"])
         for try await line in stream {
             append(line)
         }
         if let expectedInstall, !installedCLIMatches(expectedInstall) {
             throw SetupError.stableInstallChanged
         }
+        onboardingCompletedAt = Date()
     }
 
     private func append(_ line: String) {
@@ -1075,8 +1450,17 @@ final class SetupModel: ObservableObject {
     }
 
     private var automaticUpgradeContext: AutomaticUpgradeContext? {
-        guard let packaged = packagedCLI,
-              let installed = installedCLIState,
+        automaticUpgradeContext(packaged: packagedCLI, installed: installedCLIState)
+    }
+
+    /// Same decision from already-computed payloads, so a caller that also needs
+    /// the individual `packagedCLI` / `installedCLIState` results can evaluate
+    /// those payload hashes once and reuse them here instead of recomputing.
+    private func automaticUpgradeContext(
+        packaged: PackagedCLI?,
+        installed: InstalledCLI?
+    ) -> AutomaticUpgradeContext? {
+        guard let packaged, let installed,
               installed.provenance != packaged.provenance
                 || installed.payloadIdentity != packaged.payloadIdentity
         else { return nil }

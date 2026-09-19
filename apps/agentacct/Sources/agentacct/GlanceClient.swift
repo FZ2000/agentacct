@@ -78,7 +78,10 @@ final class GlanceClient {
 
     private let session: URLSession
 
-    init() {
+    private let savedWork: SavedWorkSnapshot?
+
+    init(savedWork: SavedWorkSnapshot? = nil) {
+        self.savedWork = savedWork
         let config = URLSessionConfiguration.ephemeral
         // The receipt/tasks routes do a full-ledger reduce on a cold cache (a
         // few seconds on a large store); 20s let a legitimately slow first
@@ -229,21 +232,83 @@ final class GlanceClient {
               attributes[.type] as? FileAttributeType == .typeRegular
         else { return false }
 
+        // The ledger is a WAL database. A plain SQLITE_OPEN_READONLY connection
+        // needs the -shm shared-memory sidecar, which the recorder checkpoints
+        // away between writes; when it is absent the open fails (SQLITE_CANTOPEN,
+        // "unable to open database file"). Because every daemon call resolves the
+        // store through here, that transient state would otherwise make the whole
+        // app report the recorder unreachable. Probe read-only first — live-
+        // consistent when a writer holds the shm — and on ANY read-only failure
+        // fall back to an immutable open, which reads the file directly without
+        // the -shm/-wal machinery. Falling back on any failure (not just one
+        // error code) keeps the recovery robust across libsqlite builds that may
+        // report the missing shm differently.
+        do {
+            return try eventLinesHasRow(at: sqliteFile.path, immutable: false)
+        } catch is LedgerProbeError {
+            let immutableHasRow: Bool
+            do {
+                immutableHasRow = try eventLinesHasRow(at: sqliteFile.path, immutable: true)
+            } catch let fallback as LedgerProbeError {
+                // Reading the file directly failed too: genuinely unreadable or
+                // not a database. Fail closed exactly as before.
+                throw GlanceStoreResolutionError.invalidGlobalLedger(
+                    path: sqliteFile.path,
+                    detail: fallback.detail
+                )
+            }
+            if immutableHasRow { return true }
+            // An immutable open ignores the -wal, so a "no rows" answer is only
+            // trustworthy when no write-ahead frames remain. If a non-empty -wal
+            // sidecar is present the records may be uncheckpointed — fail closed
+            // rather than silently treat a populated store as empty.
+            if Self.walSidecarHasContent(sqliteFile.path) {
+                throw GlanceStoreResolutionError.invalidGlobalLedger(
+                    path: sqliteFile.path,
+                    detail: "records may be present in an uncheckpointed write-ahead log"
+                )
+            }
+            return false
+        }
+    }
+
+    private struct LedgerProbeError: Error {
+        let detail: String
+    }
+
+    /// Whether a `-wal` sidecar next to `sqlitePath` exists and holds frames.
+    private static func walSidecarHasContent(_ sqlitePath: String) -> Bool {
+        guard
+            let attributes = try? FileManager.default.attributesOfItem(
+                atPath: sqlitePath + "-wal"
+            ),
+            let size = attributes[.size] as? NSNumber
+        else { return false }
+        return size.int64Value > 0
+    }
+
+    /// Read-only existence probe of the ledger's `event_lines` table. When
+    /// `immutable` is set, open via a `file:…?immutable=1` URI so SQLite reads
+    /// the database file directly, bypassing the -shm/-wal handling that a bare
+    /// read-only open of a WAL database requires.
+    private static func eventLinesHasRow(at path: String, immutable: Bool) throws -> Bool {
+        var flags: Int32 = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+        let target: String
+        if immutable {
+            flags |= SQLITE_OPEN_URI
+            let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+            target = "file://\(encoded)?immutable=1"
+        } else {
+            target = path
+        }
+
         var database: OpaquePointer?
-        let openStatus = sqlite3_open_v2(
-            sqliteFile.path,
-            &database,
-            SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX,
-            nil
-        )
+        let openStatus = sqlite3_open_v2(target, &database, flags, nil)
         guard openStatus == SQLITE_OK, let database else {
             let detail = database.map { String(cString: sqlite3_errmsg($0)) }
                 ?? "SQLite open failed with status \(openStatus)"
             if let database { sqlite3_close(database) }
-            throw GlanceStoreResolutionError.invalidGlobalLedger(
-                path: sqliteFile.path,
-                detail: detail
-            )
+            throw LedgerProbeError(detail: detail)
         }
         defer { sqlite3_close(database) }
 
@@ -256,20 +321,19 @@ final class GlanceClient {
             nil
         )
         guard prepareStatus == SQLITE_OK, let statement else {
-            throw GlanceStoreResolutionError.invalidGlobalLedger(
-                path: sqliteFile.path,
+            throw LedgerProbeError(
                 detail: String(cString: sqlite3_errmsg(database))
             )
         }
         defer { sqlite3_finalize(statement) }
-        switch sqlite3_step(statement) {
+        let stepStatus = sqlite3_step(statement)
+        switch stepStatus {
         case SQLITE_ROW:
             return true
         case SQLITE_DONE:
             return false
         default:
-            throw GlanceStoreResolutionError.invalidGlobalLedger(
-                path: sqliteFile.path,
+            throw LedgerProbeError(
                 detail: String(cString: sqlite3_errmsg(database))
             )
         }
@@ -279,8 +343,8 @@ final class GlanceClient {
         try storeDir().appendingPathComponent("local-api.json")
     }
 
-    func loadDiscovery() throws -> Discovery {
-        let path = try Self.discoveryPath()
+    func loadDiscovery(store: URL? = nil) throws -> Discovery {
+        let path = try store?.appendingPathComponent("local-api.json") ?? Self.discoveryPath()
         guard let data = try? Data(contentsOf: path) else {
             throw GlanceClientError.noDiscovery(path.path)
         }
@@ -318,16 +382,20 @@ final class GlanceClient {
     /// (daemon restarted → re-read the discovery file once). The window's
     /// data lanes use this so ALL app traffic rides the authenticated lane.
     func getAuthed<T: Decodable>(_ path: String) async throws -> T {
+        if let savedWork { return try savedWork.value(path) }
+        let store = try Self.storeDir().standardizedFileURL.resolvingSymlinksInPath()
+        let requestStartedAt = Date()
         do {
-            return try await get(path, discovery: loadDiscovery())
+            return try await get(path, discovery: loadDiscovery(store: store), cacheStore: store, requestStartedAt: requestStartedAt)
         } catch GlanceClientError.http(401) {
-            return try await get(path, discovery: loadDiscovery())
+            return try await get(path, discovery: loadDiscovery(store: store), cacheStore: store, requestStartedAt: requestStartedAt)
         }
     }
 
     /// A localhost GET on the legacy machine-local JSON surfaces (no bearer —
     /// e.g. /usage/summary, which has no /v1 twin yet).
     func getLocal<T: Decodable>(_ path: String) async throws -> T {
+        if savedWork != nil { throw SavedWorkError.notSaved }
         let discovery = try loadDiscovery()
         let host = discovery.host ?? "127.0.0.1"
         guard let url = URL(string: "http://\(host):\(discovery.port)\(path)") else {
@@ -345,6 +413,7 @@ final class GlanceClient {
     /// daemon's own detail message so honesty copy ("blocker changed…")
     /// reaches the user verbatim.
     func postAuthed<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
+        guard savedWork == nil else { throw SavedWorkError.readOnly }
         do {
             return try await postOnce(path, body: body, discovery: loadDiscovery())
         } catch GlanceClientError.http(401) {
@@ -390,7 +459,7 @@ final class GlanceClient {
         }
     }
 
-    private func get<T: Decodable>(_ path: String, discovery: Discovery) async throws -> T {
+    private func get<T: Decodable>(_ path: String, discovery: Discovery, cacheStore: URL? = nil, requestStartedAt: Date = Date()) async throws -> T {
         let host = discovery.host ?? "127.0.0.1"
         guard let url = URL(string: "http://\(host):\(discovery.port)\(path)") else {
             throw GlanceClientError.transport("bad daemon URL")
@@ -411,7 +480,11 @@ final class GlanceClient {
             throw GlanceClientError.http(http.statusCode)
         }
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            let decoded = try JSONDecoder().decode(T.self, from: data)
+            if !Task.isCancelled, SavedWorkSnapshot.accepts(path), let cacheStore {
+                await SavedWorkCache.shared.record(path: path, data: data, store: cacheStore, requestStartedAt: requestStartedAt)
+            }
+            return decoded
         } catch {
             throw GlanceClientError.transport("payload decode failed: \(error.localizedDescription)")
         }

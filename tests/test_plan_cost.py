@@ -353,13 +353,13 @@ def test_codex_calibrates_from_clean_weekly_history(tmp_path):
 
 
 def test_non_calibratable_client_still_reads_never(tmp_path):
-    """The undefined-plan gate survives for clients without a weekly meter."""
+    """The not-applicable plan gate survives for clients without a weekly meter."""
 
     service = SentinelService(tmp_path)
     weights = pc.calibrate_plan_weights(service.list_all_events(), client="hermes")
     assert weights.confidence == "baseline"
     assert pc.calibration_state(weights) == "never"
-    assert "undefined" in weights.basis
+    assert "not applicable" in weights.basis
 
 
 def test_calibrate_untrusted_scale_falls_back_to_baseline(tmp_path):

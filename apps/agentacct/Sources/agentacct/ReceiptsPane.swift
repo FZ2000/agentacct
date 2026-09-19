@@ -108,7 +108,7 @@ func receiptOutcomeSummary(_ dim: ReceiptOutcomeDim) -> String {
 /// total is named explicitly so an older or partial payload never reads as a
 /// measured zero.
 func receiptCheckSummary(total: Int?, passed: Int?, failed: Int?) -> String {
-    var parts = [total.map { "\($0) checks" } ?? "check total not reported"]
+    var parts = [total.map { Fmt.count($0, "check") } ?? "check total not reported"]
     if let passed { parts.append("\(passed) passed") }
     if let failed { parts.append("\(failed) failed") }
     return parts.joined(separator: " · ")
@@ -486,121 +486,6 @@ func receiptActionSourceText(_ sources: [String]?) -> String {
     return labels.joined(separator: ", ")
 }
 
-// MARK: - Record summary strip
-
-/// The record page's context strip: Actions · Est. cost · Elapsed · Sessions,
-/// each a caps caption over an 18/700 mono value with 1px verticals
-/// between the cells. Absent facts are named ("not recorded"), never zeroed.
-/// Check runs live in the decision summary above this strip, beside the distinct
-/// claim-coverage measure; duplicating the fraction here made those concepts
-/// look interchangeable.
-struct RecordSummaryStrip: View {
-    let receipt: Receipt
-    let summary: ReceiptSummary?
-
-    private struct Cell: Identifiable {
-        let id: String
-        let label: String
-        let value: String?
-        let qualifier: String?
-        let absent: String?
-    }
-
-    private var cells: [Cell] {
-        let actions = receipt.dimensions.actions
-        let cost = receipt.dimensions.cost
-
-        let actionKPI = receiptActionKPI(
-            receiptActionSynopsis(
-                counts: actions.toolCategoryCounts,
-                storedTotal: actions.toolCategoryTotal
-            )
-        )
-        let actionCell = Cell(
-            id: "actions",
-            label: "Actions",
-            value: actionKPI.value,
-            qualifier: actionKPI.qualifier,
-            absent: actionKPI.absent
-        )
-
-        let costCell: Cell
-        if let usd = cost.estimatedCostUsd {
-            var qualifier = costBasisLabel(cost.costBasis)
-            if cost.costComplete == false { qualifier += " · partial" }
-            // Weekly-plan share lives in its own "Weekly plan" receipt row now;
-            // don't duplicate it (in a second phrasing) on the cost KPI tile.
-            costCell = Cell(
-                id: "cost",
-                label: "Est. cost",
-                value: receiptCostDisplay(usd, complete: cost.costComplete, confidence: cost.costConfidence),
-                qualifier: qualifier,
-                absent: nil
-            )
-        } else {
-            costCell = Cell(id: "cost", label: "Est. cost", value: nil, qualifier: nil, absent: "no priced usage")
-        }
-
-        let elapsedCell: Cell
-        if let seconds = receipt.durationSeconds, seconds > 0 {
-            elapsedCell = Cell(id: "elapsed", label: "Elapsed", value: durationText(seconds), qualifier: nil, absent: nil)
-        } else {
-            elapsedCell = Cell(id: "elapsed", label: "Elapsed", value: nil, qualifier: nil, absent: "not recorded")
-        }
-
-        let sessionsCell: Cell
-        if let count = summary?.sessionCount ?? receipt.dimensions.task.boundary?.sessionCount {
-            let roots = receipt.sessions?.count ?? 0
-            sessionsCell = Cell(
-                id: "sessions",
-                label: "Sessions",
-                value: "\(count)",
-                qualifier: roots > 1 ? "\(roots) roots" : nil,
-                absent: nil
-            )
-        } else {
-            sessionsCell = Cell(id: "sessions", label: "Sessions", value: nil, qualifier: nil, absent: "not recorded")
-        }
-
-        return [actionCell, costCell, elapsedCell, sessionsCell]
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 0) {
-                ForEach(Array(cells.enumerated()), id: \.element.id) { index, cell in
-                    if index > 0 {
-                        // Fixed-height vertical: an unbounded Rectangle would
-                        // stretch the strip to the page height.
-                        Rectangle().fill(Theme.hairline).frame(width: 1, height: 46)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        CapsLabel(text: cell.label)
-                        if let value = cell.value {
-                            // Qualifier under the value: cells are narrow and a
-                            // basis word must never wrap the number itself.
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(value).workFont(.kpi).foregroundStyle(Theme.ink)
-                                if let qualifier = cell.qualifier {
-                                    Text(qualifier).workFont(.dataSmall).foregroundStyle(Theme.muted)
-                                        .lineLimit(1)
-                                }
-                            }
-                        } else {
-                            // Absence is a named state at value position — never "0".
-                            Text(cell.absent ?? "not recorded")
-                                .workFont(.body).foregroundStyle(Theme.muted)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, index > 0 ? Space.l : 0)
-                }
-            }
-            Rectangle().fill(Theme.hairline).frame(height: 1).padding(.top, Space.m)
-        }
-    }
-}
-
 // MARK: - Receipt dimensions
 
 /// The aggregate-only Actions view. It is intentionally static: current
@@ -612,6 +497,9 @@ struct ReceiptActionsDigest: View {
     let relatedPathCount: Int?
     let provenance: [String]?
     let gaps: [String]?
+    /// Topic use: keep the facts, drop the explanatory copy — the definitions
+    /// live in the topic's help instead of under every bar.
+    var compact = false
 
     // The app's fixed type ramp keeps dense dashboard geometry stable. This
     // focused digest still has to honor accessibility text sizes, so its four
@@ -638,26 +526,40 @@ struct ReceiptActionsDigest: View {
     }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: Space.l) {
-                actionsLabel.frame(width: 128, alignment: .leading)
-                digestContent
-            }
-            .frame(width: 620, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            VStack(alignment: .leading, spacing: Space.m) {
-                actionsLabel
-                digestContent
+        Group {
+            if compact {
+                // Work page: a caps label matching the sibling rows, and a
+                // full-width content column so the 100% bar spans its track.
+                HStack(alignment: .top, spacing: Space.l) {
+                    CapsLabel(text: "Tool calls")
+                        .frame(width: 104, alignment: .leading)
+                        .padding(.top, 3)
+                        .accessibilityHidden(true)
+                    digestContent
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: Space.l) {
+                        actionsLabel.frame(width: 128, alignment: .leading)
+                        digestContent
+                    }
+                    .frame(width: 620, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: Space.m) {
+                        actionsLabel
+                        digestContent
+                    }
+                }
             }
         }
         .padding(.vertical, Space.m)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Actions")
+        .accessibilityLabel("Tool calls")
         .accessibilityIdentifier("receipt.actions.summary")
     }
 
     private var actionsLabel: some View {
-        Text("Actions")
+        Text("Tool calls")
             .font(rowLabelFont)
             .foregroundStyle(Theme.ink)
             .accessibilityHidden(true)
@@ -677,8 +579,17 @@ struct ReceiptActionsDigest: View {
             }
             if !synopsis.metrics.isEmpty {
                 if synopsis.canShowDistribution {
-                    actionDistribution
+                    // Work page: one 100% stacked bar + a wrapping legend, with
+                    // the full itemized list one click away. The multi-row
+                    // shared-scale chart stays the full-receipt presentation.
+                    if compact {
+                        stackedBar
+                    } else {
+                        actionDistribution
+                    }
                 } else {
+                    // Not a reconciled partition: keep exact counts, never draw
+                    // a proportional bar against a missing/conflicting total.
                     Text("Captured tool-call types")
                         .font(captionSemiboldFont)
                         .foregroundStyle(Theme.ink)
@@ -693,17 +604,174 @@ struct ReceiptActionsDigest: View {
             if !scope.isEmpty {
                 metadataLine(label: "Related paths", value: scope)
             }
-            if !sourceText.isEmpty {
+            // On the Work page these facts already have a home elsewhere: the
+            // source identities in the Recording section's Sources row (the
+            // whole-task union), the capture boundary in this section's help,
+            // and the actions dimension's gaps in the Recording Gaps row (the
+            // daemon rolls every dimension's gaps into that list). Repeating
+            // them would duplicate facts, so the compact digest omits them.
+            if !compact, !sourceText.isEmpty {
                 metadataLine(label: "Action sources", value: sourceText)
             }
-            if let boundary = synopsis.captureBoundary {
+            if !compact, let boundary = synopsis.captureBoundary {
                 metadataLine(label: "Detail", value: boundary)
             }
-            ForEach(Array((gaps ?? []).enumerated()), id: \.offset) { _, gap in
+            ForEach(Array((compact ? [] : (gaps ?? [])).enumerated()), id: \.offset) { _, gap in
                 noticeLine(prefix: "Evidence gap", text: gap, tone: Theme.amber)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: compact stacked bar (Work page)
+
+    /// One displayed slice of the 100% bar and its legend entry.
+    private struct BarSegment: Identifiable {
+        let id: String
+        let label: String
+        let count: Int
+        let fraction: Double
+        let color: Color
+        let tooltip: String
+        let axValue: String
+    }
+
+    /// Accent, tinted by share rank — the bar's only colors. "Other" is muted.
+    private var accentRamp: [Double] { [1.0, 0.82, 0.66, 0.52, 0.4, 0.32] }
+
+    /// The displayed segments: every type when few, else the five largest plus
+    /// a muted "Other" carrying the exact remainder. Callers guarantee a
+    /// reconciled positive denominator (`canShowDistribution`).
+    private var barSegments: [BarSegment] {
+        guard let denom = synopsis.shareDenominator, denom > 0 else { return [] }
+        func pct(_ count: Int) -> String {
+            (Double(count) / Double(denom)).formatted(.percent.precision(.fractionLength(0...1)))
+        }
+        // One descending-count order serves both decisions: which five types
+        // stay visible when there are many, and each visible slice's tint rank.
+        let byCountDesc = synopsis.metrics.sorted { $0.count > $1.count }
+        let visibleKeys = synopsis.metrics.count > 6 ? Set(byCountDesc.prefix(5).map(\.key)) : nil
+        var tintRank: [String: Int] = [:]
+        for metric in byCountDesc where visibleKeys?.contains(metric.key) ?? true {
+            tintRank[metric.key] = tintRank.count
+        }
+        var otherCount = 0
+        var segments: [BarSegment] = []
+        for metric in synopsis.metrics {  // taxonomy order, matching the legend
+            guard visibleKeys?.contains(metric.key) ?? true else {
+                otherCount += metric.count
+                continue
+            }
+            let opacity = accentRamp[min(tintRank[metric.key] ?? accentRamp.count - 1, accentRamp.count - 1)]
+            segments.append(BarSegment(
+                id: metric.key,
+                label: metric.label,
+                count: metric.count,
+                fraction: Double(metric.count) / Double(denom),
+                color: Theme.accent.opacity(opacity),
+                tooltip: "\(metric.label) · \(metric.count) call\(metric.count == 1 ? "" : "s") · \(pct(metric.count)) — \(metric.detail)",
+                axValue: "\(metric.count) call\(metric.count == 1 ? "" : "s"), \(pct(metric.count)). \(metric.detail)"
+            ))
+        }
+        if otherCount > 0 {
+            segments.append(BarSegment(
+                id: "__other__",
+                label: "Other",
+                count: otherCount,
+                fraction: Double(otherCount) / Double(denom),
+                color: Theme.muted.opacity(0.55),
+                tooltip: "Other · \(otherCount) call\(otherCount == 1 ? "" : "s") · \(pct(otherCount)) — remaining captured tool-call types",
+                axValue: "\(otherCount) call\(otherCount == 1 ? "" : "s"), \(pct(otherCount)). Remaining captured tool-call types"
+            ))
+        }
+        return segments
+    }
+
+    private var stackedBar: some View {
+        let segments = barSegments
+        return VStack(alignment: .leading, spacing: Space.s) {
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    ForEach(segments) { segment in
+                        // A 2 pt floor keeps a tiny nonzero share visible; it
+                        // bends strict proportionality by at most ~2 pt per
+                        // slice (≤ 7 slices), absorbed by the clip at the end.
+                        segment.color
+                            .frame(width: max(proxy.size.width * segment.fraction, segment.fraction > 0 ? 2 : 0))
+                            .help(segment.tooltip)
+                            .accessibilityElement()
+                            .accessibilityLabel(segment.label)
+                            .accessibilityValue(segment.axValue)
+                    }
+                }
+            }
+            .frame(height: 6)
+            .clipShape(RoundedRectangle(cornerRadius: 2))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Tool calls by type")
+
+            legend(segments)
+
+            // The full itemized list — with exact percents — is one click away
+            // only when the bar collapsed types into "Other".
+            if synopsis.metrics.count > 6 {
+                OverflowDisclosure(
+                    label: "Show all \(synopsis.metrics.count) tool types",
+                    identifier: "work.overflow.tool-types"
+                ) {
+                    fullTypeList
+                }
+            }
+        }
+    }
+
+    /// A swatch + label + exact count per displayed slice; wraps at any width.
+    /// The bar segments already carry each type's VoiceOver label and share, so
+    /// the legend is a visual key only — hidden from assistive tech to avoid
+    /// reading every type twice.
+    private func legend(_ segments: [BarSegment]) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 116), spacing: Space.m, alignment: .leading)],
+            alignment: .leading,
+            spacing: 6
+        ) {
+            ForEach(segments) { segment in
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(segment.color)
+                        .frame(width: 8, height: 8)
+                    Text(segment.label).font(dataSmallFont).foregroundStyle(Theme.muted)
+                    Text("\(segment.count)").font(dataSmallSemiboldFont)
+                        .foregroundStyle(Theme.ink).monospacedDigit()
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    /// Every captured type with its exact count and share — the overflow body.
+    private var fullTypeList: some View {
+        let denom = synopsis.shareDenominator ?? 1
+        return VStack(alignment: .leading, spacing: Space.s) {
+            ForEach(synopsis.metrics) { metric in
+                let percent = (Double(metric.count) / Double(denom))
+                    .formatted(.percent.precision(.fractionLength(0...1)))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                        Text(metric.label).font(captionSemiboldFont).foregroundStyle(Theme.ink)
+                        Spacer(minLength: Space.s)
+                        Text("\(metric.count) · \(percent)").font(dataSmallSemiboldFont)
+                            .foregroundStyle(Theme.ink).monospacedDigit()
+                    }
+                    Text(metric.detail).font(captionFont).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(metric.label)
+                .accessibilityValue("\(metric.count), \(percent). \(metric.detail)")
+            }
+        }
     }
 
     private var actionDistribution: some View {
@@ -713,17 +781,21 @@ struct ReceiptActionsDigest: View {
                     .font(captionSemiboldFont)
                     .foregroundStyle(Theme.ink)
                 Spacer(minLength: Space.s)
-                Text("Shared scale")
-                    .font(dataSmallFont)
-                    .foregroundStyle(Theme.muted)
+                if !compact {
+                    Text("Shared scale")
+                        .font(dataSmallFont)
+                        .foregroundStyle(Theme.muted)
+                }
             }
             .padding(.top, Space.xs)
             .accessibilityHidden(true)
 
-            Text("Counts describe captured tool calls, not progress or success.")
-                .font(captionFont)
-                .foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            if !compact {
+                Text("Counts describe captured tool calls, not progress or success.")
+                    .font(captionFont)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             ForEach(synopsis.metrics) { metric in
                 actionDistributionRow(metric)
@@ -758,10 +830,12 @@ struct ReceiptActionsDigest: View {
                     .foregroundStyle(Theme.ink)
                     .monospacedDigit()
             }
-            Text(metric.detail)
-                .font(captionFont)
-                .foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            if !compact {
+                Text(metric.detail)
+                    .font(captionFont)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             GeometryReader { proxy in
                 Rectangle()
                     .fill(Theme.accent)
@@ -775,8 +849,8 @@ struct ReceiptActionsDigest: View {
         .accessibilityLabel(metric.label)
         .accessibilityValue(
             synopsis.shareDenominator.map {
-                "\(metric.count) of \($0). \(metric.detail)"
-            } ?? "\(metric.count). \(metric.detail)"
+                compact ? "\(metric.count) of \($0)" : "\(metric.count) of \($0). \(metric.detail)"
+            } ?? (compact ? "\(metric.count)" : "\(metric.count). \(metric.detail)")
         )
     }
 
@@ -870,41 +944,62 @@ struct ReceiptActionsDigest: View {
 /// The receipt-dimensions ledger: one row per dimension — name, value,
 /// provenance chips, and the dimension's own gaps inline as named amber facts.
 struct RecordDimensionsCard: View {
+    /// Which parts of the captured ledger this instance shows. Callers split
+    /// the dimensions so every fact has exactly one home on the page.
+    enum Dimension: CaseIterable {
+        case task, agents, actions, cost, checks, outcome
+    }
+
     let receipt: Receipt
+    var included: Set<Dimension> = Set(Dimension.allCases)
+    /// Whole-task facts (Sources, Gaps) already own these; scoped topic rows
+    /// hide the per-dimension repeats.
+    var showsProvenance = true
+    var showsGaps = true
+    /// Topic use drops the digest's explanatory copy into help.
+    var compactDigest = false
+
+    private var ordered: [Dimension] { Dimension.allCases.filter(included.contains) }
 
     var body: some View {
-        Card(padding: Space.xl) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Receipt dimensions").workFont(.titleCard).foregroundStyle(Theme.ink)
-                    .accessibilityAddTraits(.isHeader)
-                Rectangle().fill(Theme.hairline).frame(height: 1).padding(.top, Space.m)
-                dimensionRow("Task", taskSummary,
-                             provenance: receipt.dimensions.task.provenance,
-                             gaps: receipt.dimensions.task.gaps)
-                hairline
-                dimensionRow("Actors", actorsSummary,
-                             provenance: receipt.dimensions.actors.provenance,
-                             gaps: receipt.dimensions.actors.gaps)
-                hairline
-                actionsRow
-                hairline
-                dimensionRow("Cost", costSummary,
-                             provenance: receipt.dimensions.cost.provenance,
-                             gaps: receipt.dimensions.cost.gaps)
-                hairline
-                dimensionRow("Weekly plan", weeklyPlanSummary,
-                             provenance: nil,
-                             gaps: nil)
-                hairline
-                dimensionRow("Checks", evidenceSummary,
-                             provenance: receipt.dimensions.evidence.provenance,
-                             gaps: receipt.dimensions.evidence.gaps)
-                hairline
-                dimensionRow("Outcome", outcomeSummary,
-                             provenance: receipt.dimensions.outcome.provenance,
-                             gaps: receipt.dimensions.outcome.gaps,
-                             verbatimValue: true)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(ordered.enumerated()), id: \.offset) { index, dimension in
+                if index > 0 { hairline }
+                row(for: dimension)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func row(for dimension: Dimension) -> some View {
+        switch dimension {
+        case .task:
+            dimensionRow("Task", taskSummary,
+                         provenance: receipt.dimensions.task.provenance,
+                         gaps: receipt.dimensions.task.gaps)
+        case .agents:
+            dimensionRow("Agents", actorsSummary,
+                         provenance: receipt.dimensions.actors.provenance,
+                         gaps: receipt.dimensions.actors.gaps)
+        case .actions:
+            actionsRow
+        case .cost:
+            dimensionRow("Cost", costSummary,
+                         provenance: receipt.dimensions.cost.provenance,
+                         gaps: receipt.dimensions.cost.gaps)
+            if let planShare = receipt.dimensions.cost.planShare {
+                hairline
+                dimensionRow("Weekly plan", planShare.rowSummary, provenance: nil, gaps: nil)
+            }
+        case .checks:
+            dimensionRow("Checks", evidenceSummary,
+                         provenance: receipt.dimensions.evidence.provenance,
+                         gaps: receipt.dimensions.evidence.gaps)
+        case .outcome:
+            dimensionRow("Outcome", outcomeSummary,
+                         provenance: receipt.dimensions.outcome.provenance,
+                         gaps: receipt.dimensions.outcome.gaps,
+                         verbatimValue: true)
         }
     }
 
@@ -920,8 +1015,9 @@ struct RecordDimensionsCard: View {
         verbatimValue: Bool = false
     ) -> some View {
         HStack(alignment: .top, spacing: Space.l) {
-            Text(name).workFont(.rowLabel).foregroundStyle(Theme.ink)
-                .frame(width: 128, alignment: .leading)
+            CapsLabel(text: name)
+                .frame(width: 104, alignment: .leading)
+                .padding(.top, 3)
             VStack(alignment: .leading, spacing: 6) {
                 if verbatimValue {
                     // Outcome statements quote agent text — never parse as markdown.
@@ -931,18 +1027,20 @@ struct RecordDimensionsCard: View {
                     Text(summary).workFont(.body).foregroundStyle(Theme.ink)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if let provenance, !provenance.isEmpty {
+                if showsProvenance, let provenance, !provenance.isEmpty {
                     HStack(spacing: 6) {
                         ForEach(provenance, id: \.self) { source in
                             ProvenanceChip(text: source)
                         }
                     }
                 }
-                ForEach(gaps ?? [], id: \.self) { gap in
-                    // A dimension's own blind spot, named where the value lives.
-                    HStack(spacing: 6) {
-                        EvidencePip(shape: .hollow, tint: Theme.amber)
-                        Text(gap).workFont(.caption).foregroundStyle(Theme.amber)
+                if showsGaps {
+                    ForEach(gaps ?? [], id: \.self) { gap in
+                        // A dimension's own blind spot, named where the value lives.
+                        HStack(spacing: 6) {
+                            EvidencePip(shape: .hollow, tint: Theme.amber)
+                            Text(gap).workFont(.caption).foregroundStyle(Theme.amber)
+                        }
                     }
                 }
             }
@@ -963,7 +1061,8 @@ struct RecordDimensionsCard: View {
             ),
             relatedPathCount: dim.touchedFileCount,
             provenance: dim.provenance,
-            gaps: dim.gaps
+            gaps: dim.gaps,
+            compact: compactDigest
         )
     }
 
@@ -982,8 +1081,10 @@ struct RecordDimensionsCard: View {
         var parts: [String] = []
         if let agent = dim.primaryAgent { parts.append(agent) }
         if let models = dim.models, !models.isEmpty { parts.append(models.joined(separator: ", ")) }
-        if let subagents = dim.subagentSessionCount, subagents > 0 { parts.append("\(subagents) subagents") }
-        return parts.isEmpty ? "no actor recorded" : parts.joined(separator: " · ")
+        if let subagents = dim.subagentSessionCount, subagents > 0 {
+            parts.append("\(subagents) subagent\(subagents == 1 ? "" : "s")")
+        }
+        return parts.isEmpty ? "no agent recorded" : parts.joined(separator: " · ")
     }
 
     private var costSummary: String {
@@ -1017,13 +1118,6 @@ struct RecordDimensionsCard: View {
         // The Task's weekly-plan share has its own "Weekly plan" row below.
         if let tokensLine { line += "\n" + tokensLine }
         return line
-    }
-
-    // The Task's share of its client's weekly plan, as its own receipt row:
-    // the calibrated percentage, or a named calibration state — never a
-    // fabricated number (calibrated-or-nothing). Absent payload → "—".
-    private var weeklyPlanSummary: String {
-        receipt.dimensions.cost.planShare?.rowSummary ?? "—"
     }
 
     private var evidenceSummary: String {
@@ -1092,6 +1186,8 @@ struct DispositionControls: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .disabled(dashboard.isOfflineSnapshot)
+        .help(dashboard.isOfflineSnapshot ? "Saved work is read-only. Reconnect to change a finding." : "")
     }
 
     private func actionButton(_ label: String, action: @escaping () -> Void) -> some View {
@@ -1118,7 +1214,7 @@ struct DispositionControls: View {
                     resolvePopoverShown = false
                     post("resolve", note: note)
                 } label: {
-                    Text("Record resolve").workFont(.captionSemibold)
+                    Text("Record resolution").workFont(.captionSemibold)
                 }
                 .foregroundStyle(Theme.accent)
                 .buttonStyle(QuietButtonStyle(prominent: true))
@@ -1218,7 +1314,7 @@ struct BlockerCallout: View {
             if let count = blocker.blockedStepCount, count > 1 {
                 // "steps with recorded blockers": sticky blocker text keeps a
                 // step in this count even when its latest status moved on.
-                Text("+\(count - 1) more step\(count == 2 ? "" : "s") with recorded blockers in Sessions & steps below")
+                Text("\(count - 1) more step\(count == 2 ? "" : "s") with recorded blockers")
                     .workFont(.dataSmall).foregroundStyle(Theme.muted)
             }
             if let state = blocker.disposition?.state, state != "open" {
@@ -1254,89 +1350,6 @@ struct BlockerCallout: View {
 /// The evidence-coverage card: the checked/checkable headline, a coverage bar
 /// whose segment widths are strictly proportional to the tier counts, a
 /// counted legend wearing the pip shapes, and the honesty ledger.
-struct RecordCoverageCard: View {
-    let evidence: ReceiptEvidence
-    let schemaVersion: String
-
-    private var tiers: [(grade: String, count: Int)] {
-        let byTier = evidence.byTier
-        return [
-            ("externally_verified", byTier?.externallyVerified ?? 0),
-            ("independently_checked", byTier?.independentlyChecked ?? 0),
-            ("self_checked", byTier?.selfChecked ?? 0),
-            ("unchecked", byTier?.unchecked ?? 0),
-        ]
-    }
-
-    private var presentation: ReceiptCoveragePresentation {
-        .init(evidence: evidence)
-    }
-
-    var body: some View {
-        Card(padding: Space.xl) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("Evidence coverage").workFont(.titleCard).foregroundStyle(Theme.ink)
-                        .accessibilityAddTraits(.isHeader)
-                    Spacer()
-                    Text(schemaVersion).workFont(.dataSmall).foregroundStyle(Theme.muted)
-                }
-                Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, Space.m)
-
-                Text(presentation.value)
-                    .workFont(size: 16, weight: .semibold, relativeTo: .headline)
-                    .foregroundStyle(
-                        presentation.isInconsistent
-                            ? Theme.amber
-                            : evidence.gradeable == false ? Theme.muted : Theme.ink
-                    )
-                Text(presentation.qualifier)
-                    .workFont(.caption).foregroundStyle(Theme.muted)
-                    .padding(.top, 4)
-
-                if evidence.gradeable != false,
-                   let checkable = evidence.checkableTotal,
-                   checkable > 0 {
-                    if presentation.tierBreakdownAvailable {
-                        CoverageBar(segments: tiers.map { CoverageSegment(count: $0.count, grade: $0.grade) })
-                            .padding(.top, Space.m)
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(tiers.filter { $0.count > 0 }, id: \.grade) { tier in
-                                let style = EvidenceTierStyle.forGrade(tier.grade)
-                                HStack(spacing: 7) {
-                                    EvidencePip(shape: style.pip, tint: style.tint)
-                                    Text(style.label).workFont(.caption).foregroundStyle(Theme.ink)
-                                    Text("\(tier.count)").workFont(.dataSmall).foregroundStyle(Theme.muted)
-                                }
-                            }
-                        }
-                        .padding(.top, Space.m)
-                        if let notice = receiptExternalEvidenceNotice(byTier: evidence.byTier) {
-                            Text(notice)
-                                .workFont(.caption).foregroundStyle(Theme.muted)
-                                .padding(.top, Space.s)
-                        }
-                    } else if let notice = presentation.tierBreakdownNotice {
-                        Text(notice)
-                            .workFont(.caption).foregroundStyle(Theme.muted)
-                            .padding(.top, Space.s)
-                    }
-                }
-
-                if let ledger = evidence.ledger {
-                    Text(ledger).workFont(.caption).foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, Space.s)
-                }
-                Text("Counts show how many checkable steps carry a passing check, and how independent that check is — counts, not a probability of correctness.")
-                    .workFont(.dataSmall).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, Space.s)
-            }
-        }
-    }
-}
-
 // MARK: - Checks
 
 /// Every check the store holds for this receipt, with its result mark and
@@ -1865,80 +1878,8 @@ private struct CheckDetailField<Content: View>: View {
 
 // MARK: - Gaps
 
-struct RecordGapsCard: View {
-    let gaps: ReceiptGapsDim
-
-    var body: some View {
-        let items = gaps.items ?? []
-        if !items.isEmpty {
-            Card(padding: Space.xl) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Gaps (\(items.count)) — what could not be proven")
-                        .workFont(.titleCard).foregroundStyle(Theme.ink)
-                        .accessibilityAddTraits(.isHeader)
-                    Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, Space.m)
-                    ScrollContentStack(alignment: .leading, spacing: Space.s) {
-                        ForEach(items) { item in
-                            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
-                                Text(item.dimension).workFont(.captionSemibold).foregroundStyle(Theme.muted)
-                                    .frame(width: 70, alignment: .leading)
-                                Text(item.reason).workFont(.caption).foregroundStyle(Theme.muted)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 // MARK: - Evidence sources
 
 /// The receipt's evidence sources: which source kinds are present on this
 /// record, each with the daemon's legend sentence. When no independent
 /// verifier (CI) evidence exists, that is stated as a fact — never a meter.
-struct RecordSourcesCard: View {
-    let provenance: ReceiptProvenanceDim
-
-    private var presentSources: [String] {
-        if let present = provenance.sourcesPresent, !present.isEmpty { return present }
-        return (provenance.legend ?? [:]).keys.sorted()
-    }
-
-    var body: some View {
-        let legend = provenance.legend ?? [:]
-        if !presentSources.isEmpty {
-            Card(padding: Space.xl) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Evidence sources").workFont(.titleCard).foregroundStyle(Theme.ink)
-                        .accessibilityAddTraits(.isHeader)
-                    Rectangle().fill(Theme.hairline).frame(height: 1).padding(.top, Space.m)
-                    ForEach(Array(presentSources.enumerated()), id: \.element) { index, source in
-                        if index > 0 {
-                            Rectangle().fill(Theme.hairline).frame(height: 1)
-                        }
-                        HStack(alignment: .top, spacing: Space.m) {
-                            Text(source).workFont(.rowLabel).foregroundStyle(Theme.ink)
-                                .frame(width: 96, alignment: .leading)
-                            Text(legend[source] ?? "recorded on this receipt")
-                                .workFont(.caption).foregroundStyle(Theme.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, Space.m)
-                    }
-                    if let notice = receiptCIEvidenceNotice(sources: presentSources) {
-                        Rectangle().fill(Theme.hairline).frame(height: 1)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(notice.headline)
-                                .workFont(.rowLabel).foregroundStyle(Theme.muted)
-                            Text(notice.detail)
-                                .workFont(.caption).foregroundStyle(Theme.muted)
-                        }
-                        .padding(.top, Space.m)
-                    }
-                }
-            }
-        }
-    }
-}

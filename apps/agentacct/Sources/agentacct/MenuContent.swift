@@ -11,24 +11,31 @@ struct MenuContent: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsRefreshProgress = false
+    @State private var isStartingRecorder = false
     private let buildIdentity: AppBuildIdentity
     private let lastUpdatedTextOverride: String?
     private let launchAtLoginInitialState: Bool?
     private let snapshotBodyMaxHeight: CGFloat?
     private let awaitRecorderSynchronization: () async -> SetupModel.AutomaticUpgradeOutcome
+    /// Starts the local recorder from the menu bar (an in-app `agentacct start`).
+    /// Returns whether the recorder became ready. nil disables the button (design
+    /// review / snapshot fixtures), which keeps the passive `agentacct start` chip.
+    private let onStartRecorder: (() async -> Bool)?
 
     init(
         buildIdentity: AppBuildIdentity = .current,
         lastUpdatedTextOverride: String? = nil,
         launchAtLoginInitialState: Bool? = nil,
         snapshotBodyMaxHeight: CGFloat? = nil,
-        awaitRecorderSynchronization: @escaping () async -> SetupModel.AutomaticUpgradeOutcome = { .notNeeded }
+        awaitRecorderSynchronization: @escaping () async -> SetupModel.AutomaticUpgradeOutcome = { .notNeeded },
+        onStartRecorder: (() async -> Bool)? = nil
     ) {
         self.buildIdentity = buildIdentity
         self.lastUpdatedTextOverride = lastUpdatedTextOverride
         self.launchAtLoginInitialState = launchAtLoginInitialState
         self.snapshotBodyMaxHeight = snapshotBodyMaxHeight
         self.awaitRecorderSynchronization = awaitRecorderSynchronization
+        self.onStartRecorder = onStartRecorder
     }
 
     var body: some View {
@@ -102,11 +109,41 @@ struct MenuContent: View {
                 .font(Type.caption)
                 .foregroundStyle(Theme.muted)
                 .lineLimit(2)
-            Text("agentacct start")
-                .font(Type.dataSmall)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Theme.chipBg, in: RoundedRectangle(cornerRadius: Metrics.radius))
+            if let onStartRecorder {
+                // The recorder can be revived without leaving the app: this runs
+                // the same `agentacct start` and, if it cannot confirm readiness
+                // (e.g. a dev backend), opens the window where recovery/setup lives.
+                Button {
+                    Task {
+                        isStartingRecorder = true
+                        let started = await onStartRecorder()
+                        isStartingRecorder = false
+                        if !started { openMain(selecting: nil) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if isStartingRecorder {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "play.circle.fill")
+                        }
+                        Text(isStartingRecorder ? "Starting recorder…" : "Start recorder")
+                    }
+                    .font(Type.captionSemibold)
+                    .foregroundStyle(Theme.accent)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(QuietButtonStyle(horizontalPadding: 6, verticalPadding: 4))
+                .disabled(isStartingRecorder)
+                .help("Start the local recorder (agentacct start)")
+                .accessibilityIdentifier("menu.start-recorder")
+            } else {
+                Text("agentacct start")
+                    .font(Type.dataSmall)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Theme.chipBg, in: RoundedRectangle(cornerRadius: Metrics.radius))
+            }
         }
         .padding(.vertical, 6)
     }
@@ -338,7 +375,7 @@ struct MenuContent: View {
                     .font(Type.caption)
                     .foregroundStyle(Theme.muted)
                 if hiddenCount > 0 {
-                    Button("+\(hiddenCount) in Work") {
+                    Button("+\(hiddenCount) in Sessions") {
                         openMain(selecting: .work)
                     }
                     .buttonStyle(QuietButtonStyle(horizontalPadding: 3, verticalPadding: 0))
@@ -594,6 +631,7 @@ private struct MenuLimitMeter: View {
 /// back from the service so the control reflects changes made in Settings.
 struct LaunchAtLoginToggle: View {
     @State private var enabled: Bool
+    @State private var updateMessage: String?
 
     init(initialEnabled: Bool? = nil) {
         _enabled = State(
@@ -602,26 +640,37 @@ struct LaunchAtLoginToggle: View {
     }
 
     var body: some View {
-        Toggle(isOn: Binding(
-            get: { enabled },
-            set: { wanted in
-                do {
-                    if wanted {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { enabled },
+                set: { wanted in
+                    updateMessage = nil
+                    do {
+                        if wanted {
+                            try SMAppService.mainApp.register()
+                        } else {
+                            try SMAppService.mainApp.unregister()
+                        }
+                    } catch {
+                        updateMessage = "Could not change launch at login: \(error.localizedDescription)"
                     }
-                } catch {
-                    // Reflect the service's actual state for unsigned/moved builds.
+                    enabled = SMAppService.mainApp.status == .enabled
+                    if updateMessage == nil, wanted, SMAppService.mainApp.status == .requiresApproval {
+                        updateMessage = "Allow agentacct in macOS Login Items settings to finish enabling launch at login."
+                    }
                 }
-                enabled = SMAppService.mainApp.status == .enabled
+            )) {
+                Text("Launch at login")
             }
-        )) {
-            Text("Launch at login")
+            .toggleStyle(MenuCheckboxToggleStyle())
+            .help("Launch agentacct at login")
+            .accessibilityIdentifier("menu.launch-at-login")
+            if let updateMessage {
+                Text(updateMessage).workFont(.caption).foregroundStyle(Theme.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("menu.launch-at-login.feedback")
+            }
         }
-        .toggleStyle(MenuCheckboxToggleStyle())
-        .help("Launch agentacct at login")
-        .accessibilityIdentifier("menu.launch-at-login")
     }
 }
 

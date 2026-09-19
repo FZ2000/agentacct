@@ -1,0 +1,82 @@
+{
+  "schema_version": "agentacct.setup-preview.v1",
+  "client": "codex",
+  "scope": "user",
+  "cli_version": "0.10.7",
+  "generated_at": "2026-09-12T01:00:00+00:00",
+  "store_dir": "/synthetic-review/store",
+  "command": "/Users/review/.local/bin/agentacct",
+  "python_executable": "/synthetic-review/python3",
+  "basis": "Generated managed content with read-only inspection of recognized entries; not a full-file merge diff.",
+  "limits": [
+    "Executable and interpreter paths are resolved for this preview and may differ after installation.",
+    "Existing retained environment values, unrelated configuration, and account data are never included.",
+    "Files can change after preview. Installation re-evaluates its writers and reports actual results."
+  ],
+  "files": [
+    {
+      "id": "instructions",
+      "path": "/Users/review/.codex/AGENTS.md",
+      "kind": "instructions",
+      "title": "Managed recording instructions",
+      "proposed_content": "<!-- agentacct:begin (managed block \u2014 edit via `agentacct setup instructions`) -->\n## agentacct \u2014 record your work\n\nRecord what this session does so the local work views can show it, not just tokens:\n- If these agentacct tools are not directly available, load them first (they may be provided as searchable/deferred tools) before recording.\n- Open a section with `agentacct_record_section` BEFORE your first other tool call, and again before each meaningful task. REQUIRED args: `source` (your client name, e.g. \"codex\" or \"claude-code\"), a stable `section_id` (reuse the SAME id across this section's started/checkpoint/terminal calls), and `section_status`; also set `section_title` to a short human goal. Start with `section_status=started`; normally finish with `completed` or `blocked`. Example: agentacct_record_section(source=\"codex\", section_id=\"add-rate-limit\", section_status=\"started\", section_title=\"add rate-limit to login\").\n- For a long task, send `section_status=checkpoint` updates rather than one giant section.\n- When the user hands the work off or says they are continuing in a new session, record the section as `section_status=handed_off` (a clean stop) \u2014 do not leave it `started`/`checkpoint`.\n- After running tests or a build, record the objective result with `agentacct_record_machine_check`.\n- Keep MCP/event evidence separate from token/cost claims: MCP events prove what work happened; a token or cost figure is only real if it comes from actual client usage the importer read \u2014 never fabricate one.\n- Low-friction: skip recording only for a genuinely trivial throwaway session \u2014 recording nothing is better than recording noise, but do record real work.\n<!-- agentacct:end -->\n",
+      "existing_status": "inspected",
+      "conditions": [
+        "Only the first complete recognized block outside Markdown fences is replaced. Other instruction content is preserved; quoted or incomplete markers are not managed blocks."
+      ],
+      "registrations": [],
+      "managed_block_action": "replace",
+      "recognized_marker_families": [
+        "agentacct",
+        "agent-chronicle",
+        "agent-sentinel"
+      ]
+    },
+    {
+      "id": "mcp",
+      "path": "/Users/review/.codex/config.toml",
+      "kind": "mcp",
+      "title": "Proposed MCP registration",
+      "proposed_content": "# agentacct MCP\n[mcp_servers.agentacct]\ncommand = \"/Users/review/.local/bin/agentacct\"\nargs = [\"mcp\", \"serve\", \"--store-dir\", \"/synthetic-review/store\"]\n",
+      "existing_status": "inspected",
+      "conditions": [
+        "Unrelated entries and retained values are not displayed. This is generated managed content, not a full-file merge diff."
+      ],
+      "registrations": [
+        {
+          "name": "agentacct",
+          "action": "add",
+          "reason": "Set generated command and arguments; retained environment values are not displayed."
+        },
+        {
+          "name": "agent-sentinel",
+          "action": "remove",
+          "reason": "Collapse this recognized legacy registration into agentacct; retain supported environment settings."
+        }
+      ]
+    },
+    {
+      "id": "hooks",
+      "path": "/Users/review/.codex/hooks.json",
+      "kind": "hooks",
+      "title": "Proposed recording hooks",
+      "proposed_content": "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"*\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"/synthetic-review/python3 /Users/review/.codex/hooks/agentacct_codex_hook.py\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"/synthetic-review/python3 /Users/review/.codex/hooks/agentacct_codex_hook.py\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+      "existing_status": "absent",
+      "conditions": [
+        "Existing user hooks are preserved. Matching agentacct wrapper entries are updated."
+      ],
+      "registrations": []
+    },
+    {
+      "id": "wrapper",
+      "path": "/Users/review/.codex/hooks/agentacct_codex_hook.py",
+      "kind": "wrapper",
+      "title": "Generated hook wrapper",
+      "proposed_content": "#!/usr/bin/env python3\n\"\"\"Codex hook wrapper for agentacct (observe-only).\n\nOne wrapper serves the installed Codex hook events (dispatch on the event's own\n`hook_event_name`):\n- PreToolUse: spool the tool NAME + category for the Receipt's Actions dimension\n  (observe-only \u2014 agentacct never makes an allow/block decision for Codex; Codex\n  owns its own sandbox/approval layer).\n- SessionEnd: spool a content-free session-end fact for the ended_open inference.\n\nShells out to the installed `agentacct` CLI. Fail-open: if no agentacct\nexecutable can be started, or the CLI exits without output, this wrapper prints\nan empty no-op response `{}` and exits 0, so a broken or moved install can never\nblock a Codex tool call. Reinstall with: agentacct hooks codex install --force\n\"\"\"\n\nimport json\nimport os\nimport shutil\nimport subprocess\nimport sys\n\nAGENTACCT_CANDIDATES = ['/Users/review/.local/bin/agentacct', 'agentacct', 'agent-chronicle', 'agent-sentinel']\nAGENTACCT_HOOK_ARGS = ['--store-dir', '/synthetic-review/store']\n\n\ndef resolve_agentacct():\n    for candidate in AGENTACCT_CANDIDATES:\n        if not candidate:\n            continue\n        if os.path.basename(candidate) != candidate:\n            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):\n                return candidate\n        else:\n            found = shutil.which(candidate)\n            if found:\n                return found\n    return None\n\n\ndef no_op(reason=\"\"):\n    if reason:\n        sys.stderr.write(\"agentacct codex hook: %s; failing open\\n\" % reason)\n    sys.stdout.write(\"{}\\n\")\n    return 0\n\n\ndef main():\n    raw = sys.stdin.buffer.read().decode(\"utf-8\", \"replace\")\n    hook_event = \"\"\n    try:\n        event = json.loads(raw)\n        if isinstance(event, dict):\n            value = event.get(\"hook_event_name\")\n            if isinstance(value, str):\n                hook_event = value\n    except ValueError:\n        pass\n    subcommand = \"session-end\" if hook_event == \"SessionEnd\" else \"pre-tool-use\"\n    executable = resolve_agentacct()\n    if executable is None:\n        return no_op(\"agentacct executable not found (re-run: agentacct hooks codex install --force)\")\n    try:\n        proc = subprocess.run(\n            [executable, \"hooks\", \"codex\", subcommand, *AGENTACCT_HOOK_ARGS],\n            input=raw,\n            text=True,\n            capture_output=True,\n            # A bounded wait is part of the never-block contract: fail-open covers\n            # the CLI RETURNING an error, but a hung child (stalled store mount,\n            # held SQLite lock, cold-import stall) would otherwise block the Codex\n            # tool call forever. A timeout turns that into a no-op {} instead.\n            timeout=5,\n        )\n    except subprocess.TimeoutExpired:\n        return no_op(\"agentacct timed out\")\n    except OSError as exc:\n        return no_op(\"agentacct failed to start (%s)\" % exc)\n    if proc.stderr:\n        sys.stderr.write(proc.stderr)\n    if proc.returncode == 0 and proc.stdout.strip():\n        sys.stdout.write(proc.stdout)\n        return 0\n    return no_op(\"agentacct exited with code %s without output\" % proc.returncode)\n\n\nif __name__ == \"__main__\":\n    try:\n        exit_code = main()\n    except Exception as exc:  # fail-open: a wrapper bug must never break Codex sessions.\n        exit_code = no_op(\"unexpected codex hook wrapper error (%s: %s)\" % (type(exc).__name__, exc))\n    raise SystemExit(exit_code)\n",
+      "existing_status": "absent",
+      "conditions": [],
+      "registrations": []
+    }
+  ],
+  "review_fixture": "Synthetic inputs passed to the production generator; no real user configuration."
+}

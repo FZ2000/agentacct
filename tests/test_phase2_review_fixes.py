@@ -24,8 +24,11 @@ timestamp guard, dead DashboardUsageView fields removed.
 All stores are throwaway tmp_path stores (suite conftest guards the real
 dogfood ledger)."""
 
+import os
+import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 import agentacct.api as api_module
@@ -688,6 +691,25 @@ def test_out_of_range_timestamp_never_500s_kept_surfaces(tmp_path):
     assert _fmt_time(1_750_000_000_000) == ""
     assert _fmt_time(1e300) == ""
     assert _fmt_time(253_402_300_800.0) == ""
+
+
+@pytest.mark.parametrize("timezone", ["UTC", "America/Los_Angeles", "Asia/Tokyo"])
+def test_timestamp_domain_boundary_is_independent_of_local_timezone(monkeypatch, timezone):
+    if not hasattr(time, "tzset"):
+        pytest.skip("Host does not support changing the process timezone")
+    original = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", timezone)
+        time.tzset()
+        assert _fmt_time(253_402_300_800) == ""
+        assert _fmt_time(253_402_300_800 + 3_600) == ""
+        assert _fmt_time(1_700_000_000)
+    finally:
+        if original is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original)
+        time.tzset()
 
 
 def test_dashboard_usage_view_dead_total_fields_removed():

@@ -655,6 +655,14 @@ _ALLOWED_OLD_NAME_TOKENS = (
     # ENOENT that reads as a crash). These two forms carry that guidance.
     "mcp remove agent-sentinel",  # `opencode mcp remove agent-sentinel` remediation command
     "agent-sentinel/agent-chronicle",  # prose pairing in the "remove any stale ..." guidance
+    # The read-only setup preview must identify a custom pre-rename server
+    # whose configuration it preserves or whose presence blocks a Codex write.
+    "Custom agent-sentinel settings prevent the Codex MCP write.",
+    "Custom agent-sentinel registration is preserved.",
+    # Preview fixtures pin recognition of a standard legacy executable and a
+    # preserved Hermes YAML server key without rewriting the user's old config.
+    '"/managed/agent-sentinel"',
+    "  agent-sentinel:\\n",
     # Frozen refusal wire text: codex wraps every failed MCP call as
     # "tool call failed for `<server key>/<tool>`", and historical rollouts
     # carry the pre-rename key in that slot forever. log_evidence's refusal

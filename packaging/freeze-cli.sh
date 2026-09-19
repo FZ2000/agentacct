@@ -59,6 +59,7 @@ rm -rf "$DIST_DIR" "$WORK_DIR" "$HERE"/*.spec
     --collect-all agentacct \
     --collect-all uvicorn \
     --collect-all textual \
+    --collect-all zstandard \
     --collect-submodules pydantic \
     --hidden-import=agentacct.statusline_hook \
     --hidden-import=uvicorn.loops.auto \
@@ -74,6 +75,12 @@ rm -rf "$DIST_DIR" "$WORK_DIR" "$HERE"/*.spec
 # runtime purpose here and would ship the builder's account name + build path
 # inside the public DMG, so delete every direct_url.json from the output.
 find "$DIST_DIR/agentacct" -name direct_url.json -delete 2>/dev/null || true
+
+# PyInstaller preserves the Python.framework aliases, and codesign needs them
+# to treat the framework as a signable bundle. Validate they are safe (relative,
+# in-payload, non-cyclic, not world-writable) and fail closed before signing —
+# never dereference them, or the framework stops being a valid signable bundle.
+"$BUILD_VENV/bin/python" "$HERE/validate-cli-payload.py" "$DIST_DIR/agentacct"
 
 BIN="$DIST_DIR/agentacct/agentacct"
 echo "==> smoke-testing the frozen binary"

@@ -456,7 +456,7 @@ def calibrate_plan_weights(
             default_weight=default_base,
             scale=1.0,
             confidence="baseline",
-            basis="weekly plan % is undefined for this client (no calibratable weekly meter)",
+            basis="weekly plan share is not applicable to this client (no calibratable weekly meter)",
             intervals_used=0,
             client=client,
         )

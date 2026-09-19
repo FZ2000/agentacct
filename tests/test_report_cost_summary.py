@@ -1,4 +1,5 @@
 import json
+import sys
 
 from typer.testing import CliRunner
 
@@ -11,7 +12,7 @@ def test_report_command_includes_cost_summary_for_run(tmp_path):
     dummy = tmp_path / "normal.py"
     dummy.write_text("print('done')\n", encoding="utf-8")
     store_root = tmp_path / "state"
-    result = start_guarded_run(["python", str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
+    result = start_guarded_run([sys.executable, str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
 
     ledger = CostLedger(store_root)
     ledger.record_usage(
@@ -39,7 +40,7 @@ def test_report_command_shows_no_cost_events_when_none_exist(tmp_path):
     dummy = tmp_path / "normal.py"
     dummy.write_text("print('done')\n", encoding="utf-8")
     store_root = tmp_path / "state"
-    result = start_guarded_run(["python", str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
+    result = start_guarded_run([sys.executable, str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
 
     cli_result = CliRunner().invoke(app, ["report", result.run_id, "--store-dir", str(store_root)])
 
@@ -52,7 +53,7 @@ def test_report_json_includes_cost_runtime_and_outcome_schema(tmp_path):
     dummy = tmp_path / "normal.py"
     dummy.write_text("print('done')\n", encoding="utf-8")
     store_root = tmp_path / "state"
-    result = start_guarded_run(["python", str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
+    result = start_guarded_run([sys.executable, str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
 
     ledger = CostLedger(store_root)
     ledger.record_usage(
@@ -84,7 +85,7 @@ def test_report_json_marks_blocked_cost_events_as_interruptions(tmp_path):
     dummy = tmp_path / "normal.py"
     dummy.write_text("print('done')\n", encoding="utf-8")
     store_root = tmp_path / "state"
-    result = start_guarded_run(["python", str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
+    result = start_guarded_run([sys.executable, str(dummy)], RunOptions(store_dir=store_root, poll_interval=0.05))
 
     ledger = CostLedger(store_root)
     ledger.record_usage(
